@@ -9,7 +9,8 @@ fn submit_records_head_and_relative_cwd_as_draft() {
     let repo = TestRepo::new();
     let output = stoker_in(&repo.join("experiments/llama"))
         .args([
-            "submit", "--user", "alice", "--name", "lr", "--", "echo", "ok",
+            "submit", "--user", "alice", "--name", "lr", "--cmd", "python", "train.py", "--lr",
+            "0.0001",
         ])
         .output()
         .unwrap();
@@ -24,11 +25,19 @@ fn submit_records_head_and_relative_cwd_as_draft() {
         repo.path().file_name().unwrap().to_string_lossy()
     ));
     let db = Connection::open(home.join("stoker.db")).unwrap();
-    let (state, repository, cwd, commit): (String, String, String, String) = db
+    let (state, repository, cwd, commit, command): (String, String, String, String, String) = db
         .query_row(
-            "SELECT state, repository, cwd, git_commit FROM jobs LIMIT 1",
+            "SELECT state, repository, cwd, git_commit, command FROM jobs LIMIT 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .unwrap();
     assert_eq!(state, "DRAFT");
@@ -38,6 +47,7 @@ fn submit_records_head_and_relative_cwd_as_draft() {
     );
     assert_eq!(cwd, "experiments/llama");
     assert!(!commit.is_empty());
+    assert_eq!(command, r#"["python","train.py","--lr","0.0001"]"#);
 }
 
 #[test]
@@ -46,7 +56,7 @@ fn submit_rejects_dirty_repository() {
     repo.write("tracked.txt", "changed\n");
     stoker_in(repo.path())
         .args([
-            "submit", "--user", "alice", "--name", "lr", "--", "echo", "ok",
+            "submit", "--user", "alice", "--name", "lr", "--cmd", "echo", "ok",
         ])
         .assert()
         .failure()
@@ -57,7 +67,7 @@ fn submit_rejects_dirty_repository() {
 fn submit_requires_user() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
-        .args(["submit", "--name", "lr", "--", "echo", "ok"])
+        .args(["submit", "--name", "lr", "--cmd", "echo", "ok"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--user"));
@@ -73,7 +83,7 @@ fn ps_user_filter_excludes_other_owners() {
             "alice",
             "--name",
             "alice-job",
-            "--",
+            "--cmd",
             "echo",
             "alice",
         ])
@@ -81,7 +91,7 @@ fn ps_user_filter_excludes_other_owners() {
         .success();
     stoker_in(repo.path())
         .args([
-            "submit", "--user", "bob", "--name", "bob-job", "--", "echo", "bob",
+            "submit", "--user", "bob", "--name", "bob-job", "--cmd", "echo", "bob",
         ])
         .assert()
         .success();

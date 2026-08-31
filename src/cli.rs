@@ -53,7 +53,13 @@ pub struct SubmitArgs {
     pub user: String,
     #[arg(long)]
     pub name: String,
-    #[arg(last = true, required = true)]
+    #[arg(
+        long = "cmd",
+        required = true,
+        num_args = 1..,
+        allow_hyphen_values = true,
+        help = "Command and arguments to execute (must be last)"
+    )]
     pub command: Vec<String>,
 }
 
@@ -243,7 +249,7 @@ fn submit(args: SubmitArgs) -> anyhow::Result<()> {
         anyhow::bail!("--name must not be empty");
     }
     if args.command.is_empty() {
-        anyhow::bail!("at least one command element is required after `--`");
+        anyhow::bail!("at least one command element is required after `--cmd`");
     }
 
     let current_dir = std::env::current_dir().context("determine current directory")?;

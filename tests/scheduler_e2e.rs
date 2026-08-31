@@ -37,7 +37,7 @@ fn git_output(repo: &TestRepo, args: &[&str]) -> String {
 }
 
 pub fn submit_script(repo: &TestRepo, script: &str, name: &str) -> Uuid {
-    let mut args = vec!["submit", "--user", "test", "--name", name, "--"];
+    let mut args = vec!["submit", "--user", "test", "--name", name, "--cmd"];
     let shell = TestCommand::shell(script);
     args.extend(shell.iter().map(String::as_str));
     let output = stoker_in(repo.path()).args(args).output().unwrap();
