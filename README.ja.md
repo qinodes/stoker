@@ -46,5 +46,3 @@ stoker stop
 - Git repository とクリーンな working tree が必要です。Git がない場合や commit できない場合、Job は submit できません。
 - Python/Conda/CUDA 環境、データセット、checkpoint、artifact、実験メトリクスは管理しません。
 - stoker のアカウント、ログイン、権限管理はありません。`--user` は識別と絞り込み専用です。
-
-詳細な設計は [`docs/requirements.md`](docs/requirements.md) を参照してください。

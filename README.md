@@ -46,5 +46,3 @@ Everything after `--cmd` is passed unchanged to the program being run. Put stoke
 - Jobs require a Git repository with a clean working tree. Without Git or a commit, a job cannot be submitted.
 - stoker does not manage Python/Conda/CUDA environments, datasets, checkpoints, artifacts, or experiment metrics.
 - No stoker accounts, login, or authorization; `--user` is only for identification and filtering.
-
-See [`docs/requirements.md`](docs/requirements.md) for the detailed design.
