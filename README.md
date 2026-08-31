@@ -44,5 +44,3 @@ stoker stop
 - 必須在 Git repository 中，且工作目錄沒有未提交變更；沒有 Git 或不能 commit 就不能提交 Job。
 - stoker 不管理 Python/Conda/CUDA 等環境，也不管理資料集、checkpoint、artifact 或實驗指標。
 - 不提供 stoker 帳號、登入、權限控制；`--user` 只用於辨識與篩選。
-
-詳細設計請參考 [`docs/requirements.md`](docs/requirements.md)。
