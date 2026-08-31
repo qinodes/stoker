@@ -38,3 +38,6 @@ $RECYCLE.BIN/
 *.temp
 *.bak
 *.log
+
+# secrets
+secret.txt
