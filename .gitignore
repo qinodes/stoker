@@ -1,0 +1,40 @@
+# Rust build artifacts
+/target/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux / common desktop trash
+*~
+.Trash-*
+.nfs*
+
+# VS Code
+.vscode/
+
+# JetBrains IDEs
+.idea/
+*.iml
+
+# Vim
+*.swp
+*.swo
+
+# Temporary / backup files
+*.tmp
+*.temp
+*.bak
+*.log
