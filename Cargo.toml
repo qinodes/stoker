@@ -2,6 +2,12 @@
 name = "stoker-engine"
 version = "0.1.0"
 edition = "2024"
+description = "A local, Git-aware job scheduler and execution engine"
+license = "Apache-2.0"
+repository = "https://github.com/qinodes/stoker"
+readme = "README.md"
+keywords = ["scheduler", "job-queue", "git", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "stoker"
