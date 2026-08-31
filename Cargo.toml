@@ -1,7 +1,15 @@
 [package]
-name = "stoker"
+name = "stoker-engine"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "stoker"
+path = "src/main.rs"
+
+[lib]
+name = "stoker"
+path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1"
