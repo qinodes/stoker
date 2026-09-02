@@ -1,20 +1,31 @@
 # stoker
 
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
-[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)]
-[![Version](https://img.shields.io/badge/version-0.3.0-informational)](Cargo.toml)
+[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-blue)]
+[![Version](https://img.shields.io/badge/version-0.4.0-informational)](Cargo.toml)
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | 日本語
 
 **stoker はローカル command 向けのジョブスケジューラーです。**
 各 Job は作成したときのディレクトリで実行され、`.stoker/runs` にはログだけが保存されます。環境と成果物はユーザー自身が管理します。
 
+## インストール
+
+[GitHub Releases](https://github.com/qinodes/stoker/releases) から環境に合うアーカイブをダウンロードし、`stoker` 実行ファイルを展開して `PATH` に追加してください。
+
+- Windows: `stoker-windows-x86_64.zip`
+- Linux: `stoker-linux-x86_64.tar.gz`
+- macOS Apple Silicon: `stoker-macos-arm64.tar.gz`
+- macOS Intel: `stoker-macos-x86_64.tar.gz`
+
+各 release には platform binary と `SHA256SUMS` も含まれます。Rust 開発者は Cargo でのインストールも利用できます。
+
 ## クイックスタート
 
 Rust と、command を実行するディレクトリが必要です。
 
 ```bash
-# crates.io から CLI をインストール
+# Cargo が利用できる場合は crates.io からインストール
 cargo install stoker-engine
 
 # scheduler をバックグラウンドで起動（Linux / Windows）
@@ -70,9 +81,9 @@ Job の詳細、command、実行パスは `stoker show <JOB_ID>` で確認でき
 
 Job は実行開始時点のソースディレクトリの内容を使用し、command による変更はそこに残ります。stoker はディレクトリ内のファイルを自動で変更または復元しません。
 
-`stoker update` は更新可能なバージョンを表示し、明示的に `y` または `yes` を入力した場合のみ更新します。
+`stoker update` は GitHub Releases から更新を確認し、`SHA256SUMS` でダウンロードした binary を検証します。明示的に `y` または `yes` を入力した場合のみ更新します。更新前に scheduler を停止してください。
 
-特定バージョンを入れるには、`cargo install stoker-engine --version <VERSION> --force` を使用します。
+Cargo を使わず特定バージョンを入れるには、そのバージョンの GitHub Release から環境に合う asset をダウンロードしてください。Rust 開発者は `cargo install stoker-engine --version <VERSION> --force` も使用できます。
 
 `stoker uninstall` も明示的な確認が必要です。先に scheduler を停止してください。Job データと logs は Stoker のデータフォルダー（通常は `~/.stoker`）に保持されます。
 

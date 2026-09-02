@@ -36,15 +36,15 @@ that publishing can proceed. Do not continue if any check fails.
 ## 2. Create the release commit and tag
 
 ```bash
-make versioning VERSION=0.3.0
+make versioning VERSION=0.4.0
 ```
 
 This creates or updates:
 
-- a release commit with message `Release v0.3.0`;
-- an annotated Git tag named `v0.3.0`.
+- a release commit with message `Release v0.4.0`;
+- an annotated Git tag named `v0.4.0`.
 
-The command does not update `Cargo.toml` automatically. Replace `0.3.0` with
+The command does not update `Cargo.toml` automatically. Replace `0.4.0` with
 the version already set in `Cargo.toml`, and stage the intended changes first.
 
 ## 3. Push the release
@@ -58,8 +58,8 @@ The version does not need to be provided again.
 
 After the tag is pushed, GitHub Actions runs
 `.github/workflows/release.yml`. It builds packages for Windows, Linux, macOS
-Apple Silicon, and macOS Intel, then attaches them to a GitHub Release for the
-tag.
+Apple Silicon, and macOS Intel. It attaches archives, platform binaries, and
+`SHA256SUMS` to a GitHub Release for the tag.
 
 ## 4. Publish to crates.io
 
@@ -80,7 +80,7 @@ cannot be published again with different contents.
 
 ```bash
 make check
-make versioning VERSION=0.3.0
+make versioning VERSION=0.4.0
 make release
 make publish
 ```

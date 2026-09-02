@@ -1,10 +1,14 @@
+use std::fs;
 use std::io::{self, Write};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use semver::Version;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
@@ -37,7 +41,7 @@ pub enum CliCommand {
         #[arg(long, value_parser = parse_job_state)]
         state: Option<JobState>,
     },
-    #[command(about = "Update stoker from crates.io")]
+    #[command(about = "Update stoker from GitHub Releases")]
     Update,
     #[command(about = "Uninstall stoker with confirmation")]
     Uninstall,
@@ -230,11 +234,12 @@ fn stop() -> anyhow::Result<()> {
 fn update() -> anyhow::Result<()> {
     let current =
         Version::parse(env!("CARGO_PKG_VERSION")).context("parse current Stoker version")?;
-    let latest = published_version()?;
+    let release = latest_release()?;
+    let latest = release.version()?;
     match latest.cmp(&current) {
         std::cmp::Ordering::Less => {
             anyhow::bail!(
-                "crates.io reports stoker-engine {latest}, which is older than the installed {current}; refusing to downgrade"
+                "GitHub reports Stoker {latest}, which is older than the installed {current}; refusing to downgrade"
             );
         }
         std::cmp::Ordering::Equal => {
@@ -250,13 +255,14 @@ fn update() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let status = Command::new("cargo")
-        .args(cargo_install_args(&latest))
-        .status()
-        .context("run Cargo to update stoker")?;
-    if !status.success() {
-        anyhow::bail!("Cargo could not update stoker (exit status: {status})");
-    }
+    ensure_scheduler_stopped()?;
+    let current_exe = std::env::current_exe().context("locate current Stoker executable")?;
+    let binary = download_release_binary(&release)?;
+    install_updated_binary(&current_exe, &binary)?;
+    #[cfg(unix)]
+    println!("Stoker was updated to {latest}.");
+    #[cfg(windows)]
+    println!("Stoker update to {latest} has been scheduled.");
     Ok(())
 }
 
@@ -280,58 +286,191 @@ fn uninstall() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let current_exe = std::env::current_exe().context("locate current Stoker executable")?;
+
     #[cfg(unix)]
-    return run_cargo_uninstall();
+    return remove_unix_binary(&current_exe);
 
     #[cfg(windows)]
-    return schedule_windows_uninstall();
+    return schedule_windows_uninstall(std::process::id(), &current_exe);
 }
 
-fn published_version() -> anyhow::Result<Version> {
-    let output = Command::new("cargo")
-        .args(["search", env!("CARGO_PKG_NAME"), "--limit", "1"])
-        .output()
-        .context("run Cargo to look up the latest stoker version")?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "Cargo could not look up the latest Stoker version (exit status: {})",
-            output.status
-        );
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    assets: Vec<GithubAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+impl GithubRelease {
+    fn version(&self) -> anyhow::Result<Version> {
+        let version = self.tag_name.strip_prefix('v').unwrap_or(&self.tag_name);
+        Version::parse(version).context("parse latest GitHub release version")
     }
-    let output = String::from_utf8_lossy(&output.stdout);
-    let version = parse_published_version(&output).ok_or_else(|| {
-        anyhow::anyhow!(
-            "Cargo did not return a version for {}",
-            env!("CARGO_PKG_NAME")
+}
+
+fn latest_release() -> anyhow::Result<GithubRelease> {
+    let repository = env!("CARGO_PKG_REPOSITORY")
+        .strip_prefix("https://github.com/")
+        .and_then(|repository| repository.strip_suffix(".git").or(Some(repository)))
+        .filter(|repository| !repository.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("package repository is not a GitHub repository"))?;
+    let url = format!("https://api.github.com/repos/{repository}/releases/latest");
+    let mut response = ureq::get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header(
+            "User-Agent",
+            concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")),
         )
-    })?;
-    Version::parse(&version).context("parse latest Stoker version from Cargo")
+        .call()
+        .context("request latest Stoker GitHub release")?;
+    let body = response
+        .body_mut()
+        .read_to_vec()
+        .context("read latest Stoker GitHub release")?;
+    serde_json::from_slice(&body).context("parse latest Stoker GitHub release")
 }
 
-fn cargo_install_args(version: &Version) -> Vec<String> {
-    vec![
-        "install".into(),
-        env!("CARGO_PKG_NAME").into(),
-        "--version".into(),
-        version.to_string(),
-        "--locked".into(),
-        "--force".into(),
-    ]
+#[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+fn platform_binary_name() -> anyhow::Result<&'static str> {
+    Ok("stoker-windows-x86_64.exe")
 }
 
-fn cargo_uninstall_args() -> [&'static str; 2] {
-    ["uninstall", env!("CARGO_PKG_NAME")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn platform_binary_name() -> anyhow::Result<&'static str> {
+    Ok("stoker-linux-x86_64")
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn platform_binary_name() -> anyhow::Result<&'static str> {
+    Ok("stoker-macos-arm64")
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+fn platform_binary_name() -> anyhow::Result<&'static str> {
+    Ok("stoker-macos-x86_64")
+}
+
+#[cfg(not(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(target_os = "linux", target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "macos", target_arch = "x86_64")
+)))]
+fn platform_binary_name() -> anyhow::Result<&'static str> {
+    anyhow::bail!("automatic updates are not supported on this platform")
+}
+
+fn release_asset<'a>(release: &'a GithubRelease, name: &str) -> anyhow::Result<&'a GithubAsset> {
+    release
+        .assets
+        .iter()
+        .find(|asset| asset.name == name)
+        .ok_or_else(|| anyhow::anyhow!("GitHub release does not contain asset {name}"))
+}
+
+fn download_bytes(url: &str) -> anyhow::Result<Vec<u8>> {
+    let mut response = ureq::get(url)
+        .header(
+            "User-Agent",
+            concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")),
+        )
+        .call()
+        .with_context(|| format!("download {url}"))?;
+    response
+        .body_mut()
+        .read_to_vec()
+        .with_context(|| format!("read downloaded content from {url}"))
+}
+
+fn checksum_for(checksums: &str, asset_name: &str) -> Option<String> {
+    checksums.lines().find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let checksum = fields.next()?.trim_start_matches('*');
+        let name = fields.next()?.rsplit('/').next()?;
+        (name == asset_name).then(|| checksum.to_ascii_lowercase())
+    })
+}
+
+fn download_release_binary(release: &GithubRelease) -> anyhow::Result<Vec<u8>> {
+    let binary_name = platform_binary_name()?;
+    let binary_asset = release_asset(release, binary_name)?;
+    let checksum_asset = release_asset(release, "SHA256SUMS")?;
+    let binary = download_bytes(&binary_asset.browser_download_url)?;
+    let checksums = String::from_utf8(download_bytes(&checksum_asset.browser_download_url)?)
+        .context("decode SHA256SUMS")?;
+    let expected = checksum_for(&checksums, binary_name)
+        .ok_or_else(|| anyhow::anyhow!("SHA256SUMS does not contain {binary_name}"))?;
+    let actual = Sha256::digest(&binary)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if actual != expected {
+        anyhow::bail!("SHA-256 mismatch for {binary_name}");
+    }
+    Ok(binary)
+}
+
+fn ensure_scheduler_stopped() -> anyhow::Result<()> {
+    let paths = StokerPaths::from_env()?;
+    match runtime()?.block_on(ServiceClient::new(paths).status()) {
+        Ok(_) => anyhow::bail!("Scheduler is running. Stop it with 'stoker stop' before updating."),
+        Err(error) if is_service_unavailable(&error) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn install_updated_binary(current_exe: &Path, binary: &[u8]) -> anyhow::Result<()> {
+    let update_dir = std::env::temp_dir().join(format!("stoker-update-{}", Uuid::new_v4()));
+    fs::create_dir(&update_dir).context("create Stoker update directory")?;
+    let update_binary = update_dir.join(platform_binary_name()?);
+    if let Err(error) = fs::write(&update_binary, binary) {
+        let _ = fs::remove_dir_all(&update_dir);
+        return Err(error).context("write downloaded Stoker binary");
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = fs::metadata(current_exe)
+            .context("read current Stoker executable permissions")?
+            .permissions();
+        fs::set_permissions(
+            &update_binary,
+            fs::Permissions::from_mode(permissions.mode()),
+        )
+        .context("set updated Stoker executable permissions")?;
+        if let Err(error) = fs::rename(&update_binary, current_exe) {
+            let _ = fs::remove_dir_all(&update_dir);
+            return Err(error).context("replace current Stoker executable");
+        }
+        fs::remove_dir_all(&update_dir).context("remove Stoker update directory")?;
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        schedule_windows_update(std::process::id(), current_exe, &update_binary, &update_dir)?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    {
+        let _ = fs::remove_dir_all(&update_dir);
+        anyhow::bail!("updating is not supported on this platform")
+    }
 }
 
 #[cfg(unix)]
-fn run_cargo_uninstall() -> anyhow::Result<()> {
-    let status = Command::new("cargo")
-        .args(cargo_uninstall_args())
-        .status()
-        .context("run Cargo to uninstall stoker")?;
-    if !status.success() {
-        anyhow::bail!("Cargo could not uninstall stoker (exit status: {status})");
-    }
+fn remove_unix_binary(executable: &Path) -> anyhow::Result<()> {
+    fs::remove_file(executable)
+        .with_context(|| format!("remove Stoker executable at {}", executable.display()))?;
+    println!("Stoker has been uninstalled. Job data and logs were kept.");
     Ok(())
 }
 
@@ -345,26 +484,14 @@ fn request_confirmation(action: &str) -> anyhow::Result<bool> {
     Ok(is_confirmation(&response))
 }
 
-fn parse_published_version(output: &str) -> Option<String> {
-    let prefix = format!("{} = \"", env!("CARGO_PKG_NAME"));
-    output.lines().find_map(|line| {
-        line.trim_start()
-            .strip_prefix(&prefix)?
-            .split('"')
-            .next()
-            .filter(|version| !version.is_empty())
-            .map(str::to_owned)
-    })
-}
-
 fn is_confirmation(response: &str) -> bool {
     matches!(response.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 #[cfg(windows)]
-fn schedule_windows_uninstall() -> anyhow::Result<()> {
+fn schedule_windows_uninstall(process_id: u32, executable: &Path) -> anyhow::Result<()> {
     let script = std::env::temp_dir().join(format!("stoker-uninstall-{}.cmd", Uuid::new_v4()));
-    std::fs::write(&script, windows_uninstall_script(std::process::id()))
+    fs::write(&script, windows_uninstall_script(process_id, executable))
         .context("create Windows uninstall helper")?;
     let command = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
     Command::new(command)
@@ -377,10 +504,47 @@ fn schedule_windows_uninstall() -> anyhow::Result<()> {
 }
 
 #[cfg(windows)]
-fn windows_uninstall_script(process_id: u32) -> String {
-    let cargo_uninstall = cargo_uninstall_args().join(" ");
+fn schedule_windows_update(
+    process_id: u32,
+    executable: &Path,
+    update_binary: &Path,
+    update_dir: &Path,
+) -> anyhow::Result<()> {
+    let script = std::env::temp_dir().join(format!("stoker-update-{}.cmd", Uuid::new_v4()));
+    fs::write(
+        &script,
+        windows_update_script(process_id, executable, update_binary, update_dir),
+    )
+    .context("create Windows update helper")?;
+    let command = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
+    Command::new(command)
+        .args(["/C", script.to_string_lossy().as_ref()])
+        .stdin(Stdio::null())
+        .spawn()
+        .context("schedule Windows update helper")?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_uninstall_script(process_id: u32, executable: &Path) -> String {
     format!(
-        "@echo off\r\n:wait_for_stoker\r\ntasklist /FI \"PID eq {process_id}\" /NH | findstr \"{process_id}\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait_for_stoker\r\n)\r\ncargo {cargo_uninstall}\r\ndel \"%~f0\"\r\n"
+        "@echo off\r\n:wait_for_stoker\r\ntasklist /FI \"PID eq {process_id}\" /NH | findstr \"{process_id}\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait_for_stoker\r\n)\r\ndel /F /Q \"{}\"\r\ndel \"%~f0\"\r\n",
+        executable.display()
+    )
+}
+
+#[cfg(windows)]
+fn windows_update_script(
+    process_id: u32,
+    executable: &Path,
+    update_binary: &Path,
+    update_dir: &Path,
+) -> String {
+    format!(
+        "@echo off\r\n:wait_for_stoker\r\ntasklist /FI \"PID eq {process_id}\" /NH | findstr \"{process_id}\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait_for_stoker\r\n)\r\nmove /Y \"{}\" \"{}\" >NUL\r\nif errorlevel 1 (\r\n  echo Failed to replace Stoker executable.\r\n  exit /b 1\r\n)\r\nrmdir /S /Q \"{}\"\r\ndel \"%~f0\"\r\n",
+        update_binary.display(),
+        executable.display(),
+        update_dir.display()
     )
 }
 
@@ -563,31 +727,28 @@ mod tests {
 
 #[cfg(test)]
 mod update_tests {
-    use super::{
-        Cli, cargo_install_args, cargo_uninstall_args, is_confirmation, parse_published_version,
-    };
+    use super::{Cli, checksum_for, is_confirmation, platform_binary_name};
     use clap::Parser;
-    use semver::Version;
 
     #[test]
-    fn update_targets_the_published_package() {
-        assert_eq!(
-            cargo_install_args(&Version::parse("1.2.3").unwrap()),
-            [
-                "install",
-                "stoker-engine",
-                "--version",
-                "1.2.3",
-                "--locked",
-                "--force"
-            ]
-        );
+    fn platform_binary_name_matches_release_assets() {
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        assert_eq!(platform_binary_name().unwrap(), "stoker-windows-x86_64.exe");
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        assert_eq!(platform_binary_name().unwrap(), "stoker-linux-x86_64");
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+        assert_eq!(platform_binary_name().unwrap(), "stoker-macos-arm64");
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        assert_eq!(platform_binary_name().unwrap(), "stoker-macos-x86_64");
     }
 
     #[test]
-    fn parses_the_exact_package_version_from_cargo_search_output() {
-        let output = "stoker-engine = \"1.2.3\"    # scheduler\nstoker-engine-extra = \"9.9.9\"";
-        assert_eq!(parse_published_version(output).as_deref(), Some("1.2.3"));
+    fn parses_checksum_for_the_exact_asset_name() {
+        let checksums = "abc123  stoker-linux-x86_64\ndef456  stoker-linux-x86_64-extra";
+        assert_eq!(
+            checksum_for(checksums, "stoker-linux-x86_64").as_deref(),
+            Some("abc123")
+        );
     }
 
     #[test]
@@ -600,11 +761,6 @@ mod update_tests {
     }
 
     #[test]
-    fn uninstall_targets_the_published_package() {
-        assert_eq!(cargo_uninstall_args(), ["uninstall", "stoker-engine"]);
-    }
-
-    #[test]
     fn uninstall_is_a_valid_cli_command() {
         assert!(Cli::try_parse_from(["stoker", "uninstall"]).is_ok());
     }
@@ -612,12 +768,25 @@ mod update_tests {
 
 #[cfg(all(test, windows))]
 mod windows_uninstall_tests {
-    use super::windows_uninstall_script;
+    use super::{windows_uninstall_script, windows_update_script};
+    use std::path::Path;
 
     #[test]
-    fn uninstall_helper_waits_for_stoker_then_uses_cargo() {
-        let script = windows_uninstall_script(1234);
+    fn uninstall_helper_waits_for_stoker_then_removes_the_binary() {
+        let script = windows_uninstall_script(1234, Path::new(r"C:\Tools\stoker.exe"));
         assert!(script.contains("PID eq 1234"));
-        assert!(script.contains("cargo uninstall stoker-engine"));
+        assert!(script.contains("del /F /Q \"C:\\Tools\\stoker.exe\""));
+    }
+
+    #[test]
+    fn update_helper_waits_for_stoker_then_moves_the_downloaded_binary() {
+        let script = windows_update_script(
+            1234,
+            Path::new(r"C:\Tools\stoker.exe"),
+            Path::new(r"C:\Temp\stoker.exe"),
+            Path::new(r"C:\Temp\stoker-update"),
+        );
+        assert!(script.contains("PID eq 1234"));
+        assert!(script.contains("move /Y \"C:\\Temp\\stoker.exe\" \"C:\\Tools\\stoker.exe\""));
     }
 }

@@ -20,24 +20,28 @@ jobs:
             platform: linux-x86_64
             target: x86_64-unknown-linux-gnu
             asset: stoker-linux-x86_64.tar.gz
+            binary_asset: stoker-linux-x86_64
             binary: stoker
             format: tar
           - os: windows-latest
             platform: windows-x86_64
             target: x86_64-pc-windows-msvc
             asset: stoker-windows-x86_64.zip
+            binary_asset: stoker-windows-x86_64.exe
             binary: stoker.exe
             format: zip
           - os: macos-latest
             platform: macos-arm64
             target: aarch64-apple-darwin
             asset: stoker-macos-arm64.tar.gz
+            binary_asset: stoker-macos-arm64
             binary: stoker
             format: tar
           - os: macos-latest-large
             platform: macos-x86_64
             target: x86_64-apple-darwin
             asset: stoker-macos-x86_64.tar.gz
+            binary_asset: stoker-macos-x86_64
             binary: stoker
             format: tar
 
@@ -64,6 +68,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist package
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.binary_asset }}"
           cp LICENSE README.md package/
           if [[ "${{ matrix.format }}" == "zip" ]]; then
             (cd package && 7z a "../dist/${{ matrix.asset }}" .)
@@ -74,8 +79,8 @@ jobs:
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          name: ${{ matrix.platform }}
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
@@ -94,6 +99,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          (cd dist && sha256sum stoker-*) > dist/SHA256SUMS
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \

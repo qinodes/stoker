@@ -1,20 +1,31 @@
 # stoker
 
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
-[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-blue)]
-[![Version](https://img.shields.io/badge/version-0.3.0-informational)](Cargo.toml)
+[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-blue)]
+[![Version](https://img.shields.io/badge/version-0.4.0-informational)](Cargo.toml)
 
 [English](README.md) | [日本語](README.ja.md) | 繁體中文
 
 **stoker 是單機、本機 command 的任務排程器。**
 每個 Job 都會在建立時所在的資料夾執行；`.stoker/runs` 只保存 logs。環境與產物由使用者自行管理。
 
+## 安裝
+
+請從 [GitHub Releases](https://github.com/qinodes/stoker/releases) 下載符合平台的壓縮檔，解壓縮 `stoker` 執行檔後加入 `PATH`：
+
+- Windows：`stoker-windows-x86_64.zip`
+- Linux：`stoker-linux-x86_64.tar.gz`
+- macOS Apple Silicon：`stoker-macos-arm64.tar.gz`
+- macOS Intel：`stoker-macos-x86_64.tar.gz`
+
+每個 release 也會提供平台 binary 與 `SHA256SUMS`。Rust 開發者仍可使用 Cargo 安裝。
+
 ## 快速開始
 
 需要 Rust，以及一個要執行 command 的目錄：
 
 ```bash
-# 從 crates.io 安裝 CLI
+# 若已安裝 Cargo，也可以從 crates.io 安裝
 cargo install stoker-engine
 
 # 啟動背景 scheduler（Linux 與 Windows 皆適用）
@@ -70,9 +81,9 @@ stoker uninstall
 
 Job 使用執行開始時來源目錄的內容；command 對來源目錄的檔案變更會保留。stoker 不會自動修改或還原目錄中的檔案。
 
-`stoker update` 會顯示可更新的版本，且只有在明確輸入 `y` 或 `yes` 後才會更新。
+`stoker update` 會從 GitHub Releases 檢查版本、使用 `SHA256SUMS` 驗證下載的 binary，且只有在明確輸入 `y` 或 `yes` 後才會更新。更新前請先停止 scheduler。
 
-若要安裝指定版本，請使用 `cargo install stoker-engine --version <VERSION> --force`。
+若不使用 Cargo，要安裝指定版本請從該版本的 GitHub Release 下載符合平台的 asset。Rust 開發者可使用 `cargo install stoker-engine --version <VERSION> --force`。
 
 `stoker uninstall` 也需要明確確認。請先停止 scheduler；你的 Job 資料與 logs 會保留在 Stoker 資料夾（預設為 `~/.stoker`）。
 
