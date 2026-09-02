@@ -138,12 +138,12 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
 fn create_output_pipe() -> io::Result<(HANDLE, HANDLE)> {
     let mut read = null_mut();
     let mut write = null_mut();
-    let mut attributes = SECURITY_ATTRIBUTES {
+    let attributes = SECURITY_ATTRIBUTES {
         nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: null_mut(),
         bInheritHandle: 1,
     };
-    if unsafe { CreatePipe(&mut read, &mut write, &mut attributes, 0) } == 0 {
+    if unsafe { CreatePipe(&mut read, &mut write, &attributes, 0) } == 0 {
         return Err(io::Error::last_os_error());
     }
     if unsafe { SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0) } == 0 {

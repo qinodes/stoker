@@ -75,6 +75,7 @@ impl Store {
         let id = Uuid::new_v4();
         let created_at = Utc::now();
         let command = serde_json::to_string(&new_job.command)?;
+        let cwd = storage_path(&new_job.cwd);
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO jobs (id,name,user,repository,git_commit,cwd,command,state,created_at)
@@ -85,7 +86,7 @@ impl Store {
                 new_job.user,
                 new_job.repository.to_string_lossy().as_ref(),
                 new_job.git_commit,
-                new_job.cwd.to_string_lossy().as_ref(),
+                cwd,
                 command,
                 JobState::Draft.as_str(),
                 created_at.to_rfc3339(),
@@ -369,6 +370,10 @@ impl Store {
         tx.commit()?;
         Ok(job)
     }
+}
+
+fn storage_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn get_job_with(conn: &Connection, id: Uuid) -> Result<Job, StoreError> {

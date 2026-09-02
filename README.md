@@ -14,8 +14,8 @@ Any task whose code can be pinned to a Git commit and run as a command can be sc
 You need Rust, Git, and a Git repository:
 
 ```bash
-# Install the CLI (requires Rust and Git)
-cargo install --path .
+# Install the CLI from crates.io (requires Rust and Git)
+cargo install stoker-engine
 
 # Start the scheduler in the background (Linux and Windows)
 stoker serve
@@ -29,16 +29,28 @@ stoker commit <JOB_ID>
 
 # Inspect and manage jobs
 stoker status
-stoker ps --user alice
+stoker jobs
+stoker jobs --user alice
 stoker logs <JOB_ID>
 stoker logs -f <JOB_ID>
 stoker cancel <JOB_ID>
 stoker stop
+stoker --version
+stoker update
+stoker uninstall
 ```
 
 Everything after `--cmd` is passed unchanged to the program being run. Put stoker's own options before `--cmd`.
 
 `--user` is a logical owner label, not an operating-system account or an authentication mechanism. It lets people sharing one machine identify and filter their jobs.
+
+`jobs` lists submitted jobs, including their `job_id`, owner, name, and state.
+
+`stoker update` shows the available version and only updates after an explicit `y` or `yes` confirmation.
+
+To install a specific version, use `cargo install stoker-engine --version <VERSION> --force`.
+
+`stoker uninstall` requires an explicit confirmation. Stop the scheduler first; your Job data and logs are kept in the Stoker data folder (normally `~/.stoker`).
 
 ## Scope and limits
 

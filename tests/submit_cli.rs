@@ -74,7 +74,7 @@ fn submit_requires_user() {
 }
 
 #[test]
-fn ps_user_filter_excludes_other_owners() {
+fn jobs_user_filter_excludes_other_owners() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
         .args([
@@ -96,9 +96,55 @@ fn ps_user_filter_excludes_other_owners() {
         .assert()
         .success();
     stoker_in(repo.path())
-        .args(["ps", "--user", "alice"])
+        .args(["jobs", "--user", "alice"])
         .assert()
         .success()
         .stdout(predicate::str::contains("alice-job"))
         .stdout(predicate::str::contains("bob-job").not());
+}
+
+#[test]
+fn jobs_alias_lists_submitted_job_ids() {
+    let repo = TestRepo::new();
+    let output = stoker_in(repo.path())
+        .args([
+            "submit",
+            "--user",
+            "alice",
+            "--name",
+            "listed-job",
+            "--cmd",
+            "echo",
+            "ok",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let job_id = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .find(|value| uuid::Uuid::parse_str(value).is_ok())
+        .expect("submit output contains a job ID")
+        .to_owned();
+
+    stoker_in(repo.path())
+        .args(["jobs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&job_id))
+        .stdout(predicate::str::contains("listed-job"));
+}
+
+#[test]
+fn version_flag_reports_package_version() {
+    stoker_in(std::path::Path::new("."))
+        .args(["--version"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
+
+    stoker_in(std::path::Path::new("."))
+        .args(["-V"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(env!("CARGO_PKG_VERSION")));
 }

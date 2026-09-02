@@ -14,8 +14,8 @@
 需要 Rust、Git，以及一個 Git repository：
 
 ```bash
-# 安裝 CLI（需要 Rust 與 Git）
-cargo install --path .
+# 從 crates.io 安裝 CLI（需要 Rust 與 Git）
+cargo install stoker-engine
 
 # 啟動背景 scheduler（Linux 與 Windows 皆適用）
 stoker serve
@@ -29,16 +29,28 @@ stoker commit <JOB_ID>
 
 # 查詢與管理
 stoker status
-stoker ps --user alice
+stoker jobs
+stoker jobs --user alice
 stoker logs <JOB_ID>
 stoker logs -f <JOB_ID>
 stoker cancel <JOB_ID>
 stoker stop
+stoker --version
+stoker update
+stoker uninstall
 ```
 
 `--cmd` 後面的內容會完整傳給要執行的程序；請把 stoker 自己的選項放在 `--cmd` 前。
 
 `--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證；多人共用同一台機器時，可用它辨識及篩選各自的 Job。
+
+`jobs` 會列出已 submit 的 Job，包含 `job_id`、owner、名稱與狀態。
+
+`stoker update` 會顯示可更新的版本，且只有在明確輸入 `y` 或 `yes` 後才會更新。
+
+若要安裝指定版本，請使用 `cargo install stoker-engine --version <VERSION> --force`。
+
+`stoker uninstall` 也需要明確確認。請先停止 scheduler；你的 Job 資料與 logs 會保留在 Stoker 資料夾（預設為 `~/.stoker`）。
 
 ## 邊界與限制
 

@@ -14,8 +14,8 @@ Git commit でコードのバージョンを固定し、コマンドとして実
 Rust、Git、および Git repository が必要です。
 
 ```bash
-# CLI をインストール（Rust と Git が必要）
-cargo install --path .
+# crates.io から CLI をインストール（Rust と Git が必要）
+cargo install stoker-engine
 
 # scheduler をバックグラウンドで起動（Linux / Windows）
 stoker serve
@@ -29,16 +29,28 @@ stoker commit <JOB_ID>
 
 # 確認と管理
 stoker status
-stoker ps --user alice
+stoker jobs
+stoker jobs --user alice
 stoker logs <JOB_ID>
 stoker logs -f <JOB_ID>
 stoker cancel <JOB_ID>
 stoker stop
+stoker --version
+stoker update
+stoker uninstall
 ```
 
 `--cmd` 以降はすべて実行プログラムへそのまま渡されます。stoker 自身のオプションは `--cmd` より前に指定してください。
 
 `--user` は論理的な owner ラベルであり、OS アカウントや認証機能ではありません。同じマシンを複数人で使う場合に、ジョブの識別と絞り込みに利用できます。
+
+`jobs` は submit 済みの Job と `job_id`、owner、名前、状態を一覧表示します。
+
+`stoker update` は更新可能なバージョンを表示し、明示的に `y` または `yes` を入力した場合のみ更新します。
+
+特定バージョンを入れるには、`cargo install stoker-engine --version <VERSION> --force` を使用します。
+
+`stoker uninstall` も明示的な確認が必要です。先に scheduler を停止してください。Job データと logs は Stoker のデータフォルダー（通常は `~/.stoker`）に保持されます。
 
 ## 対象範囲と制限
 
