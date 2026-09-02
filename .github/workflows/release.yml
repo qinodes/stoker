@@ -37,14 +37,6 @@ jobs:
             binary_asset: stoker-macos-arm64
             binary: stoker
             format: tar
-          - os: macos-latest-large
-            platform: macos-x86_64
-            target: x86_64-apple-darwin
-            asset: stoker-macos-x86_64.tar.gz
-            binary_asset: stoker-macos-x86_64
-            binary: stoker
-            format: tar
-
     steps:
       - name: Check out source
         uses: actions/checkout@v4
