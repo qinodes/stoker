@@ -12,9 +12,10 @@ check -> versioning -> release -> publish
 ## Prerequisites
 
 - Work on the `main` branch.
-- Update the package version in `Cargo.toml`.
-- Make sure the version change is committed or staged before running
-  `versioning`. The `versioning` step does not run `git add`.
+- Choose the next SemVer version and update it in `Cargo.toml`; verify that
+  `Cargo.lock` and user-visible version references agree.
+- Review and stage the release changes before running `versioning`. The
+  `versioning` step does not run `git add`, but it commits staged changes.
 - Configure your crates.io token once with `cargo login`.
 - Use a version that has not already been published to crates.io.
 
@@ -24,10 +25,13 @@ Run the complete Rust validation suite:
 
 ```bash
 make check
+cargo package --list
+cargo publish --dry-run
 ```
 
 This runs formatting checks, compilation checks, Clippy, all tests, and a
-release build. Do not continue if this step fails.
+release build. The package commands verify the files that will be shipped and
+that publishing can proceed. Do not continue if any check fails.
 
 ## 2. Create the release commit and tag
 
@@ -35,13 +39,13 @@ release build. Do not continue if this step fails.
 make versioning VERSION=0.3.0
 ```
 
-This creates:
+This creates or updates:
 
-- an empty release commit with message `Release v0.3.0`;
+- a release commit with message `Release v0.3.0`;
 - an annotated Git tag named `v0.3.0`.
 
 The command does not update `Cargo.toml` automatically. Replace `0.3.0` with
-the version already set in `Cargo.toml`.
+the version already set in `Cargo.toml`, and stage the intended changes first.
 
 ## 3. Push the release
 
