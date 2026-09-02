@@ -37,10 +37,7 @@ fn echo_spec(paths: &TestProcess) -> ProcessSpec {
     #[cfg(windows)]
     let (program, args) = (
         OsString::from("cmd"),
-        vec![
-            OsString::from("/C"),
-            OsString::from("echo out & echo err 1>&2"),
-        ],
+        vec![OsString::from("/C"), OsString::from("echo out&echo err>&2")],
     );
     ProcessSpec {
         program,
@@ -56,13 +53,17 @@ async fn spawned_process_writes_separate_stdout_and_stderr() {
     let paths = process_paths();
     let process = controller().spawn(echo_spec(&paths)).await.unwrap();
     assert_eq!(process.wait().await.unwrap().code(), Some(0));
+    #[cfg(unix)]
+    let (expected_stdout, expected_stderr) = ("out\n", "err\n");
+    #[cfg(windows)]
+    let (expected_stdout, expected_stderr) = ("out\r\n", "err\r\n");
     assert_eq!(
         tokio::fs::read_to_string(&paths.stdout).await.unwrap(),
-        "out\n"
+        expected_stdout
     );
     assert_eq!(
         tokio::fs::read_to_string(&paths.stderr).await.unwrap(),
-        "err\n"
+        expected_stderr
     );
 }
 

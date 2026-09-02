@@ -53,7 +53,6 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
     };
 
     let mut command_line = command_line(&spec.program, &spec.args);
-    let application_name = wide_path(&spec.program);
     let current_directory = wide_path(spec.cwd.as_os_str());
     let mut startup: STARTUPINFOW = unsafe { zeroed() };
     startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
@@ -65,7 +64,11 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
 
     let created = unsafe {
         CreateProcessW(
-            application_name.as_ptr(),
+            // A null application name makes Windows resolve the first quoted
+            // command-line token through its normal executable search rules,
+            // including PATH. Passing a bare program name here instead would
+            // require it to be a path relative to the current directory.
+            null(),
             command_line.as_mut_ptr(),
             null(),
             null(),
@@ -250,14 +253,13 @@ impl ManagedProcess for WindowsManagedProcess {
 impl WindowsManagedProcess {
     async fn wait_inner(&mut self) -> io::Result<ExitStatus> {
         let process = self.process;
-        let job = self.job;
         let status_task = tokio::task::spawn_blocking(move || unsafe {
-            let result = WaitForSingleObject(job as HANDLE, INFINITE);
+            let result = WaitForSingleObject(process as HANDLE, INFINITE);
             if result == WAIT_FAILED {
                 return Err(io::Error::last_os_error());
             }
             if result != WAIT_OBJECT_0 {
-                return Err(io::Error::other("unexpected Job Object wait result"));
+                return Err(io::Error::other("unexpected process wait result"));
             }
             let mut code = 1;
             if GetExitCodeProcess(process as HANDLE, &mut code) == 0 {
