@@ -1,9 +1,11 @@
 //! Versioned local IPC protocol and client.
 
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::Duration;
 
 use anyhow::Context;
+use fs2::FileExt;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -139,7 +141,7 @@ impl ServiceClient {
                             self.timeout.as_secs()
                         );
                     }
-                    if !self.endpoint_is_reachable().await {
+                    if !self.endpoint_is_reachable().await && self.service_lock_is_available() {
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -239,6 +241,23 @@ impl ServiceClient {
             // has disappeared.
             Err(_) => true,
         }
+    }
+
+    fn service_lock_is_available(&self) -> bool {
+        let Ok(lock) = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&self.paths.lock)
+        else {
+            return false;
+        };
+        if lock.try_lock_exclusive().is_err() {
+            return false;
+        }
+        let _ = FileExt::unlock(&lock);
+        true
     }
 }
 

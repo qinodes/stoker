@@ -4,7 +4,7 @@ use std::process::{ExitStatus, Stdio};
 use async_trait::async_trait;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
-use nix::unistd::{Pid, setpgid};
+use nix::unistd::{Pid, setsid};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, sleep};
@@ -20,11 +20,12 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // SAFETY: setpgid only uses values owned by this child before exec. No
-    // memory is allocated or shared Rust state is accessed in the child.
+    // SAFETY: setsid only affects this child before exec. No memory is
+    // allocated or shared Rust state is accessed in the child.
     unsafe {
         command.pre_exec(|| {
-            setpgid(Pid::from_raw(0), Pid::from_raw(0))
+            setsid()
+                .map(|_| ())
                 .map_err(|error| io::Error::from_raw_os_error(error as i32))
         });
     }
