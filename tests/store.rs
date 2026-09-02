@@ -18,9 +18,7 @@ fn new_job() -> NewJob {
     NewJob {
         name: "example".into(),
         user: "alice".into(),
-        repository: PathBuf::from("/tmp/repository"),
-        git_commit: "0123456789abcdef".into(),
-        cwd: PathBuf::from("experiments/example"),
+        cwd: PathBuf::from("/tmp/repository/experiments/example"),
         command: vec!["echo".into(), "ok".into()],
     }
 }
@@ -104,23 +102,54 @@ fn legacy_database_migrates_queued_jobs_to_queue_order() {
                 )",
             )
             .unwrap();
-        for (id, name, committed_at) in [
-            (first, "first", "2026-01-01T00:00:00+00:00"),
-            (second, "second", "2026-01-01T00:01:00+00:00"),
+        let repository = dir.path().join("repo");
+        for (id, name, cwd, committed_at) in [
+            (
+                first,
+                "first",
+                "experiments/first",
+                "2026-01-01T00:00:00+00:00",
+            ),
+            (
+                second,
+                "second",
+                "experiments/second",
+                "2026-01-01T00:01:00+00:00",
+            ),
         ] {
             connection
                 .execute(
                     "INSERT INTO jobs (id,name,user,repository,git_commit,cwd,command,state,created_at,committed_at)
-                     VALUES (?1,?2,'alice','/tmp/repo','commit','.','[\"echo\"]','QUEUED',?3,?3)",
-                    params![id.to_string(), name, committed_at],
+                     VALUES (?1,?2,'alice',?3,'commit',?4,'[\"echo\"]','QUEUED',?5,?5)",
+                    params![
+                        id.to_string(),
+                        name,
+                        repository.to_string_lossy().to_string(),
+                        cwd,
+                        committed_at,
+                    ],
                 )
                 .unwrap();
         }
     }
 
     let store = Store::open(&db_path).unwrap();
-    assert_eq!(store.get_job(first).unwrap().queue_order, Some(1));
-    assert_eq!(store.get_job(second).unwrap().queue_order, Some(2));
+    let first_job = store.get_job(first).unwrap();
+    let second_job = store.get_job(second).unwrap();
+    assert_eq!(first_job.queue_order, Some(1));
+    assert_eq!(second_job.queue_order, Some(2));
+    assert!(first_job.cwd.is_absolute());
+    assert!(second_job.cwd.is_absolute());
+    assert!(
+        first_job
+            .cwd
+            .ends_with(PathBuf::from("repo").join("experiments/first"))
+    );
+    assert!(
+        second_job
+            .cwd
+            .ends_with(PathBuf::from("repo").join("experiments/second"))
+    );
 }
 
 #[test]

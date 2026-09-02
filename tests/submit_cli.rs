@@ -6,7 +6,7 @@ use stoker::Store;
 use support::{TestRepo, stoker_in};
 
 #[test]
-fn submit_records_head_and_relative_cwd_as_draft() {
+fn submit_records_absolute_cwd_as_draft() {
     let repo = TestRepo::new();
     let output = stoker_in(&repo.join("experiments/llama"))
         .args([
@@ -21,38 +21,21 @@ fn submit_records_head_and_relative_cwd_as_draft() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let home = repo.path().parent().unwrap().join(format!(
-        ".{}-stoker-home",
-        repo.path().file_name().unwrap().to_string_lossy()
-    ));
+    let home = repo.join("experiments").join(".llama-stoker-home");
     let db = Connection::open(home.join("stoker.db")).unwrap();
-    let (state, repository, cwd, commit, command): (String, String, String, String, String) = db
-        .query_row(
-            "SELECT state, repository, cwd, git_commit, command FROM jobs LIMIT 1",
-            [],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )
+    let (state, cwd, command): (String, String, String) = db
+        .query_row("SELECT state, cwd, command FROM jobs LIMIT 1", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
         .unwrap();
     assert_eq!(state, "DRAFT");
-    assert_eq!(
-        repository,
-        repo.path().canonicalize().unwrap().to_string_lossy()
-    );
-    assert_eq!(cwd, "experiments/llama");
-    assert!(!commit.is_empty());
+    assert!(std::path::Path::new(&cwd).is_absolute());
+    assert!(cwd.ends_with("experiments/llama"));
     assert_eq!(command, r#"["python","train.py","--lr","0.0001"]"#);
 }
 
 #[test]
-fn submit_rejects_dirty_repository() {
+fn submit_accepts_a_non_git_directory() {
     let repo = TestRepo::new();
     repo.write("tracked.txt", "changed\n");
     stoker_in(repo.path())
@@ -60,8 +43,7 @@ fn submit_rejects_dirty_repository() {
             "submit", "--user", "alice", "--name", "lr", "--cmd", "echo", "ok",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("uncommitted changes"));
+        .success();
 }
 
 #[test]
@@ -185,7 +167,7 @@ fn jobs_state_filter_shows_queue_order() {
 }
 
 #[test]
-fn show_displays_source_and_execution_directories() {
+fn show_displays_recorded_and_execution_directories() {
     let repo = TestRepo::new();
     stoker_in(&repo.join("experiments/llama"))
         .args([
@@ -200,10 +182,7 @@ fn show_displays_source_and_execution_directories() {
         ])
         .assert()
         .success();
-    let home = repo.path().parent().unwrap().join(format!(
-        ".{}-stoker-home",
-        repo.path().file_name().unwrap().to_string_lossy()
-    ));
+    let home = repo.join("experiments").join(".llama-stoker-home");
     let job = Store::open(home.join("stoker.db"))
         .unwrap()
         .list_jobs(None)
@@ -212,11 +191,11 @@ fn show_displays_source_and_execution_directories() {
         .next()
         .unwrap();
 
-    stoker_in(repo.path())
+    stoker_in(&repo.join("experiments/llama"))
         .args(["show", &job.id.to_string()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("source_cwd:"))
+        .stdout(predicate::str::contains("cwd:"))
         .stdout(predicate::str::contains("execution_cwd:"))
         .stdout(predicate::str::contains("execution_cwd_status: planned"))
         .stdout(predicate::str::contains("command: [\"echo\", \"ok\"]"));

@@ -63,8 +63,6 @@ impl std::str::FromStr for JobState {
 pub struct NewJob {
     pub name: String,
     pub user: String,
-    pub repository: PathBuf,
-    pub git_commit: String,
     pub cwd: PathBuf,
     pub command: Vec<String>,
 }
@@ -74,8 +72,6 @@ pub struct Job {
     pub id: Uuid,
     pub name: String,
     pub user: String,
-    pub repository: PathBuf,
-    pub git_commit: String,
     pub cwd: PathBuf,
     pub command: Vec<String>,
     pub state: JobState,
@@ -86,6 +82,5 @@ pub struct Job {
     pub finished_at: Option<DateTime<Utc>>,
     pub exit_code: Option<i32>,
     pub pid: Option<u32>,
-    pub execution_dir: Option<PathBuf>,
     pub failure_detail: Option<String>,
 }

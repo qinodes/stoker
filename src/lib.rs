@@ -1,7 +1,6 @@
 pub mod cli;
 pub mod config;
 pub mod domain;
-pub mod git;
 pub mod ipc;
 pub mod process;
 pub mod scheduler;

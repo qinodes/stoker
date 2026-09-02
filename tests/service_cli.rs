@@ -110,9 +110,7 @@ fn service_restart_marks_stranded_running_job_lost() {
         .create_job(NewJob {
             name: "stranded".into(),
             user: "test".into(),
-            repository: PathBuf::from("/tmp/repository"),
-            git_commit: "0123456789abcdef".into(),
-            cwd: PathBuf::from("."),
+            cwd: PathBuf::from("/tmp/repository"),
             command: vec!["echo".into(), "never".into()],
         })
         .unwrap();

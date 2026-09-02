@@ -6,21 +6,21 @@
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | 日本語
 
-**stoker はローカル環境向けの Git 対応ジョブスケジューラーです。**
-Git commit でコードのバージョンを固定し、コマンドとして実行できるタスクであればスケジュールできます。AI トレーニングは最初の利用例にすぎません。各ジョブは独立した Git worktree で実行されるため、現在の作業ディレクトリに影響しません。
+**stoker はローカル command 向けのジョブスケジューラーです。**
+各 Job は作成したときのディレクトリで実行され、`.stoker/runs` にはログだけが保存されます。環境と成果物はユーザー自身が管理します。
 
 ## クイックスタート
 
-Rust、Git、および Git repository が必要です。
+Rust と、command を実行するディレクトリが必要です。
 
 ```bash
-# crates.io から CLI をインストール（Rust と Git が必要）
+# crates.io から CLI をインストール
 cargo install stoker-engine
 
 # scheduler をバックグラウンドで起動（Linux / Windows）
 stoker serve
 
-# Git repository 内で DRAFT Job を作成
+# 現在のディレクトリで DRAFT Job を作成
 stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
 
 # 内容を確認して queue に追加（<JOB_ID> は直前の出力を使用）
@@ -56,7 +56,7 @@ Job の詳細、command、実行パスは `stoker show <JOB_ID>` で確認でき
 | --- | --- |
 | `DRAFT` | submit 済みですが、まだ queue に commit されていません。 |
 | `QUEUED` | commit 済みで、実行待ちです。 |
-| `STARTING` | scheduler が Job を取得し、worktree とプロセスを準備しています。 |
+| `STARTING` | scheduler が Job を取得し、ソースディレクトリとプロセスを準備しています。 |
 | `RUNNING` | Job のプロセスが実行中です。 |
 | `CANCELLING` | キャンセル済みで、stoker がプロセスの停止とクリーンアップを行っています。 |
 | `SUCCEEDED` | Job が正常に完了しました。 |
@@ -68,6 +68,8 @@ Job の詳細、command、実行パスは `stoker show <JOB_ID>` で確認でき
 
 `stoker stop` は scheduler を停止し、現在実行中の Job をキャンセルします。`QUEUED` の Job は保持され、次回 scheduler を起動したときに処理されます。
 
+Job は実行開始時点のソースディレクトリの内容を使用し、command による変更はそこに残ります。stoker はディレクトリ内のファイルを自動で変更または復元しません。
+
 `stoker update` は更新可能なバージョンを表示し、明示的に `y` または `yes` を入力した場合のみ更新します。
 
 特定バージョンを入れるには、`cargo install stoker-engine --version <VERSION> --force` を使用します。
@@ -77,6 +79,6 @@ Job の詳細、command、実行パスは `stoker show <JOB_ID>` で確認でき
 ## 対象範囲と制限
 
 - 単一マシンの queue のみ対応。複数マシン、リモート実行、分散学習、GPU 割り当て、コンテナのスケジューリングには対応しません。
-- Git repository とクリーンな working tree が必要です。Git がない場合や commit できない場合、Job は submit できません。
+- submit 時のディレクトリが存在している必要があります。ディレクトリ内のファイル変更は検査しません。
 - Python/Conda/CUDA 環境、データセット、checkpoint、artifact、実験メトリクスは管理しません。
 - stoker のアカウント、ログイン、権限管理はありません。`--user` は識別と絞り込み専用です。

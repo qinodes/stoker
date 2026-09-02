@@ -10,7 +10,7 @@ use predicates::prelude::*;
 use stoker::{JobState, Store};
 use uuid::Uuid;
 
-use support::{TestCommand, TestRepo, stoker_in, stoker_with_home};
+use support::{TestCommand, TestRepo, stoker_with_home, stoker_with_home_and_dir};
 
 static JOB_HOMES: OnceLock<Mutex<HashMap<Uuid, PathBuf>>> = OnceLock::new();
 
@@ -26,21 +26,23 @@ fn home_for(repo: &TestRepo) -> PathBuf {
     ))
 }
 
-fn git_output(repo: &TestRepo, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repo.path())
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+pub fn submit_script(repo: &TestRepo, script: &str, name: &str) -> Uuid {
+    submit_script_from(repo, repo.path(), script, name)
 }
 
-pub fn submit_script(repo: &TestRepo, script: &str, name: &str) -> Uuid {
+fn submit_script_from(
+    repo: &TestRepo,
+    current_dir: &std::path::Path,
+    script: &str,
+    name: &str,
+) -> Uuid {
     let mut args = vec!["submit", "--user", "test", "--name", name, "--cmd"];
     let shell = TestCommand::shell(script);
     args.extend(shell.iter().map(String::as_str));
-    let output = stoker_in(repo.path()).args(args).output().unwrap();
+    let output = stoker_with_home_and_dir(&home_for(repo), current_dir)
+        .args(args)
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -59,22 +61,27 @@ pub fn submit_script(repo: &TestRepo, script: &str, name: &str) -> Uuid {
 fn order_job(repo: &TestRepo, value: &str, order_path: &std::path::Path) -> String {
     #[cfg(unix)]
     {
-        repo.commit_script(&format!("printf {value}; printf generated > generated"));
-        format!(
-            "sh script.sh; printf '{value}\\n' >> '{}'",
-            order_path.display()
-        )
+        let script_name = format!("script-{value}.sh");
+        repo.commit_script_named(
+            &script_name,
+            &format!(
+                "printf {value}; printf generated > generated; printf '{value}\\n' >> '{}'",
+                order_path.display()
+            ),
+        );
+        format!("sh {script_name}")
     }
     #[cfg(windows)]
     {
+        let script_name = format!("script-{value}.cmd");
         repo.commit_script_named(
-            "script.cmd",
+            &script_name,
             &format!(
                 "@echo off\r\necho {value}\r\necho {value}>>\"{}\"\r\necho generated>generated",
                 order_path.display()
             ),
         );
-        "script.cmd".into()
+        script_name
     }
 }
 
@@ -203,26 +210,17 @@ pub fn stoker_status(id: Uuid) -> assert_cmd::Command {
 }
 
 #[test]
-fn service_runs_committed_jobs_in_order_from_captured_commits() {
+fn service_runs_jobs_in_recorded_cwd_in_queue_order() {
     let repo = TestRepo::new();
     let order_dir = tempfile::tempdir().unwrap();
     let order_path = order_dir.path().join("order.log");
     let first = submit_script(&repo, &order_job(&repo, "first", &order_path), "first");
-    let first_commit = git_output(&repo, &["rev-parse", "HEAD"]);
     let second = submit_script(&repo, &order_job(&repo, "second", &order_path), "second");
-    let second_commit = git_output(&repo, &["rev-parse", "HEAD"]);
-    assert_ne!(first_commit, second_commit);
-    let source_head_before = git_output(&repo, &["rev-parse", "HEAD"]);
-    let source_status_before = git_output(&repo, &["status", "--porcelain"]);
     start_service_and_commit(&[first, second]);
     assert_terminal(first, JobState::Succeeded);
     assert_terminal(second, JobState::Succeeded);
     assert_log_contains(first, "first");
     assert_log_contains(second, "second");
-    let home = homes().lock().unwrap().get(&first).cloned().unwrap();
-    let store = Store::open(home.join("stoker.db")).unwrap();
-    assert_eq!(store.get_job(first).unwrap().git_commit, first_commit);
-    assert_eq!(store.get_job(second).unwrap().git_commit, second_commit);
     assert_eq!(
         std::fs::read_to_string(&order_path).unwrap(),
         if cfg!(windows) {
@@ -231,19 +229,42 @@ fn service_runs_committed_jobs_in_order_from_captured_commits() {
             "first\nsecond\n"
         }
     );
-    assert_eq!(
-        git_output(&repo, &["rev-parse", "HEAD"]),
-        source_head_before
-    );
-    assert_eq!(
-        git_output(&repo, &["status", "--porcelain"]),
-        source_status_before
-    );
     assert!(
-        !repo.join("generated").exists(),
-        "job modified source checkout"
+        repo.join("generated").exists(),
+        "job should run in the recorded source cwd"
     );
     stoker_stop(first).assert().success();
+}
+
+#[test]
+fn service_runs_job_in_the_subdirectory_recorded_at_submission() {
+    let repo = TestRepo::new();
+    let nested = repo.join("experiments/llama");
+    std::fs::create_dir_all(&nested).unwrap();
+    let job = submit_script_from(
+        &repo,
+        &nested,
+        if cfg!(windows) {
+            "echo nested>nested-marker"
+        } else {
+            "printf nested > nested-marker"
+        },
+        "nested",
+    );
+
+    start_service_and_commit(&[job]);
+    assert_terminal(job, JobState::Succeeded);
+    assert!(nested.join("nested-marker").exists());
+
+    let home = homes().lock().unwrap().get(&job).cloned().unwrap();
+    assert!(
+        !home
+            .join("runs")
+            .join(job.to_string())
+            .join("repo")
+            .exists()
+    );
+    stoker_stop(job).assert().success();
 }
 
 #[test]
@@ -286,13 +307,13 @@ fn cancel_running_job_terminates_tree_then_starts_next_job() {
         .get_job(running)
         .unwrap();
     assert!(cancelled.pid.is_none());
-    assert!(cancelled.execution_dir.is_none());
     assert!(
         !home
             .join("runs")
             .join(running.to_string())
             .join("repo")
-            .exists()
+            .exists(),
+        "direct execution must not create a job worktree under runs"
     );
     assert_terminal(next, JobState::Succeeded);
     stoker_stop(running).assert().success();

@@ -594,8 +594,6 @@ mod tests {
             .create_job(NewJob {
                 name: "queued".into(),
                 user: "test".into(),
-                repository: PathBuf::from("/tmp/repository"),
-                git_commit: "0123456789abcdef".into(),
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into(), "queued".into()],
             })

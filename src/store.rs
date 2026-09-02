@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::config::normalize_path;
 use crate::domain::{Job, JobState, NewJob};
 
 const SCHEMA: &str = r#"
@@ -15,8 +16,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY NOT NULL,
     name TEXT NOT NULL,
     user TEXT NOT NULL,
-    repository TEXT NOT NULL,
-    git_commit TEXT NOT NULL,
     cwd TEXT NOT NULL,
     command TEXT NOT NULL,
     state TEXT NOT NULL,
@@ -27,14 +26,11 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at TEXT,
     exit_code INTEGER,
     pid INTEGER,
-    execution_dir TEXT,
     failure_detail TEXT
 );
 "#;
 
 const INDEXES: &str = r#"
-CREATE INDEX IF NOT EXISTS jobs_state_commit_id
-    ON jobs (state, committed_at, id);
 CREATE INDEX IF NOT EXISTS jobs_state_queue_order_id
     ON jobs (state, queue_order, id);
 "#;
@@ -74,6 +70,7 @@ impl Store {
         let mut connection = Connection::open(path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch(SCHEMA)?;
+        migrate_legacy_git_schema(&mut connection)?;
         migrate_queue_order(&mut connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -87,14 +84,12 @@ impl Store {
         let cwd = storage_path(&new_job.cwd);
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO jobs (id,name,user,repository,git_commit,cwd,command,state,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO jobs (id,name,user,cwd,command,state,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![
                 id.to_string(),
                 new_job.name,
                 new_job.user,
-                new_job.repository.to_string_lossy().as_ref(),
-                new_job.git_commit,
                 cwd,
                 command,
                 JobState::Draft.as_str(),
@@ -121,28 +116,28 @@ impl Store {
         let conn = self.lock()?;
         let mut statement = match (owner.is_some(), state) {
             (true, Some(_)) => conn.prepare(
-                "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
-                        committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
+                "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                        committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE user = ?1 AND state = ?2
                  ORDER BY queue_order, created_at, id",
             )?,
             (false, Some(_)) => conn.prepare(
-                "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
-                        committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
+                "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                        committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE state = ?1
                  ORDER BY queue_order, created_at, id",
             )?,
             (true, None) => conn.prepare(
-                "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
-                        committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
+                "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                        committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE user = ?1
                  ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
                           CASE WHEN state = 'QUEUED' THEN queue_order END,
                           COALESCE(committed_at, created_at), created_at, id",
             )?,
             (false, None) => conn.prepare(
-                "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
-                        committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
+                "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                        committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs
                  ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
                           CASE WHEN state = 'QUEUED' THEN queue_order END,
@@ -286,23 +281,13 @@ impl Store {
         Ok(Some(job))
     }
 
-    pub fn set_running(
-        &self,
-        id: Uuid,
-        pid: u32,
-        execution_dir: impl AsRef<Path>,
-    ) -> Result<Job, StoreError> {
+    pub fn set_running(&self, id: Uuid, pid: u32) -> Result<Job, StoreError> {
         let mut conn = self.lock()?;
         self.transition_job(&mut conn, id, "start", &[JobState::Starting], |conn| {
             conn.execute(
-                "UPDATE jobs SET state = 'RUNNING', started_at = ?2, pid = ?3, execution_dir = ?4
+                "UPDATE jobs SET state = 'RUNNING', started_at = ?2, pid = ?3
                  WHERE id = ?1 AND state = 'STARTING'",
-                params![
-                    id.to_string(),
-                    Utc::now().to_rfc3339(),
-                    i64::from(pid),
-                    execution_dir.as_ref().to_string_lossy().as_ref(),
-                ],
+                params![id.to_string(), Utc::now().to_rfc3339(), i64::from(pid),],
             )
         })
     }
@@ -365,10 +350,7 @@ impl Store {
                 action: "clear runtime fields",
             });
         }
-        tx.execute(
-            "UPDATE jobs SET pid = NULL, execution_dir = NULL WHERE id = ?1",
-            [id.to_string()],
-        )?;
+        tx.execute("UPDATE jobs SET pid = NULL WHERE id = ?1", [id.to_string()])?;
         let job = get_job_with(&tx, id)?;
         tx.commit()?;
         Ok(job)
@@ -481,6 +463,122 @@ fn migrate_queue_order(connection: &mut Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn migrate_legacy_git_schema(connection: &mut Connection) -> Result<(), StoreError> {
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let columns = tx
+        .prepare("PRAGMA table_info(jobs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|name| name == "repository") {
+        tx.commit()?;
+        return Ok(());
+    }
+    let has_queue_order = columns.iter().any(|name| name == "queue_order");
+    let queue_order = if has_queue_order {
+        "queue_order"
+    } else {
+        "NULL"
+    };
+    let query = format!(
+        "SELECT id,name,user,repository,cwd,command,state,{queue_order},created_at,
+                committed_at,started_at,finished_at,exit_code,pid,failure_detail
+         FROM jobs"
+    );
+    let legacy_rows = tx
+        .prepare(&query)?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
+                row.get::<_, Option<i32>>(12)?,
+                row.get::<_, Option<i64>>(13)?,
+                row.get::<_, Option<String>>(14)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    tx.execute_batch(
+        "CREATE TABLE jobs_v2 (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            user TEXT NOT NULL,
+            cwd TEXT NOT NULL,
+            command TEXT NOT NULL,
+            state TEXT NOT NULL,
+            queue_order INTEGER,
+            created_at TEXT NOT NULL,
+            committed_at TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            exit_code INTEGER,
+            pid INTEGER,
+            failure_detail TEXT
+        );
+        DROP INDEX IF EXISTS jobs_state_commit_id;
+        DROP INDEX IF EXISTS jobs_state_queue_order_id;",
+    )?;
+    for (
+        id,
+        name,
+        user,
+        repository,
+        legacy_cwd,
+        command,
+        state,
+        queue_order,
+        created_at,
+        committed_at,
+        started_at,
+        finished_at,
+        exit_code,
+        pid,
+        failure_detail,
+    ) in legacy_rows
+    {
+        let raw_cwd = PathBuf::from(legacy_cwd);
+        let cwd = if raw_cwd.is_absolute() {
+            normalize_path(raw_cwd)
+        } else {
+            normalize_path(PathBuf::from(repository).join(raw_cwd))
+        };
+        tx.execute(
+            "INSERT INTO jobs_v2
+                (id,name,user,cwd,command,state,queue_order,created_at,committed_at,
+                 started_at,finished_at,exit_code,pid,failure_detail)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            params![
+                id,
+                name,
+                user,
+                storage_path(&cwd),
+                command,
+                state,
+                queue_order,
+                created_at,
+                committed_at,
+                started_at,
+                finished_at,
+                exit_code,
+                pid,
+                failure_detail,
+            ],
+        )?;
+    }
+    tx.execute_batch("DROP TABLE jobs; ALTER TABLE jobs_v2 RENAME TO jobs;")?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn next_queue_order(conn: &Connection) -> Result<i64, StoreError> {
     Ok(conn.query_row(
         "SELECT COALESCE(MAX(queue_order), 0) + 1 FROM jobs WHERE state = 'QUEUED'",
@@ -512,8 +610,8 @@ fn storage_path(path: &Path) -> String {
 
 fn get_job_with(conn: &Connection, id: Uuid) -> Result<Job, StoreError> {
     conn.query_row(
-        "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
-                committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
+        "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                committed_at,started_at,finished_at,exit_code,pid,failure_detail
          FROM jobs WHERE id = ?1",
         [id.to_string()],
         row_to_job,
@@ -524,14 +622,14 @@ fn get_job_with(conn: &Connection, id: Uuid) -> Result<Job, StoreError> {
 
 fn row_to_job(row: &Row<'_>) -> rusqlite::Result<Job> {
     let id: String = row.get(0)?;
-    let command: String = row.get(6)?;
-    let state: String = row.get(7)?;
-    let queue_order: Option<i64> = row.get(8)?;
-    let created_at: String = row.get(9)?;
-    let committed_at: Option<String> = row.get(10)?;
-    let started_at: Option<String> = row.get(11)?;
-    let finished_at: Option<String> = row.get(12)?;
-    let pid: Option<i64> = row.get(14)?;
+    let command: String = row.get(4)?;
+    let state: String = row.get(5)?;
+    let queue_order: Option<i64> = row.get(6)?;
+    let created_at: String = row.get(7)?;
+    let committed_at: Option<String> = row.get(8)?;
+    let started_at: Option<String> = row.get(9)?;
+    let finished_at: Option<String> = row.get(10)?;
+    let pid: Option<i64> = row.get(12)?;
     let parse = |value: &str| {
         DateTime::parse_from_rfc3339(value)
             .map(|time| time.with_timezone(&Utc))
@@ -548,9 +646,7 @@ fn row_to_job(row: &Row<'_>) -> rusqlite::Result<Job> {
         id: parse_uuid(&id).map_err(to_sql_error)?,
         name: row.get(1)?,
         user: row.get(2)?,
-        repository: PathBuf::from(row.get::<_, String>(3)?),
-        git_commit: row.get(4)?,
-        cwd: PathBuf::from(row.get::<_, String>(5)?),
+        cwd: PathBuf::from(row.get::<_, String>(3)?),
         command: serde_json::from_str(&command).map_err(to_sql_error)?,
         state: parse_state(&state).map_err(to_sql_error)?,
         queue_order,
@@ -558,13 +654,12 @@ fn row_to_job(row: &Row<'_>) -> rusqlite::Result<Job> {
         committed_at: parse_opt(committed_at)?,
         started_at: parse_opt(started_at)?,
         finished_at: parse_opt(finished_at)?,
-        exit_code: row.get(13)?,
+        exit_code: row.get(11)?,
         pid: pid
             .map(u32::try_from)
             .transpose()
             .map_err(|err| to_sql_error(err.to_string()))?,
-        execution_dir: row.get::<_, Option<String>>(15)?.map(PathBuf::from),
-        failure_detail: row.get(16)?,
+        failure_detail: row.get(13)?,
     })
 }
 

@@ -1,5 +1,4 @@
 use std::io::{self, Write};
-use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -9,15 +8,15 @@ use semver::Version;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
+use crate::config::normalize_path;
 use crate::domain::{Job, JobState, NewJob};
-use crate::git::capture_submission;
 use crate::service::Service;
 use crate::{ServiceClient, StokerPaths, Store, is_service_unavailable};
 
 #[derive(Debug, Parser)]
 #[command(
     name = "stoker",
-    about = "A local Git-aware job scheduler",
+    about = "A local job scheduler",
     version = env!("CARGO_PKG_VERSION")
 )]
 pub struct Cli {
@@ -425,13 +424,15 @@ fn submit(args: SubmitArgs) -> anyhow::Result<()> {
     }
 
     let current_dir = std::env::current_dir().context("determine current directory")?;
-    let snapshot = capture_submission(&current_dir).context("capture Git submission")?;
+    let cwd = normalize_path(
+        current_dir
+            .canonicalize()
+            .context("resolve working directory")?,
+    );
     let id = open_store()?.create_job(NewJob {
         name: args.name,
         user: args.user,
-        repository: snapshot.repository,
-        git_commit: snapshot.git_commit,
-        cwd: snapshot.cwd,
+        cwd,
         command: args.command,
     })?;
     println!("Created job {id} (DRAFT)");
@@ -441,7 +442,7 @@ fn submit(args: SubmitArgs) -> anyhow::Result<()> {
 fn show(id: Uuid) -> anyhow::Result<()> {
     let paths = open_paths()?;
     let job = Store::open(&paths.database)?.get_job(id)?;
-    print_job(&job, &paths);
+    print_job(&job);
     Ok(())
 }
 
@@ -498,26 +499,17 @@ fn parse_job_state(value: &str) -> Result<JobState, String> {
     value.to_ascii_uppercase().parse()
 }
 
-fn print_job(job: &Job, paths: &StokerPaths) {
-    let source_cwd = job.repository.join(&job.cwd);
-    let execution_dir = job
-        .execution_dir
-        .clone()
-        .unwrap_or_else(|| paths.runs.join(job.id.to_string()).join("repo"));
-    let execution_cwd = execution_dir.join(&job.cwd);
+fn print_job(job: &Job) {
+    let execution_cwd = &job.cwd;
     let execution_cwd_status = match job.state {
         JobState::Draft | JobState::Queued => "planned",
         JobState::Starting | JobState::Running | JobState::Cancelling => "active",
-        _ if job.execution_dir.is_some() => "retained after incomplete cleanup",
-        _ => "cleaned after completion",
+        _ => "source directory retained",
     };
     println!("id: {}", job.id);
     println!("name: {}", job.name);
     println!("user: {}", job.user);
-    println!("repository: {}", job.repository.display());
-    println!("git_commit: {}", job.git_commit);
     println!("cwd: {}", job.cwd.display());
-    println!("source_cwd: {}", source_cwd.display());
     println!("execution_cwd: {}", execution_cwd.display());
     println!("execution_cwd_status: {execution_cwd_status}");
     println!("command: {:?}", job.command);
@@ -543,13 +535,6 @@ fn print_job(job: &Job, paths: &StokerPaths) {
     );
     println!("exit_code: {:?}", job.exit_code);
     println!("pid: {:?}", job.pid);
-    println!(
-        "execution_dir: {}",
-        job.execution_dir
-            .as_deref()
-            .unwrap_or(Path::new(""))
-            .display()
-    );
     println!("failure_detail: {:?}", job.failure_detail);
 }
 

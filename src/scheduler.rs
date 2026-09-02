@@ -12,7 +12,6 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::domain::{Job, JobState};
-use crate::git::{add_detached_worktree, remove_worktree};
 use crate::ipc::{LogStream, ServiceStatus};
 use crate::process::{DefaultProcessController, ProcessController, ProcessSpec};
 use crate::{StokerPaths, Store};
@@ -73,7 +72,7 @@ impl Scheduler {
         Ok(job)
     }
 
-    /// Cancel a job, waiting for active process and worktree cleanup before
+    /// Cancel a job, waiting for the active process and runtime cleanup before
     /// acknowledging an active cancellation request.
     pub async fn handle_cancel(&self, id: Uuid) -> anyhow::Result<Job> {
         let job = self
@@ -265,9 +264,8 @@ impl Scheduler {
                     *active = None;
                 }
                 let _ = completed.send(true);
-                // An unrecoverable cleanup error keeps the slot occupied and
-                // stops queue progression; never start another job while a
-                // registered worktree or runtime record may remain.
+                // An unrecoverable runtime cleanup error keeps the slot
+                // occupied and stops queue progression.
                 result?;
                 continue;
             }
@@ -286,8 +284,9 @@ impl Scheduler {
         let run_dir = self.paths.runs.join(job.id.to_string());
         let stdout = run_dir.join("stdout.log");
         let stderr = run_dir.join("stderr.log");
-        let worktree = run_dir.join("repo");
-        let mut worktree_created = false;
+        // Jobs intentionally run in the source directory recorded at submit
+        // time. Stoker does not inspect or manage that directory's contents.
+        let cwd = job.cwd.clone();
         let mut sender = None;
         let result = async {
             // Keep setup inside the guarded path so a filesystem failure is
@@ -301,10 +300,6 @@ impl Scheduler {
                 .map_err(|_| anyhow::anyhow!("scheduler log map is poisoned"))?
                 .insert(job.id, log_sender.clone());
             sender = Some(log_sender.clone());
-            add_detached_worktree(&job.repository, &worktree, &job.git_commit)
-                .context("create detached worktree")?;
-            worktree_created = true;
-            let cwd = worktree.join(&job.cwd);
             let metadata = tokio::fs::metadata(&cwd)
                 .await
                 .with_context(|| format!("inspect job cwd {}", cwd.display()))?;
@@ -334,7 +329,7 @@ impl Scheduler {
             let mut process_task = tokio::spawn(async move {
                 process.wait_with_cancel(process_cancel_rx).await
             });
-            let running = self.store.set_running(job.id, pid, &worktree);
+            let running = self.store.set_running(job.id, pid);
             if let Err(error) = running {
                 let _ = process_cancel_tx.take().map(|sender| sender.send(()));
                 let _ = (&mut process_task).await;
@@ -348,7 +343,13 @@ impl Scheduler {
                     // transition. The normal terminal cleanup below will
                     // turn CANCELLING into CANCELLED.
                 } else {
-                    return Err(error).context("record running job");
+                    return Err(error).context(format!(
+                        "record running job while job is {}",
+                        self.store
+                            .get_job(job.id)
+                            .map(|current| current.state.to_string())
+                            .unwrap_or_else(|_| "unknown".into())
+                    ));
                 }
             }
             let watcher = tokio::spawn(watch_logs(
@@ -402,61 +403,33 @@ impl Scheduler {
 
         let mut diagnostics = Vec::new();
         if let Err(error) = result {
-            let detail = error.to_string();
+            let detail = format!("{error:#}");
             diagnostics.push(detail.clone());
             if let Err(finish_error) = self.store.finish(job.id, None, Some(&detail)) {
                 diagnostics.push(format!("record FAILED result: {finish_error}"));
             }
         }
         let mut cleanup_failed = false;
-        if worktree_created || worktree.exists() {
-            let mut removed = false;
-            let mut last_error = None;
-            for _ in 0..3 {
-                match remove_worktree(&job.repository, &worktree) {
-                    Ok(()) => {
-                        removed = true;
-                        break;
-                    }
-                    Err(error) => {
-                        last_error = Some(error.to_string());
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
+        let mut cleared = false;
+        let mut clear_error = None;
+        for _ in 0..3 {
+            match self.store.clear_runtime(job.id) {
+                Ok(_) => {
+                    cleared = true;
+                    break;
                 }
-            }
-            if !removed || worktree.exists() {
-                cleanup_failed = true;
-                diagnostics.push(format!(
-                    "remove worktree {}: {}",
-                    worktree.display(),
-                    last_error.unwrap_or_else(|| "unknown error".into())
-                ));
+                Err(error) => {
+                    clear_error = Some(error.to_string());
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
             }
         }
-        if !cleanup_failed {
-            let mut cleared = false;
-            let mut clear_error = None;
-            for _ in 0..3 {
-                match self.store.clear_runtime(job.id) {
-                    Ok(_) => {
-                        cleared = true;
-                        break;
-                    }
-                    Err(error) => {
-                        clear_error = Some(error.to_string());
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
-                }
-            }
-            if !cleared {
-                cleanup_failed = true;
-                diagnostics.push(format!(
-                    "clear runtime fields: {}",
-                    clear_error.unwrap_or_else(|| "unknown error".into())
-                ));
-            }
-        } else {
-            diagnostics.push("runtime fields retained because worktree cleanup failed".into());
+        if !cleared {
+            cleanup_failed = true;
+            diagnostics.push(format!(
+                "clear runtime fields: {}",
+                clear_error.unwrap_or_else(|| "unknown error".into())
+            ));
         }
         let mut diagnostics_persistence_error = None;
         if !diagnostics.is_empty() {
