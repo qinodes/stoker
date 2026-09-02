@@ -31,6 +31,8 @@ stoker commit <JOB_ID>
 stoker status
 stoker jobs
 stoker jobs --user alice
+stoker jobs --state draft
+stoker jobs --state queued
 stoker logs <JOB_ID>
 stoker logs -f <JOB_ID>
 stoker cancel <JOB_ID>
@@ -44,7 +46,9 @@ stoker uninstall
 
 `--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證；多人共用同一台機器時，可用它辨識及篩選各自的 Job。
 
-`jobs` 會列出已 submit 的 Job，包含 `job_id`、owner、名稱與狀態。
+`jobs` 顯示 queue 摘要：`queue_order`、`job_id`、owner、名稱、狀態與時間。QUEUED Job 依 `queue_order` 排序，其他狀態顯示 `-`。可用 `--state draft` 或 `--state queued` 篩選。
+
+要查看 Job 的完整資料、command 與執行路徑，請使用 `stoker show <JOB_ID>`。
 
 ## Job 狀態與取消
 

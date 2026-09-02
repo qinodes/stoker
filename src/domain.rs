@@ -79,6 +79,7 @@ pub struct Job {
     pub cwd: PathBuf,
     pub command: Vec<String>,
     pub state: JobState,
+    pub queue_order: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub committed_at: Option<DateTime<Utc>>,
     pub started_at: Option<DateTime<Utc>>,

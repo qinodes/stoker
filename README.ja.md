@@ -31,6 +31,8 @@ stoker commit <JOB_ID>
 stoker status
 stoker jobs
 stoker jobs --user alice
+stoker jobs --state draft
+stoker jobs --state queued
 stoker logs <JOB_ID>
 stoker logs -f <JOB_ID>
 stoker cancel <JOB_ID>
@@ -44,7 +46,9 @@ stoker uninstall
 
 `--user` は論理的な owner ラベルであり、OS アカウントや認証機能ではありません。同じマシンを複数人で使う場合に、ジョブの識別と絞り込みに利用できます。
 
-`jobs` は submit 済みの Job と `job_id`、owner、名前、状態を一覧表示します。
+`jobs` は queue の概要として、`queue_order`、`job_id`、owner、名前、状態、時刻を表示します。QUEUED Job は `queue_order` 順、それ以外の状態は `-` です。`--state draft` または `--state queued` で絞り込めます。
+
+Job の詳細、command、実行パスは `stoker show <JOB_ID>` で確認できます。
 
 ## Job の状態とキャンセル
 

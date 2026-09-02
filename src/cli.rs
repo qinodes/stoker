@@ -9,7 +9,7 @@ use semver::Version;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use crate::domain::{Job, NewJob};
+use crate::domain::{Job, JobState, NewJob};
 use crate::git::capture_submission;
 use crate::service::Service;
 use crate::{ServiceClient, StokerPaths, Store, is_service_unavailable};
@@ -35,6 +35,8 @@ pub enum CliCommand {
     Jobs {
         #[arg(long)]
         user: Option<String>,
+        #[arg(long, value_parser = parse_job_state)]
+        state: Option<JobState>,
     },
     #[command(about = "Update stoker from crates.io")]
     Update,
@@ -83,7 +85,7 @@ pub fn run_command(command: CliCommand) -> anyhow::Result<()> {
     match command {
         CliCommand::Submit(args) => submit(args),
         CliCommand::Show { id } => show(id),
-        CliCommand::Jobs { user } => jobs(user.as_deref()),
+        CliCommand::Jobs { user, state } => jobs(user.as_deref(), state),
         CliCommand::Update => update(),
         CliCommand::Uninstall => uninstall(),
         CliCommand::Serve => serve(),
@@ -437,38 +439,95 @@ fn submit(args: SubmitArgs) -> anyhow::Result<()> {
 }
 
 fn show(id: Uuid) -> anyhow::Result<()> {
-    let job = open_store()?.get_job(id)?;
-    print_job(&job);
+    let paths = open_paths()?;
+    let job = Store::open(&paths.database)?.get_job(id)?;
+    print_job(&job, &paths);
     Ok(())
 }
 
-fn jobs(owner: Option<&str>) -> anyhow::Result<()> {
-    println!("job_id\towner\tname\tstate\ttime");
-    for job in open_store()?.list_jobs(owner)? {
+fn jobs(owner: Option<&str>, state: Option<JobState>) -> anyhow::Result<()> {
+    let rows: Vec<_> = open_store()?
+        .list_jobs_with_state(owner, state)?
+        .into_iter()
+        .map(|job| {
+            [
+                job.queue_order
+                    .map(|order| order.to_string())
+                    .unwrap_or_else(|| "-".into()),
+                job.id.to_string(),
+                job.user,
+                job.name,
+                job.state.to_string(),
+                job.committed_at
+                    .or(Some(job.created_at))
+                    .map(|time| time.to_rfc3339())
+                    .unwrap_or_default(),
+            ]
+        })
+        .collect();
+    let headers = ["queue_order", "job_id", "owner", "name", "state", "time"];
+    let mut widths = headers.map(str::len);
+    for row in &rows {
+        for (index, value) in row.iter().enumerate() {
+            widths[index] = widths[index].max(value.len());
+        }
+    }
+    println!("{}", format_jobs_row(headers, &widths));
+    for row in &rows {
         println!(
-            "{}\t{}\t{}\t{}\t{}",
-            job.id,
-            job.user,
-            job.name,
-            job.state,
-            job.committed_at
-                .or(Some(job.created_at))
-                .map(|time| time.to_rfc3339())
-                .unwrap_or_default()
+            "{}",
+            format_jobs_row(
+                [&row[0], &row[1], &row[2], &row[3], &row[4], &row[5]],
+                &widths,
+            )
         );
     }
     Ok(())
 }
 
-fn print_job(job: &Job) {
+fn format_jobs_row(columns: [&str; 6], widths: &[usize; 6]) -> String {
+    columns
+        .into_iter()
+        .zip(widths)
+        .map(|(value, width)| format!("{value:<width$}", width = *width))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn parse_job_state(value: &str) -> Result<JobState, String> {
+    value.to_ascii_uppercase().parse()
+}
+
+fn print_job(job: &Job, paths: &StokerPaths) {
+    let source_cwd = job.repository.join(&job.cwd);
+    let execution_dir = job
+        .execution_dir
+        .clone()
+        .unwrap_or_else(|| paths.runs.join(job.id.to_string()).join("repo"));
+    let execution_cwd = execution_dir.join(&job.cwd);
+    let execution_cwd_status = match job.state {
+        JobState::Draft | JobState::Queued => "planned",
+        JobState::Starting | JobState::Running | JobState::Cancelling => "active",
+        _ if job.execution_dir.is_some() => "retained after incomplete cleanup",
+        _ => "cleaned after completion",
+    };
     println!("id: {}", job.id);
     println!("name: {}", job.name);
     println!("user: {}", job.user);
     println!("repository: {}", job.repository.display());
     println!("git_commit: {}", job.git_commit);
     println!("cwd: {}", job.cwd.display());
+    println!("source_cwd: {}", source_cwd.display());
+    println!("execution_cwd: {}", execution_cwd.display());
+    println!("execution_cwd_status: {execution_cwd_status}");
     println!("command: {:?}", job.command);
     println!("state: {}", job.state);
+    println!(
+        "queue_order: {}",
+        job.queue_order
+            .map(|order| order.to_string())
+            .unwrap_or_else(|| "-".into())
+    );
     println!("created_at: {}", job.created_at.to_rfc3339());
     println!(
         "committed_at: {}",

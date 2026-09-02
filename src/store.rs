@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Mutex, MutexGuard};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -19,6 +20,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     cwd TEXT NOT NULL,
     command TEXT NOT NULL,
     state TEXT NOT NULL,
+    queue_order INTEGER,
     created_at TEXT NOT NULL,
     committed_at TEXT,
     started_at TEXT,
@@ -28,8 +30,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     execution_dir TEXT,
     failure_detail TEXT
 );
+"#;
+
+const INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS jobs_state_commit_id
     ON jobs (state, committed_at, id);
+CREATE INDEX IF NOT EXISTS jobs_state_queue_order_id
+    ON jobs (state, queue_order, id);
 "#;
 
 #[derive(Debug, Error)]
@@ -64,8 +71,10 @@ impl Store {
             std::fs::create_dir_all(parent)
                 .map_err(|err| StoreError::InvalidData(err.to_string()))?;
         }
-        let connection = Connection::open(path)?;
+        let mut connection = Connection::open(path)?;
+        connection.busy_timeout(Duration::from_secs(5))?;
         connection.execute_batch(SCHEMA)?;
+        migrate_queue_order(&mut connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -101,59 +110,121 @@ impl Store {
     }
 
     pub fn list_jobs(&self, owner: Option<&str>) -> Result<Vec<Job>, StoreError> {
+        self.list_jobs_with_state(owner, None)
+    }
+
+    pub fn list_jobs_with_state(
+        &self,
+        owner: Option<&str>,
+        state: Option<JobState>,
+    ) -> Result<Vec<Job>, StoreError> {
         let conn = self.lock()?;
-        let mut statement = if owner.is_some() {
-            conn.prepare(
-                "SELECT id,name,user,repository,git_commit,cwd,command,state,created_at,
+        let mut statement = match (owner.is_some(), state) {
+            (true, Some(_)) => conn.prepare(
+                "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
+                        committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
+                 FROM jobs WHERE user = ?1 AND state = ?2
+                 ORDER BY queue_order, created_at, id",
+            )?,
+            (false, Some(_)) => conn.prepare(
+                "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
+                        committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
+                 FROM jobs WHERE state = ?1
+                 ORDER BY queue_order, created_at, id",
+            )?,
+            (true, None) => conn.prepare(
+                "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
                  FROM jobs WHERE user = ?1
-                 ORDER BY COALESCE(committed_at, created_at), created_at, id",
-            )?
-        } else {
-            conn.prepare(
-                "SELECT id,name,user,repository,git_commit,cwd,command,state,created_at,
+                 ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
+                          CASE WHEN state = 'QUEUED' THEN queue_order END,
+                          COALESCE(committed_at, created_at), created_at, id",
+            )?,
+            (false, None) => conn.prepare(
+                "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
                  FROM jobs
-                 ORDER BY COALESCE(committed_at, created_at), created_at, id",
-            )?
+                 ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
+                          CASE WHEN state = 'QUEUED' THEN queue_order END,
+                          COALESCE(committed_at, created_at), created_at, id",
+            )?,
         };
-        let rows = if let Some(owner) = owner {
-            statement
+        let rows = match (owner, state) {
+            (Some(owner), Some(state)) => statement
+                .query_map(params![owner, state.as_str()], row_to_job)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (None, Some(state)) => statement
+                .query_map([state.as_str()], row_to_job)?
+                .collect::<Result<Vec<_>, _>>()?,
+            (Some(owner), None) => statement
                 .query_map([owner], row_to_job)?
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            statement
+                .collect::<Result<Vec<_>, _>>()?,
+            (None, None) => statement
                 .query_map([], row_to_job)?
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, _>>()?,
         };
         Ok(rows)
     }
 
     pub fn commit_job(&self, id: Uuid) -> Result<Job, StoreError> {
         let mut conn = self.lock()?;
-        self.transition_job(&mut conn, id, "commit", &[JobState::Draft], |conn| {
-            conn.execute(
-                "UPDATE jobs SET state = 'QUEUED', committed_at = ?2 WHERE id = ?1 AND state = 'DRAFT'",
-                params![id.to_string(), Utc::now().to_rfc3339()],
-            )
-        })
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state = self.current_state(&tx, id)?;
+        if state != JobState::Draft {
+            return Err(StoreError::InvalidTransition {
+                id,
+                state,
+                action: "commit",
+            });
+        }
+        let queue_order = next_queue_order(&tx)?;
+        if tx.execute(
+            "UPDATE jobs SET state = 'QUEUED', queue_order = ?2, committed_at = ?3
+             WHERE id = ?1 AND state = 'DRAFT'",
+            params![id.to_string(), queue_order, Utc::now().to_rfc3339()],
+        )? != 1
+        {
+            return Err(StoreError::InvalidTransition {
+                id,
+                state: JobState::Draft,
+                action: "commit",
+            });
+        }
+        normalize_queue(&tx)?;
+        let job = get_job_with(&tx, id)?;
+        tx.commit()?;
+        Ok(job)
     }
 
     pub fn cancel_not_started(&self, id: Uuid) -> Result<Job, StoreError> {
         let mut conn = self.lock()?;
-        self.transition_job(
-            &mut conn,
-            id,
-            "cancel",
-            &[JobState::Draft, JobState::Queued],
-            |conn| {
-                conn.execute(
-                    "UPDATE jobs SET state = 'CANCELLED', finished_at = ?2
-                     WHERE id = ?1 AND state IN ('DRAFT', 'QUEUED')",
-                    params![id.to_string(), Utc::now().to_rfc3339()],
-                )
-            },
-        )
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state = self.current_state(&tx, id)?;
+        if !matches!(state, JobState::Draft | JobState::Queued) {
+            return Err(StoreError::InvalidTransition {
+                id,
+                state,
+                action: "cancel",
+            });
+        }
+        if tx.execute(
+            "UPDATE jobs SET state = 'CANCELLED', queue_order = NULL, finished_at = ?2
+             WHERE id = ?1 AND state IN ('DRAFT', 'QUEUED')",
+            params![id.to_string(), Utc::now().to_rfc3339()],
+        )? != 1
+        {
+            return Err(StoreError::InvalidTransition {
+                id,
+                state,
+                action: "cancel",
+            });
+        }
+        if state == JobState::Queued {
+            normalize_queue(&tx)?;
+        }
+        let job = get_job_with(&tx, id)?;
+        tx.commit()?;
+        Ok(job)
     }
 
     /// Transition an active execution into the cancellation phase. The
@@ -180,43 +251,39 @@ impl Store {
     /// Atomically claim the oldest queued job. SQLite's write transaction keeps
     /// concurrent scheduler instances from selecting the same job.
     pub fn claim_next(&self) -> Result<Option<Job>, StoreError> {
-        let conn = self.lock()?;
-        conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = (|| {
-            let selected: Option<String> = conn
-                .query_row(
-                    "SELECT id FROM jobs WHERE state = 'QUEUED'
-                     ORDER BY committed_at, id LIMIT 1",
-                    [],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let Some(id_text) = selected else {
-                conn.execute_batch("COMMIT")?;
-                return Ok(None);
-            };
-            let id = parse_uuid(&id_text)?;
-            let changed = conn.execute(
-                "UPDATE jobs SET state = 'STARTING' WHERE id = ?1 AND state = 'QUEUED'",
-                [id.to_string()],
-            )?;
-            if changed != 1 {
-                return Err(StoreError::InvalidTransition {
-                    id,
-                    state: JobState::Queued,
-                    action: "claim",
-                });
-            }
-            // started_at is deliberately left NULL until the process is spawned;
-            // claim only owns the execution slot and enters STARTING.
-            let job = get_job_with(&conn, id)?;
-            conn.execute_batch("COMMIT")?;
-            Ok(Some(job))
-        })();
-        if result.is_err() {
-            let _ = conn.execute_batch("ROLLBACK");
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let selected: Option<String> = tx
+            .query_row(
+                "SELECT id FROM jobs WHERE state = 'QUEUED'
+                 ORDER BY queue_order, id LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(id_text) = selected else {
+            tx.commit()?;
+            return Ok(None);
+        };
+        let id = parse_uuid(&id_text)?;
+        if tx.execute(
+            "UPDATE jobs SET state = 'STARTING', queue_order = NULL
+             WHERE id = ?1 AND state = 'QUEUED'",
+            [id.to_string()],
+        )? != 1
+        {
+            return Err(StoreError::InvalidTransition {
+                id,
+                state: JobState::Queued,
+                action: "claim",
+            });
         }
-        result
+        normalize_queue(&tx)?;
+        // started_at is deliberately left NULL until the process is spawned;
+        // claim only owns the execution slot and enters STARTING.
+        let job = get_job_with(&tx, id)?;
+        tx.commit()?;
+        Ok(Some(job))
     }
 
     pub fn set_running(
@@ -372,13 +439,80 @@ impl Store {
     }
 }
 
+fn migrate_queue_order(connection: &mut Connection) -> Result<(), StoreError> {
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let has_queue_order = tx
+        .prepare("PRAGMA table_info(jobs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "queue_order");
+    if !has_queue_order {
+        tx.execute("ALTER TABLE jobs ADD COLUMN queue_order INTEGER", [])?;
+    }
+    tx.execute_batch(INDEXES)?;
+    let needs_backfill: bool = tx.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM jobs WHERE state = 'QUEUED' AND queue_order IS NULL
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if needs_backfill {
+        let ids = tx
+            .prepare(
+                "SELECT id FROM jobs WHERE state = 'QUEUED'
+                 ORDER BY committed_at, id",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (index, id) in ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE jobs SET queue_order = ?2 WHERE id = ?1",
+                params![id, i64::try_from(index + 1).expect("queue length fits i64")],
+            )?;
+        }
+    }
+    tx.execute(
+        "UPDATE jobs SET queue_order = NULL WHERE state <> 'QUEUED'",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn next_queue_order(conn: &Connection) -> Result<i64, StoreError> {
+    Ok(conn.query_row(
+        "SELECT COALESCE(MAX(queue_order), 0) + 1 FROM jobs WHERE state = 'QUEUED'",
+        [],
+        |row| row.get(0),
+    )?)
+}
+
+fn normalize_queue(conn: &Connection) -> Result<(), StoreError> {
+    let ids = conn
+        .prepare(
+            "SELECT id FROM jobs WHERE state = 'QUEUED'
+             ORDER BY queue_order, id",
+        )?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (index, id) in ids.iter().enumerate() {
+        conn.execute(
+            "UPDATE jobs SET queue_order = ?2 WHERE id = ?1",
+            params![id, i64::try_from(index + 1).expect("queue length fits i64")],
+        )?;
+    }
+    Ok(())
+}
+
 fn storage_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
 fn get_job_with(conn: &Connection, id: Uuid) -> Result<Job, StoreError> {
     conn.query_row(
-        "SELECT id,name,user,repository,git_commit,cwd,command,state,created_at,
+        "SELECT id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,
                 committed_at,started_at,finished_at,exit_code,pid,execution_dir,failure_detail
          FROM jobs WHERE id = ?1",
         [id.to_string()],
@@ -392,11 +526,12 @@ fn row_to_job(row: &Row<'_>) -> rusqlite::Result<Job> {
     let id: String = row.get(0)?;
     let command: String = row.get(6)?;
     let state: String = row.get(7)?;
-    let created_at: String = row.get(8)?;
-    let committed_at: Option<String> = row.get(9)?;
-    let started_at: Option<String> = row.get(10)?;
-    let finished_at: Option<String> = row.get(11)?;
-    let pid: Option<i64> = row.get(13)?;
+    let queue_order: Option<i64> = row.get(8)?;
+    let created_at: String = row.get(9)?;
+    let committed_at: Option<String> = row.get(10)?;
+    let started_at: Option<String> = row.get(11)?;
+    let finished_at: Option<String> = row.get(12)?;
+    let pid: Option<i64> = row.get(14)?;
     let parse = |value: &str| {
         DateTime::parse_from_rfc3339(value)
             .map(|time| time.with_timezone(&Utc))
@@ -418,17 +553,18 @@ fn row_to_job(row: &Row<'_>) -> rusqlite::Result<Job> {
         cwd: PathBuf::from(row.get::<_, String>(5)?),
         command: serde_json::from_str(&command).map_err(to_sql_error)?,
         state: parse_state(&state).map_err(to_sql_error)?,
+        queue_order,
         created_at: parse(&created_at)?,
         committed_at: parse_opt(committed_at)?,
         started_at: parse_opt(started_at)?,
         finished_at: parse_opt(finished_at)?,
-        exit_code: row.get(12)?,
+        exit_code: row.get(13)?,
         pid: pid
             .map(u32::try_from)
             .transpose()
             .map_err(|err| to_sql_error(err.to_string()))?,
-        execution_dir: row.get::<_, Option<String>>(14)?.map(PathBuf::from),
-        failure_detail: row.get(15)?,
+        execution_dir: row.get::<_, Option<String>>(15)?.map(PathBuf::from),
+        failure_detail: row.get(16)?,
     })
 }
 

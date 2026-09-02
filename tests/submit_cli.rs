@@ -2,6 +2,7 @@ mod support;
 
 use predicates::prelude::*;
 use rusqlite::Connection;
+use stoker::Store;
 use support::{TestRepo, stoker_in};
 
 #[test]
@@ -111,7 +112,9 @@ fn jobs_empty_still_prints_header() {
         .args(["jobs"])
         .assert()
         .success()
-        .stdout(predicate::eq("job_id\towner\tname\tstate\ttime\n"));
+        .stdout(predicate::eq(
+            "queue_order  job_id  owner  name  state  time\n",
+        ));
 }
 
 #[test]
@@ -135,7 +138,88 @@ fn jobs_prints_header_before_rows() {
         .args(["jobs"])
         .assert()
         .success()
-        .stdout(predicate::str::starts_with("job_id\towner\tname\tstate\ttime\n"));
+        .stdout(predicate::str::starts_with("queue_order  job_id"))
+        .stdout(predicate::str::contains("\n-"));
+}
+
+#[test]
+fn jobs_state_filter_shows_queue_order() {
+    let repo = TestRepo::new();
+    for (name, command) in [("queued-job", "queued"), ("draft-job", "draft")] {
+        stoker_in(repo.path())
+            .args([
+                "submit", "--user", "alice", "--name", name, "--cmd", "echo", command,
+            ])
+            .assert()
+            .success();
+    }
+    let home = repo.path().parent().unwrap().join(format!(
+        ".{}-stoker-home",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    let queued = store
+        .list_jobs(None)
+        .unwrap()
+        .into_iter()
+        .find(|job| job.name == "queued-job")
+        .unwrap();
+    store.commit_job(queued.id).unwrap();
+
+    stoker_in(repo.path())
+        .args(["jobs", "--state", "draft"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("draft-job"))
+        .stdout(predicate::str::contains("queued-job").not());
+    stoker_in(repo.path())
+        .args(["jobs", "--state", "queued"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("queued-job"))
+        .stdout(predicate::str::contains("draft-job").not())
+        .stdout(predicate::str::contains(format!(
+            "\n1            {}",
+            queued.id
+        )));
+}
+
+#[test]
+fn show_displays_source_and_execution_directories() {
+    let repo = TestRepo::new();
+    stoker_in(&repo.join("experiments/llama"))
+        .args([
+            "submit",
+            "--user",
+            "alice",
+            "--name",
+            "details-job",
+            "--cmd",
+            "echo",
+            "ok",
+        ])
+        .assert()
+        .success();
+    let home = repo.path().parent().unwrap().join(format!(
+        ".{}-stoker-home",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    let job = Store::open(home.join("stoker.db"))
+        .unwrap()
+        .list_jobs(None)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+
+    stoker_in(repo.path())
+        .args(["show", &job.id.to_string()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("source_cwd:"))
+        .stdout(predicate::str::contains("execution_cwd:"))
+        .stdout(predicate::str::contains("execution_cwd_status: planned"))
+        .stdout(predicate::str::contains("command: [\"echo\", \"ok\"]"));
 }
 
 #[test]

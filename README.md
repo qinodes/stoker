@@ -31,6 +31,8 @@ stoker commit <JOB_ID>
 stoker status
 stoker jobs
 stoker jobs --user alice
+stoker jobs --state draft
+stoker jobs --state queued
 stoker logs <JOB_ID>
 stoker logs -f <JOB_ID>
 stoker cancel <JOB_ID>
@@ -44,7 +46,9 @@ Everything after `--cmd` is passed unchanged to the program being run. Put stoke
 
 `--user` is a logical owner label, not an operating-system account or an authentication mechanism. It lets people sharing one machine identify and filter their jobs.
 
-`jobs` lists submitted jobs, including their `job_id`, owner, name, and state.
+`jobs` shows the queue summary: `queue_order`, `job_id`, owner, name, state, and time. Queued jobs are ordered by `queue_order`; other states show `-`. Filter with `--state draft` or `--state queued`.
+
+Use `stoker show <JOB_ID>` for the Job's full details, command, and execution paths.
 
 ## Job states and cancellation
 
