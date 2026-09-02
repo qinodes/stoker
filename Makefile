@@ -6,7 +6,7 @@ MESSAGE = Release $(TAG)
 
 ifneq ($(filter versioning,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VERSION)),)
-$(error VERSION is required, for example: make release VERSION=0.3.0)
+$(error VERSION is required, for example: make release VERSION=0.4.2)
 endif
 endif
 
@@ -20,7 +20,7 @@ lint:
 	cargo clippy --all-targets --all-features -- -D warnings
 
 test:
-	cargo test --all
+	cargo test --all -- --test-threads=1
 
 cargo-check:
 	cargo check --all-targets --all-features

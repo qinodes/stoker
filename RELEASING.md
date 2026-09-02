@@ -31,20 +31,22 @@ cargo publish --dry-run
 
 This runs formatting checks, compilation checks, Clippy, all tests, and a
 release build. The package commands verify the files that will be shipped and
-that publishing can proceed. Do not continue if any check fails.
+that publishing can proceed. Tests are run with one test thread to avoid
+Windows scheduler E2E tests competing for process and file resources. Do not
+continue if any check fails.
 
 ## 2. Create the release commit and tag
 
 ```bash
-make versioning VERSION=0.4.1
+make versioning VERSION=0.4.2
 ```
 
 This creates or updates:
 
-- a release commit with message `Release v0.4.1`;
-- an annotated Git tag named `v0.4.1`.
+- a release commit with message `Release v0.4.2`;
+- an annotated Git tag named `v0.4.2`.
 
-The command does not update `Cargo.toml` automatically. Replace `0.4.1` with
+The command does not update `Cargo.toml` automatically. Replace `0.4.2` with
 the version already set in `Cargo.toml`, and stage the intended changes first.
 
 ## 3. Push the release
@@ -80,7 +82,7 @@ cannot be published again with different contents.
 
 ```bash
 make check
-make versioning VERSION=0.4.1
+make versioning VERSION=0.4.2
 make release
 make publish
 ```

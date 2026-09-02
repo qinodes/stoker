@@ -2,7 +2,7 @@
 
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 [![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-blue)]
-[![Version](https://img.shields.io/badge/version-0.4.1-informational)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.4.2-informational)](Cargo.toml)
 
 [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | English
 
