@@ -134,9 +134,50 @@ impl Scheduler {
             anyhow::bail!("job {id} is not managed by the active scheduler");
         };
         let mut completed = completed.expect("active completion receiver must exist");
-        self.store
-            .request_cancelling(id)
-            .context("mark job cancelling")?;
+        let current = self.store.get_job(id).context("inspect active job")?;
+        if matches!(
+            current.state,
+            JobState::Succeeded | JobState::Failed | JobState::Cancelled | JobState::Lost
+        ) {
+            while !*completed.borrow() {
+                completed
+                    .changed()
+                    .await
+                    .with_context(|| format!("wait for completed job {id}"))?;
+            }
+            return self.store.get_job(id).context("inspect completed job");
+        }
+        if current.state != JobState::Cancelling
+            && let Err(error) = self.store.request_cancelling(id)
+        {
+            // The process may finish between the state check above and the
+            // transition. Treat that terminal race, or an already requested
+            // cancellation, as a successful stop.
+            let current = self.store.get_job(id).context("inspect active job")?;
+            if !matches!(
+                current.state,
+                JobState::Succeeded
+                    | JobState::Failed
+                    | JobState::Cancelled
+                    | JobState::Lost
+                    | JobState::Cancelling
+            ) {
+                return Err(error).context(format!(
+                    "mark job cancelling while job is {}",
+                    current.state
+                ));
+            }
+            if current.state == JobState::Cancelling {
+                let _ = active.cancel.send(true);
+            }
+            while !*completed.borrow() {
+                completed
+                    .changed()
+                    .await
+                    .with_context(|| format!("wait for completed job {id}"))?;
+            }
+            return self.store.get_job(id).context("inspect completed job");
+        }
         let _ = active.cancel.send(true);
         loop {
             let current = self.store.get_job(id).context("inspect cancelled job")?;
@@ -331,7 +372,15 @@ impl Scheduler {
                         if changed.is_err() || !*cancel.borrow() {
                             return Err(anyhow::anyhow!("cancellation signal closed"));
                         }
-                        self.store.request_cancelling(job.id).context("mark job cancelling")?;
+                        if let Err(error) = self.store.request_cancelling(job.id) {
+                            let current = self.store.get_job(job.id).context("inspect cancelling job")?;
+                            if current.state != JobState::Cancelling {
+                                return Err(error).context(format!(
+                                    "mark job cancelling while job is {}",
+                                    current.state
+                                ));
+                            }
+                        }
                         let _ = process_cancel_tx.take().map(|sender| sender.send(()));
                         (&mut process_task)
                             .await

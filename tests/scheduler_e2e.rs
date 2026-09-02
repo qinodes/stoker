@@ -56,9 +56,85 @@ pub fn submit_script(repo: &TestRepo, script: &str, name: &str) -> Uuid {
     id
 }
 
+fn order_job(repo: &TestRepo, value: &str, order_path: &std::path::Path) -> String {
+    #[cfg(unix)]
+    {
+        repo.commit_script(&format!("printf {value}; printf generated > generated"));
+        format!(
+            "sh script.sh; printf '{value}\\n' >> '{}'",
+            order_path.display()
+        )
+    }
+    #[cfg(windows)]
+    {
+        repo.commit_script_named(
+            "script.cmd",
+            &format!(
+                "@echo off\r\necho {value}\r\necho {value}>>\"{}\"\r\necho generated>generated",
+                order_path.display()
+            ),
+        );
+        "script.cmd".into()
+    }
+}
+
+fn output_command(value: &str) -> String {
+    #[cfg(unix)]
+    {
+        format!("printf {value}")
+    }
+    #[cfg(windows)]
+    {
+        format!("echo {value}")
+    }
+}
+
+fn failed_command() -> &'static str {
+    #[cfg(unix)]
+    {
+        "printf fail >&2; exit 7"
+    }
+    #[cfg(windows)]
+    {
+        "echo fail 1>&2 & exit /B 7"
+    }
+}
+
+fn long_running_command() -> &'static str {
+    #[cfg(unix)]
+    {
+        "sleep 30"
+    }
+    #[cfg(windows)]
+    {
+        "ping 127.0.0.1 -n 31 > NUL"
+    }
+}
+
+fn follow_command() -> &'static str {
+    #[cfg(unix)]
+    {
+        "printf first; sleep 1; printf second"
+    }
+    #[cfg(windows)]
+    {
+        "echo first & ping 127.0.0.1 -n 2 > NUL & echo second"
+    }
+}
+
 pub fn start_service_and_commit(ids: &[Uuid]) {
     let home = homes().lock().unwrap().get(&ids[0]).cloned().unwrap();
-    stoker_with_home(&home).args(["serve"]).assert().success();
+    let status = Command::new(assert_cmd::cargo::cargo_bin("stoker"))
+        .arg("serve")
+        .env("STOKER_HOME", &home)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "failed to start scheduler service: {status}"
+    );
     for id in ids {
         stoker_with_home(&home)
             .args(["commit", &id.to_string()])
@@ -131,20 +207,9 @@ fn service_runs_committed_jobs_in_order_from_captured_commits() {
     let repo = TestRepo::new();
     let order_dir = tempfile::tempdir().unwrap();
     let order_path = order_dir.path().join("order.log");
-    #[cfg(unix)]
-    let command = |value: &str| {
-        format!(
-            "sh script.sh; printf '{value}\\n' >> '{}'",
-            order_path.display()
-        )
-    };
-    #[cfg(windows)]
-    let command = |value: &str| format!("script.sh & echo {value}>>{}", order_path.display());
-    repo.commit_script("printf first; printf generated > generated");
-    let first = submit_script(&repo, &command("first"), "first");
+    let first = submit_script(&repo, &order_job(&repo, "first", &order_path), "first");
     let first_commit = git_output(&repo, &["rev-parse", "HEAD"]);
-    repo.commit_script("printf second; printf generated > generated");
-    let second = submit_script(&repo, &command("second"), "second");
+    let second = submit_script(&repo, &order_job(&repo, "second", &order_path), "second");
     let second_commit = git_output(&repo, &["rev-parse", "HEAD"]);
     assert_ne!(first_commit, second_commit);
     let source_head_before = git_output(&repo, &["rev-parse", "HEAD"]);
@@ -160,7 +225,11 @@ fn service_runs_committed_jobs_in_order_from_captured_commits() {
     assert_eq!(store.get_job(second).unwrap().git_commit, second_commit);
     assert_eq!(
         std::fs::read_to_string(&order_path).unwrap(),
-        "first\nsecond\n"
+        if cfg!(windows) {
+            "first\r\nsecond\r\n"
+        } else {
+            "first\nsecond\n"
+        }
     );
     assert_eq!(
         git_output(&repo, &["rev-parse", "HEAD"]),
@@ -180,8 +249,8 @@ fn service_runs_committed_jobs_in_order_from_captured_commits() {
 #[test]
 fn failed_job_preserves_logs_and_does_not_block_next_job() {
     let repo = TestRepo::new();
-    let failed = submit_script(&repo, "printf fail >&2; exit 7", "failed");
-    let succeeding = submit_script(&repo, "printf ok", "succeeding");
+    let failed = submit_script(&repo, failed_command(), "failed");
+    let succeeding = submit_script(&repo, &output_command("ok"), "succeeding");
     start_service_and_commit(&[failed, succeeding]);
     assert_terminal(failed, JobState::Failed);
     assert_log_contains(failed, "fail");
@@ -193,7 +262,7 @@ fn failed_job_preserves_logs_and_does_not_block_next_job() {
 #[test]
 fn logs_follow_receives_output_before_job_finishes() {
     let repo = TestRepo::new();
-    let job = submit_script(&repo, "printf first; sleep 1; printf second", "follow");
+    let job = submit_script(&repo, follow_command(), "follow");
     start_service_and_commit(&[job]);
     stoker_logs_follow(job)
         .assert()
@@ -205,8 +274,8 @@ fn logs_follow_receives_output_before_job_finishes() {
 #[test]
 fn cancel_running_job_terminates_tree_then_starts_next_job() {
     let repo = TestRepo::new();
-    let running = submit_script(&repo, "sleep 30", "running");
-    let next = submit_script(&repo, "printf next", "next");
+    let running = submit_script(&repo, long_running_command(), "running");
+    let next = submit_script(&repo, &output_command("next"), "next");
     start_service_and_commit(&[running, next]);
     wait_for_state(running, JobState::Running);
     stoker_cancel(running).assert().success();
@@ -232,7 +301,7 @@ fn cancel_running_job_terminates_tree_then_starts_next_job() {
 #[test]
 fn stop_cancels_active_job_and_removes_service_endpoint() {
     let repo = TestRepo::new();
-    let job = submit_script(&repo, "sleep 30", "running");
+    let job = submit_script(&repo, long_running_command(), "running");
     start_service_and_commit(&[job]);
     wait_for_state(job, JobState::Running);
     stoker_stop(job).assert().success();
@@ -245,8 +314,8 @@ fn stop_cancels_active_job_and_removes_service_endpoint() {
 #[test]
 fn stop_releases_queued_log_followers() {
     let repo = TestRepo::new();
-    let running = submit_script(&repo, "sleep 30", "running");
-    let queued = submit_script(&repo, "printf queued", "queued");
+    let running = submit_script(&repo, long_running_command(), "running");
+    let queued = submit_script(&repo, &output_command("queued"), "queued");
     start_service_and_commit(&[running, queued]);
     wait_for_state(running, JobState::Running);
     let home = homes().lock().unwrap().get(&queued).cloned().unwrap();

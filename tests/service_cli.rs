@@ -3,13 +3,28 @@ mod support;
 use predicates::prelude::*;
 use rusqlite::Connection;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use stoker::{JobState, NewJob, Store};
 use support::{TempStokerHome, stoker_with_home};
+
+fn start_service(home: &TempStokerHome) {
+    let status = Command::new(assert_cmd::cargo::cargo_bin("stoker"))
+        .arg("serve")
+        .env("STOKER_HOME", home.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(
+        status.success(),
+        "failed to start scheduler service: {status}"
+    );
+}
 
 #[test]
 fn serve_detaches_and_status_reports_running_service() {
     let home = TempStokerHome::new();
-    stoker_with_home(&home).args(["serve"]).assert().success();
+    start_service(&home);
     stoker_with_home(&home)
         .args(["status"])
         .assert()
@@ -30,14 +45,14 @@ fn stop_requires_running_service() {
 #[test]
 fn duplicate_service_does_not_replace_running_endpoint() {
     let home = TempStokerHome::new();
-    stoker_with_home(&home).args(["serve"]).assert().success();
+    start_service(&home);
     stoker_with_home(&home)
         .args(["serve"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already running"));
     stoker_with_home(&home).args(["stop"]).assert().success();
-    stoker_with_home(&home).args(["serve"]).assert().success();
+    start_service(&home);
     stoker_with_home(&home).args(["stop"]).assert().success();
 }
 
@@ -108,7 +123,7 @@ fn service_restart_marks_stranded_running_job_lost() {
             [job.to_string()],
         )
         .unwrap();
-    stoker_with_home(&home).args(["serve"]).assert().success();
+    start_service(&home);
     assert_eq!(
         Store::open(&db_path).unwrap().get_job(job).unwrap().state,
         JobState::Lost

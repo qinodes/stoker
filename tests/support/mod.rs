@@ -76,8 +76,12 @@ impl TestRepo {
     /// resulting HEAD. The script itself is useful to later worktree tests;
     /// callers choose the platform command with `TestCommand::shell`.
     pub fn commit_script(&self, script: &str) -> String {
-        self.write("script.sh", format!("{script}\n"));
-        run_git(&self.path, ["add", "script.sh"]).expect("stage script");
+        self.commit_script_named("script.sh", script)
+    }
+
+    pub fn commit_script_named(&self, name: &str, script: &str) -> String {
+        self.write(name, format!("{script}\n"));
+        run_git(&self.path, ["add", name]).expect("stage script");
         run_git(&self.path, ["commit", "-m", "script"]).expect("commit script");
         git_output(&self.path, ["rev-parse", "HEAD"])
     }

@@ -173,7 +173,7 @@ impl ServiceClient {
     /// Follow a job's output and write stdout/stderr chunks to their matching
     /// local streams. The call returns only after the service sends LogEnd.
     pub async fn follow_logs(&self, id: Uuid) -> anyhow::Result<()> {
-        let stream = tokio::time::timeout(self.timeout, connect(&self.paths))
+        let stream = tokio::time::timeout(self.timeout, connect_with_retry(&self.paths))
             .await
             .map_err(|_| {
                 anyhow::Error::new(ServiceUnavailable(std::io::Error::new(
@@ -203,7 +203,7 @@ impl ServiceClient {
     }
 
     pub(crate) async fn request(&self, request: IpcRequest) -> anyhow::Result<IpcResponse> {
-        let stream = tokio::time::timeout(self.timeout, connect(&self.paths))
+        let stream = tokio::time::timeout(self.timeout, connect_with_retry(&self.paths))
             .await
             .map_err(|_| {
                 anyhow::Error::new(ServiceUnavailable(std::io::Error::new(
@@ -262,6 +262,32 @@ async fn connect(paths: &StokerPaths) -> std::io::Result<IpcStream> {
 async fn connect(paths: &StokerPaths) -> std::io::Result<IpcStream> {
     use tokio::net::windows::named_pipe::ClientOptions;
     ClientOptions::new().open(paths.ipc_endpoint())
+}
+
+async fn connect_with_retry(paths: &StokerPaths) -> std::io::Result<IpcStream> {
+    #[cfg(windows)]
+    {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            match connect(paths).await {
+                Ok(client) => return Ok(client),
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    // The service creates a fresh named-pipe instance after
+                    // each client disconnects. Retry the brief gap before
+                    // reporting that the service is unavailable.
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        connect(paths).await
+    }
 }
 
 #[cfg(test)]
