@@ -46,6 +46,7 @@ check:
 versioning:
 	git commit --allow-empty -m "$(MESSAGE)"
 	git tag -a "$(TAG)" -m "$(MESSAGE)"
+	@echo "Versioning completed. Run 'make release' to publish the release."
 
 release:
 	git push origin main --follow-tags
