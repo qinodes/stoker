@@ -16,7 +16,6 @@ Download the archive for your platform from [GitHub Releases](https://github.com
 - Windows: `stoker-windows-x86_64.zip`
 - Linux: `stoker-linux-x86_64.tar.gz`
 - macOS Apple Silicon: `stoker-macos-arm64.tar.gz`
-- macOS Intel: `stoker-macos-x86_64.tar.gz`
 
 Each release also includes a platform binary and `SHA256SUMS`. Cargo installation remains available for Rust developers.
 

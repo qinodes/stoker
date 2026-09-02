@@ -16,7 +16,6 @@
 - Windows：`stoker-windows-x86_64.zip`
 - Linux：`stoker-linux-x86_64.tar.gz`
 - macOS Apple Silicon：`stoker-macos-arm64.tar.gz`
-- macOS Intel：`stoker-macos-x86_64.tar.gz`
 
 每個 release 也會提供平台 binary 與 `SHA256SUMS`。Rust 開發者仍可使用 Cargo 安裝。
 
