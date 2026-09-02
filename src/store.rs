@@ -69,6 +69,8 @@ impl Store {
         }
         let mut connection = Connection::open(path)?;
         connection.busy_timeout(Duration::from_secs(5))?;
+        // Allow service writes while CLI commands poll job state.
+        connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.execute_batch(SCHEMA)?;
         migrate_legacy_git_schema(&mut connection)?;
         migrate_queue_order(&mut connection)?;
@@ -299,7 +301,7 @@ impl Store {
         failure_detail: Option<&str>,
     ) -> Result<Job, StoreError> {
         let mut conn = self.lock()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let current = self.current_state(&tx, id)?;
         if !matches!(
             current,
@@ -338,7 +340,7 @@ impl Store {
     /// the terminal result and durable failure detail.
     pub fn clear_runtime(&self, id: Uuid) -> Result<Job, StoreError> {
         let mut conn = self.lock()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let state = self.current_state(&tx, id)?;
         if !matches!(
             state,
@@ -369,7 +371,7 @@ impl Store {
 
     pub fn mark_runtime_jobs_lost(&self) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             "UPDATE jobs SET state = 'LOST', finished_at = ?1
              WHERE state IN ('STARTING', 'RUNNING', 'CANCELLING')",
@@ -407,7 +409,7 @@ impl Store {
     where
         F: FnOnce(&Connection) -> Result<usize, rusqlite::Error>,
     {
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let state = self.current_state(&tx, id)?;
         if !allowed.contains(&state) {
             return Err(StoreError::InvalidTransition { id, state, action });
