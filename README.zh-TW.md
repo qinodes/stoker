@@ -46,6 +46,24 @@ stoker uninstall
 
 `jobs` 會列出已 submit 的 Job，包含 `job_id`、owner、名稱與狀態。
 
+## Job 狀態與取消
+
+| 狀態 | 說明 |
+| --- | --- |
+| `DRAFT` | 已 submit，但尚未 commit 到 queue。 |
+| `QUEUED` | 已 commit，正在等待執行。 |
+| `STARTING` | scheduler 已取出 Job，正在準備 worktree 與程序。 |
+| `RUNNING` | Job 的程序正在執行。 |
+| `CANCELLING` | 已要求取消，stoker 正在停止程序並清理。 |
+| `SUCCEEDED` | Job 已成功完成。 |
+| `FAILED` | Job 程序失敗，或 stoker 無法完成執行流程。 |
+| `CANCELLED` | Job 已被取消。 |
+| `LOST` | scheduler 重啟時，發現先前執行中的 Job 已失去管理。 |
+
+使用 `stoker cancel <JOB_ID>` 可以在 Job 執行前取消 `DRAFT` 或 `QUEUED` Job，也可以停止 `STARTING` 或 `RUNNING` Job。取消執行中的 Job 時，狀態會先變為 `CANCELLING`；stoker 會終止 Job 的程序樹、等待清理完成，再記錄為 `CANCELLED`。`cancel` 需要 scheduler 正在執行。
+
+`stoker stop` 會停止 scheduler 並取消當前執行中的 Job；仍是 `QUEUED` 的 Job 會保留，等下次啟動 scheduler 後再處理。
+
 `stoker update` 會顯示可更新的版本，且只有在明確輸入 `y` 或 `yes` 後才會更新。
 
 若要安裝指定版本，請使用 `cargo install stoker-engine --version <VERSION> --force`。

@@ -46,6 +46,24 @@ stoker uninstall
 
 `jobs` は submit 済みの Job と `job_id`、owner、名前、状態を一覧表示します。
 
+## Job の状態とキャンセル
+
+| 状態 | 説明 |
+| --- | --- |
+| `DRAFT` | submit 済みですが、まだ queue に commit されていません。 |
+| `QUEUED` | commit 済みで、実行待ちです。 |
+| `STARTING` | scheduler が Job を取得し、worktree とプロセスを準備しています。 |
+| `RUNNING` | Job のプロセスが実行中です。 |
+| `CANCELLING` | キャンセル済みで、stoker がプロセスの停止とクリーンアップを行っています。 |
+| `SUCCEEDED` | Job が正常に完了しました。 |
+| `FAILED` | Job のプロセスが失敗したか、stoker が実行を完了できませんでした。 |
+| `CANCELLED` | Job はキャンセルされました。 |
+| `LOST` | scheduler の再起動時に、実行中だった Job の管理状態が失われました。 |
+
+`stoker cancel <JOB_ID>` を使うと、実行前の `DRAFT` または `QUEUED` Job をキャンセルでき、`STARTING` または `RUNNING` Job を停止することもできます。実行中の Job をキャンセルすると、まず `CANCELLING` になり、stoker が Job のプロセスツリーを終了してクリーンアップを待った後、`CANCELLED` として記録します。`cancel` を使うには scheduler が実行中である必要があります。
+
+`stoker stop` は scheduler を停止し、現在実行中の Job をキャンセルします。`QUEUED` の Job は保持され、次回 scheduler を起動したときに処理されます。
+
 `stoker update` は更新可能なバージョンを表示し、明示的に `y` または `yes` を入力した場合のみ更新します。
 
 特定バージョンを入れるには、`cargo install stoker-engine --version <VERSION> --force` を使用します。

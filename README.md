@@ -46,6 +46,24 @@ Everything after `--cmd` is passed unchanged to the program being run. Put stoke
 
 `jobs` lists submitted jobs, including their `job_id`, owner, name, and state.
 
+## Job states and cancellation
+
+| State | Meaning |
+| --- | --- |
+| `DRAFT` | Submitted, but not committed to the queue yet. |
+| `QUEUED` | Committed and waiting to run. |
+| `STARTING` | Claimed by the scheduler; its worktree and process are being prepared. |
+| `RUNNING` | The job process is running. |
+| `CANCELLING` | A cancellation has been requested; stoker is stopping the process and cleaning up. |
+| `SUCCEEDED` | The job completed successfully. |
+| `FAILED` | The job process failed or stoker could not complete it. |
+| `CANCELLED` | The job was cancelled. |
+| `LOST` | The scheduler restarted after losing management of an in-progress job. |
+
+Use `stoker cancel <JOB_ID>` to cancel a `DRAFT` or `QUEUED` job before it runs, or to stop a `STARTING` or `RUNNING` job. An active cancellation first becomes `CANCELLING`; stoker terminates the job's process tree, waits for cleanup, and then records `CANCELLED`. The scheduler must be running for `cancel` to work.
+
+`stoker stop` stops the scheduler and cancels its active job. Jobs still in `QUEUED` remain queued for the next scheduler run.
+
 `stoker update` shows the available version and only updates after an explicit `y` or `yes` confirmation.
 
 To install a specific version, use `cargo install stoker-engine --version <VERSION> --force`.
