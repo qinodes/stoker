@@ -104,6 +104,41 @@ fn jobs_user_filter_excludes_other_owners() {
 }
 
 #[test]
+fn jobs_empty_still_prints_header() {
+    let repo = TestRepo::new();
+
+    stoker_in(repo.path())
+        .args(["jobs"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("job_id\towner\tname\tstate\ttime\n"));
+}
+
+#[test]
+fn jobs_prints_header_before_rows() {
+    let repo = TestRepo::new();
+    stoker_in(repo.path())
+        .args([
+            "submit",
+            "--user",
+            "alice",
+            "--name",
+            "listed-job",
+            "--cmd",
+            "echo",
+            "ok",
+        ])
+        .assert()
+        .success();
+
+    stoker_in(repo.path())
+        .args(["jobs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("job_id\towner\tname\tstate\ttime\n"));
+}
+
+#[test]
 fn jobs_alias_lists_submitted_job_ids() {
     let repo = TestRepo::new();
     let output = stoker_in(repo.path())

@@ -443,6 +443,7 @@ fn show(id: Uuid) -> anyhow::Result<()> {
 }
 
 fn jobs(owner: Option<&str>) -> anyhow::Result<()> {
+    println!("job_id\towner\tname\tstate\ttime");
     for job in open_store()?.list_jobs(owner)? {
         println!(
             "{}\t{}\t{}\t{}\t{}",
