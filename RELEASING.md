@@ -56,6 +56,11 @@ make release
 This pushes `main` and the annotated tags reachable from it to `origin`.
 The version does not need to be provided again.
 
+After the tag is pushed, GitHub Actions runs
+`.github/workflows/release.yml`. It builds packages for Windows, Linux, macOS
+Apple Silicon, and macOS Intel, then attaches them to a GitHub Release for the
+tag.
+
 ## 4. Publish to crates.io
 
 ```bash
