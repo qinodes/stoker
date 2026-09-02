@@ -4,7 +4,7 @@ use std::process::{ExitStatus, Stdio};
 use async_trait::async_trait;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
-use nix::unistd::{Pid, setsid};
+use nix::unistd::{Pid, setpgid};
 use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, sleep};
@@ -20,12 +20,11 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    // SAFETY: setsid only affects this child before exec. No memory is
+    // SAFETY: setpgid only affects this child before exec. No memory is
     // allocated or shared Rust state is accessed in the child.
     unsafe {
         command.pre_exec(|| {
-            setsid()
-                .map(|_| ())
+            setpgid(Pid::from_raw(0), Pid::from_raw(0))
                 .map_err(|error| io::Error::from_raw_os_error(error as i32))
         });
     }
@@ -103,7 +102,7 @@ impl ManagedProcess for UnixManagedProcess {
                 for _ in 0..50 {
                     match killpg(Pid::from_raw(self.group_id as i32), None) {
                         Ok(()) => sleep(Duration::from_millis(10)).await,
-                        Err(Errno::ESRCH) => return Ok(()),
+                        Err(error) if group_is_gone(error) => return Ok(()),
                         Err(error) => {
                             return Err(io::Error::from_raw_os_error(error as i32));
                         }
@@ -111,8 +110,15 @@ impl ManagedProcess for UnixManagedProcess {
                 }
                 match killpg(Pid::from_raw(self.group_id as i32), Signal::SIGKILL) {
                     Ok(()) | Err(Errno::ESRCH) => Ok(()),
+                    #[cfg(target_vendor = "apple")]
+                    Err(Errno::EPERM) => Ok(()),
                     Err(error) => Err(io::Error::from_raw_os_error(error as i32)),
                 }
+            }
+            #[cfg(target_vendor = "apple")]
+            Err(Errno::EPERM) => {
+                self.terminated = true;
+                Ok(())
             }
             Err(error) => Err(io::Error::from_raw_os_error(error as i32)),
         }
@@ -143,8 +149,21 @@ async fn wait_for_group_exit(group_id: u32) -> io::Result<()> {
     loop {
         match killpg(Pid::from_raw(group_id as i32), None) {
             Ok(()) => sleep(Duration::from_millis(10)).await,
-            Err(Errno::ESRCH) => return Ok(()),
+            Err(error) if group_is_gone(error) => return Ok(()),
             Err(error) => return Err(io::Error::from_raw_os_error(error as i32)),
         }
     }
+}
+
+fn group_is_gone(error: Errno) -> bool {
+    if error == Errno::ESRCH {
+        return true;
+    }
+    // Darwin can report EPERM for a process group containing only exited
+    // zombies. Treat it as drained: no live process remains to signal.
+    #[cfg(target_vendor = "apple")]
+    if error == Errno::EPERM {
+        return true;
+    }
+    false
 }
