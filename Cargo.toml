@@ -1,6 +1,6 @@
 [package]
 name = "stoker-engine"
-version = "0.5.4"
+version = "1.0.0"
 edition = "2024"
 description = "A lightweight, cross-platform local job scheduler and command-line task runner"
 license = "Apache-2.0"
