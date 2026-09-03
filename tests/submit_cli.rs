@@ -224,6 +224,27 @@ fn jobs_lists_queued_by_queue_order_and_other_jobs_newest_first() {
 }
 
 #[test]
+fn jobs_lists_running_before_queued_jobs() {
+    let repo = TestRepo::new();
+    let home = repo.path().parent().unwrap().join(format!(
+        ".{}-stoker-home",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    let running = store.create_job(job("running", "alice")).unwrap();
+    store.commit_job(running).unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.set_running(running, 1).unwrap();
+    let queued = store.create_job(job("queued", "alice")).unwrap();
+    store.commit_job(queued).unwrap();
+
+    let output = stoker_in(repo.path()).args(["jobs"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.find("running").unwrap() < stdout.find("queued").unwrap());
+}
+
+#[test]
 fn jobs_list_paused_jobs_after_queue_in_their_saved_order() {
     let repo = TestRepo::new();
     let home = repo.path().parent().unwrap().join(format!(

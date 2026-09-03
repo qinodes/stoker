@@ -140,7 +140,7 @@ impl Store {
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE user = ?1 AND state = ?2
-                 ORDER BY CASE state WHEN 'QUEUED' THEN 0 WHEN 'PAUSED' THEN 1 ELSE 2 END,
+                 ORDER BY CASE state WHEN 'RUNNING' THEN 0 WHEN 'QUEUED' THEN 1 WHEN 'PAUSED' THEN 2 ELSE 3 END,
                           CASE WHEN state IN ('QUEUED', 'PAUSED') THEN queue_order END,
                           CASE WHEN state NOT IN ('QUEUED', 'PAUSED') THEN COALESCE(committed_at, created_at) END DESC,
                           id",
@@ -149,7 +149,7 @@ impl Store {
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE state = ?1
-                 ORDER BY CASE state WHEN 'QUEUED' THEN 0 WHEN 'PAUSED' THEN 1 ELSE 2 END,
+                 ORDER BY CASE state WHEN 'RUNNING' THEN 0 WHEN 'QUEUED' THEN 1 WHEN 'PAUSED' THEN 2 ELSE 3 END,
                           CASE WHEN state IN ('QUEUED', 'PAUSED') THEN queue_order END,
                           CASE WHEN state NOT IN ('QUEUED', 'PAUSED') THEN COALESCE(committed_at, created_at) END DESC,
                           id",
@@ -158,7 +158,7 @@ impl Store {
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE user = ?1
-                 ORDER BY CASE state WHEN 'QUEUED' THEN 0 WHEN 'PAUSED' THEN 1 ELSE 2 END,
+                 ORDER BY CASE state WHEN 'RUNNING' THEN 0 WHEN 'QUEUED' THEN 1 WHEN 'PAUSED' THEN 2 ELSE 3 END,
                           CASE WHEN state IN ('QUEUED', 'PAUSED') THEN queue_order END,
                           CASE WHEN state NOT IN ('QUEUED', 'PAUSED') THEN COALESCE(committed_at, created_at) END DESC,
                           id",
@@ -167,7 +167,7 @@ impl Store {
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs
-                 ORDER BY CASE state WHEN 'QUEUED' THEN 0 WHEN 'PAUSED' THEN 1 ELSE 2 END,
+                 ORDER BY CASE state WHEN 'RUNNING' THEN 0 WHEN 'QUEUED' THEN 1 WHEN 'PAUSED' THEN 2 ELSE 3 END,
                           CASE WHEN state IN ('QUEUED', 'PAUSED') THEN queue_order END,
                           CASE WHEN state NOT IN ('QUEUED', 'PAUSED') THEN COALESCE(committed_at, created_at) END DESC,
                           id",
