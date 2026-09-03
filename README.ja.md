@@ -49,12 +49,12 @@ cargo install stoker-engine
 ```bash
 
 # scheduler をバックグラウンドで起動（Linux、macOS、Windows）
-stoker serve
+stoker start
 
 # 対象ディレクトリで DRAFT Job を作成
-stoker submit --user <任意のユーザー名> --name <Job 名> --cmd <実行するコマンド>
+stoker add --user <任意のユーザー名> --name <Job 名> --cmd <実行するコマンド>
 # 例:
-# stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
+# stoker add --user alice --name exp-a --cmd python train.py --lr 0.0001
 
 # 内容を確認して queue に追加（<JOB_ID> は直前の出力を使用）
 # Job の詳細を表示
@@ -117,7 +117,7 @@ stoker uninstall
 
 | 状態 | 説明 |
 | --- | --- |
-| `DRAFT` | submit 済みですが、まだ commit されていません。 |
+| `DRAFT` | add 済みですが、まだ commit されていません。 |
 | `QUEUED` | commit 済みで、実行待ちです。 |
 | `STARTING` | scheduler が Job を取得し、ソースディレクトリとプロセスを準備しています。 |
 | `RUNNING` | Job のプロセスが実行中です。 |
@@ -140,6 +140,6 @@ stoker uninstall
 ## 対象範囲と制限
 
 - 単一マシンの queue のみ対応。複数マシン、リモート実行、分散学習、GPU 割り当て、コンテナのスケジューリングには対応しません。
-- submit 時の作業ディレクトリが存在し、ディレクトリである必要があります。中のファイルは検査しません。
+- add 時の作業ディレクトリが存在し、ディレクトリである必要があります。中のファイルは検査しません。
 - Python/Conda/CUDA 環境、データセット、checkpoint、artifact、実験メトリクスは管理しません。
 - stoker のアカウント、ログイン、権限管理はありません。`--user` は識別と絞り込み専用です。

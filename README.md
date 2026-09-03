@@ -49,17 +49,17 @@ cargo install stoker-engine
 ```bash
 
 # Start the scheduler in the background (Linux, macOS, and Windows)
-stoker serve
+stoker start
 
 # Create a DRAFT job in the target directory
-stoker submit --user <USER_NAME> --name <JOB_NAME> --cmd <COMMAND>
+stoker add --user <USER_NAME> --name <JOB_NAME> --cmd <COMMAND>
 # Example:
-# stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
+# stoker add --user alice --name exp-a --cmd python train.py --lr 0.0001
 
 # Review it, then add it to the queue (<JOB_ID> comes from the previous command)
 # View the job details
 stoker show <JOB_ID>
-# Submit the job (DRAFT -> QUEUED)
+# Add the job (DRAFT -> QUEUED)
 stoker commit <JOB_ID>
 
 # Inspect and manage jobs

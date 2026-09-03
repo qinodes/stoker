@@ -26,17 +26,17 @@ fn home_for(repo: &TestRepo) -> PathBuf {
     ))
 }
 
-pub fn submit_script(repo: &TestRepo, script: &str, name: &str) -> Uuid {
-    submit_script_from(repo, repo.path(), script, name)
+pub fn add_script(repo: &TestRepo, script: &str, name: &str) -> Uuid {
+    add_script_from(repo, repo.path(), script, name)
 }
 
-fn submit_script_from(
+fn add_script_from(
     repo: &TestRepo,
     current_dir: &std::path::Path,
     script: &str,
     name: &str,
 ) -> Uuid {
-    let mut args = vec!["submit", "--user", "test", "--name", name, "--cmd"];
+    let mut args = vec!["add", "--user", "test", "--name", name, "--cmd"];
     let shell = TestCommand::shell(script);
     args.extend(shell.iter().map(String::as_str));
     let output = stoker_with_home_and_dir(&home_for(repo), current_dir)
@@ -132,7 +132,7 @@ fn follow_command() -> &'static str {
 pub fn start_service_and_commit(ids: &[Uuid]) {
     let home = homes().lock().unwrap().get(&ids[0]).cloned().unwrap();
     let status = Command::new(assert_cmd::cargo::cargo_bin("stoker"))
-        .arg("serve")
+        .arg("start")
         .env("STOKER_HOME", &home)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -214,8 +214,8 @@ fn service_runs_jobs_in_recorded_cwd_in_queue_order() {
     let repo = TestRepo::new();
     let order_dir = tempfile::tempdir().unwrap();
     let order_path = order_dir.path().join("order.log");
-    let first = submit_script(&repo, &order_job(&repo, "first", &order_path), "first");
-    let second = submit_script(&repo, &order_job(&repo, "second", &order_path), "second");
+    let first = add_script(&repo, &order_job(&repo, "first", &order_path), "first");
+    let second = add_script(&repo, &order_job(&repo, "second", &order_path), "second");
     start_service_and_commit(&[first, second]);
     assert_terminal(first, JobState::Succeeded);
     assert_terminal(second, JobState::Succeeded);
@@ -241,7 +241,7 @@ fn service_runs_job_in_the_subdirectory_recorded_at_submission() {
     let repo = TestRepo::new();
     let nested = repo.join("experiments/llama");
     std::fs::create_dir_all(&nested).unwrap();
-    let job = submit_script_from(
+    let job = add_script_from(
         &repo,
         &nested,
         if cfg!(windows) {
@@ -270,8 +270,8 @@ fn service_runs_job_in_the_subdirectory_recorded_at_submission() {
 #[test]
 fn failed_job_preserves_logs_and_does_not_block_next_job() {
     let repo = TestRepo::new();
-    let failed = submit_script(&repo, failed_command(), "failed");
-    let succeeding = submit_script(&repo, &output_command("ok"), "succeeding");
+    let failed = add_script(&repo, failed_command(), "failed");
+    let succeeding = add_script(&repo, &output_command("ok"), "succeeding");
     start_service_and_commit(&[failed, succeeding]);
     assert_terminal(failed, JobState::Failed);
     assert_log_contains(failed, "fail");
@@ -283,7 +283,7 @@ fn failed_job_preserves_logs_and_does_not_block_next_job() {
 #[test]
 fn logs_follow_receives_output_before_job_finishes() {
     let repo = TestRepo::new();
-    let job = submit_script(&repo, follow_command(), "follow");
+    let job = add_script(&repo, follow_command(), "follow");
     start_service_and_commit(&[job]);
     stoker_logs_follow(job)
         .assert()
@@ -295,8 +295,8 @@ fn logs_follow_receives_output_before_job_finishes() {
 #[test]
 fn cancel_running_job_terminates_tree_then_starts_next_job() {
     let repo = TestRepo::new();
-    let running = submit_script(&repo, long_running_command(), "running");
-    let next = submit_script(&repo, &output_command("next"), "next");
+    let running = add_script(&repo, long_running_command(), "running");
+    let next = add_script(&repo, &output_command("next"), "next");
     start_service_and_commit(&[running, next]);
     wait_for_state(running, JobState::Running);
     stoker_cancel(running).assert().success();
@@ -322,7 +322,7 @@ fn cancel_running_job_terminates_tree_then_starts_next_job() {
 #[test]
 fn stop_cancels_active_job_and_removes_service_endpoint() {
     let repo = TestRepo::new();
-    let job = submit_script(&repo, long_running_command(), "running");
+    let job = add_script(&repo, long_running_command(), "running");
     start_service_and_commit(&[job]);
     wait_for_state(job, JobState::Running);
     stoker_stop(job).assert().success();
@@ -335,8 +335,8 @@ fn stop_cancels_active_job_and_removes_service_endpoint() {
 #[test]
 fn stop_releases_queued_log_followers() {
     let repo = TestRepo::new();
-    let running = submit_script(&repo, long_running_command(), "running");
-    let queued = submit_script(&repo, &output_command("queued"), "queued");
+    let running = add_script(&repo, long_running_command(), "running");
+    let queued = add_script(&repo, &output_command("queued"), "queued");
     start_service_and_commit(&[running, queued]);
     wait_for_state(running, JobState::Running);
     let home = homes().lock().unwrap().get(&queued).cloned().unwrap();

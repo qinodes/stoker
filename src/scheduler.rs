@@ -284,7 +284,7 @@ impl Scheduler {
         let run_dir = self.paths.runs.join(job.id.to_string());
         let stdout = run_dir.join("stdout.log");
         let stderr = run_dir.join("stderr.log");
-        // Jobs intentionally run in the source directory recorded at submit
+        // Jobs intentionally run in the source directory recorded at add
         // time. Stoker does not inspect or manage that directory's contents.
         let cwd = job.cwd.clone();
         let mut sender = None;

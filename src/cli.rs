@@ -30,7 +30,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum CliCommand {
-    Submit(SubmitArgs),
+    Add(AddArgs),
     Show {
         id: Uuid,
     },
@@ -47,7 +47,7 @@ pub enum CliCommand {
     Update,
     #[command(about = "Uninstall stoker with confirmation")]
     Uninstall,
-    Serve,
+    Start,
     #[command(name = "service-run", hide = true)]
     ServiceRun,
     Status,
@@ -66,7 +66,7 @@ pub enum CliCommand {
 }
 
 #[derive(Debug, Args)]
-pub struct SubmitArgs {
+pub struct AddArgs {
     #[arg(long)]
     pub user: String,
     #[arg(long)]
@@ -88,13 +88,13 @@ pub fn run() -> anyhow::Result<()> {
 
 pub fn run_command(command: CliCommand) -> anyhow::Result<()> {
     match command {
-        CliCommand::Submit(args) => submit(args),
+        CliCommand::Add(args) => add(args),
         CliCommand::Show { id } => show(id),
         CliCommand::Jobs { user, state } => jobs(user.as_deref(), state),
         CliCommand::Clean => clean(),
         CliCommand::Update => update(),
         CliCommand::Uninstall => uninstall(),
-        CliCommand::Serve => serve(),
+        CliCommand::Start => start(),
         CliCommand::ServiceRun => service_run(),
         CliCommand::Status => status(),
         CliCommand::Stop => stop(),
@@ -127,7 +127,7 @@ fn terminate_child(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn serve() -> anyhow::Result<()> {
+fn start() -> anyhow::Result<()> {
     let paths = open_paths()?;
     // An active endpoint is authoritative for the user-facing duplicate error;
     // stale endpoints are cleaned by the child after it acquires the lock.
@@ -228,7 +228,7 @@ fn stop() -> anyhow::Result<()> {
     match runtime()?.block_on(ServiceClient::new(paths).stop()) {
         Ok(()) => Ok(()),
         Err(error) if is_service_unavailable(&error) => {
-            anyhow::bail!("Scheduler is not running. Start it with 'stoker serve'.")
+            anyhow::bail!("Scheduler is not running. Start it with 'stoker start'.")
         }
         Err(error) => Err(error),
     }
@@ -579,7 +579,7 @@ fn logs(id: Uuid, follow: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn submit(args: SubmitArgs) -> anyhow::Result<()> {
+fn add(args: AddArgs) -> anyhow::Result<()> {
     if args.user.trim().is_empty() {
         anyhow::bail!("--user must not be empty");
     }

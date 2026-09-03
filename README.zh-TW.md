@@ -50,12 +50,12 @@ cargo install stoker-engine
 ```bash
 
 # 啟動背景 scheduler（Linux, Macos和 Windows 皆適用）
-stoker serve
+stoker start
 
 # 在目標目錄建立 DRAFT Job
-stoker submit --user <任意使用者名稱> --name <job名稱> --cmd <待執行指令>
+stoker add --user <任意使用者名稱> --name <job名稱> --cmd <待執行指令>
 # 例如: 
-# stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
+# stoker add --user alice --name exp-a --cmd python train.py --lr 0.0001
 
 # 確認內容後加入 queue（<JOB_ID> 由上一個指令輸出）
 # 查看Job設定細節
@@ -65,7 +65,7 @@ stoker commit <JOB_ID>
 
 # 查詢與管理
 
-# 查看stoker server(scheduler)狀態
+# 查看 stoker server(scheduler) 狀態
 stoker status
 
 # 查看所有Job狀態
@@ -117,7 +117,7 @@ stoker uninstall
 
 | 狀態 | 說明 |
 | --- | --- |
-| `DRAFT` | 已 submit，但尚未 commit 到 queue。 |
+| `DRAFT` | 已 add，但尚未 commit 到 queue。 |
 | `QUEUED` | 已 commit，正在等待執行。 |
 | `STARTING` | scheduler 已取出 Job，正在準備來源目錄與程序。 |
 | `RUNNING` | Job 的程序正在執行。 |
@@ -141,6 +141,6 @@ logs 保存於 `.stoker/runs/<JOB_ID>/stdout.log` 與 `.stoker/runs/<JOB_ID>/std
 ## 邊界與限制
 
 - 只支援單機 queue；不做多機、遠端執行、分散式訓練、GPU 數量或容器排程。
-- submit 時的工作目錄必須存在且是目錄；不檢查目錄中的檔案變更。
+- add 時的工作目錄必須存在且是目錄；不檢查目錄中的檔案變更。
 - stoker 不管理 Python/Conda/CUDA 等環境，也不管理資料集、checkpoint、artifact 或實驗指標。
 - 不提供 stoker 帳號、登入、權限控制；`--user` 只用於辨識與篩選。

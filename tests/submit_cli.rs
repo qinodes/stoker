@@ -26,11 +26,11 @@ fn finish_job(store: &Store, name: &str, user: &str, exit_code: Option<i32>) -> 
 }
 
 #[test]
-fn submit_records_absolute_cwd_as_draft() {
+fn add_records_absolute_cwd_as_draft() {
     let repo = TestRepo::new();
     let output = stoker_in(&repo.join("experiments/llama"))
         .args([
-            "submit", "--user", "alice", "--name", "lr", "--cmd", "python", "train.py", "--lr",
+            "add", "--user", "alice", "--name", "lr", "--cmd", "python", "train.py", "--lr",
             "0.0001",
         ])
         .output()
@@ -55,25 +55,37 @@ fn submit_records_absolute_cwd_as_draft() {
 }
 
 #[test]
-fn submit_accepts_a_non_git_directory() {
+fn add_accepts_a_non_git_directory() {
     let repo = TestRepo::new();
     repo.write("tracked.txt", "changed\n");
     stoker_in(repo.path())
         .args([
-            "submit", "--user", "alice", "--name", "lr", "--cmd", "echo", "ok",
+            "add", "--user", "alice", "--name", "lr", "--cmd", "echo", "ok",
         ])
         .assert()
         .success();
 }
 
 #[test]
-fn submit_requires_user() {
+fn add_requires_user() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
-        .args(["submit", "--name", "lr", "--cmd", "echo", "ok"])
+        .args(["add", "--name", "lr", "--cmd", "echo", "ok"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--user"));
+}
+
+#[test]
+fn submit_command_is_no_longer_available() {
+    let repo = TestRepo::new();
+    stoker_in(repo.path())
+        .args([
+            "submit", "--user", "alice", "--name", "job", "--cmd", "echo", "ok",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand 'submit'"));
 }
 
 #[test]
@@ -81,7 +93,7 @@ fn jobs_user_filter_excludes_other_owners() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
         .args([
-            "submit",
+            "add",
             "--user",
             "alice",
             "--name",
@@ -94,7 +106,7 @@ fn jobs_user_filter_excludes_other_owners() {
         .success();
     stoker_in(repo.path())
         .args([
-            "submit", "--user", "bob", "--name", "bob-job", "--cmd", "echo", "bob",
+            "add", "--user", "bob", "--name", "bob-job", "--cmd", "echo", "bob",
         ])
         .assert()
         .success();
@@ -212,7 +224,7 @@ fn jobs_prints_header_before_rows() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
         .args([
-            "submit",
+            "add",
             "--user",
             "alice",
             "--name",
@@ -238,7 +250,7 @@ fn jobs_state_filter_shows_queue_order() {
     for (name, command) in [("queued-job", "queued"), ("draft-job", "draft")] {
         stoker_in(repo.path())
             .args([
-                "submit", "--user", "alice", "--name", name, "--cmd", "echo", command,
+                "add", "--user", "alice", "--name", name, "--cmd", "echo", command,
             ])
             .assert()
             .success();
@@ -279,7 +291,7 @@ fn show_displays_recorded_and_execution_directories() {
     let repo = TestRepo::new();
     stoker_in(&repo.join("experiments/llama"))
         .args([
-            "submit",
+            "add",
             "--user",
             "alice",
             "--name",
@@ -314,7 +326,7 @@ fn jobs_alias_lists_submitted_job_ids() {
     let repo = TestRepo::new();
     let output = stoker_in(repo.path())
         .args([
-            "submit",
+            "add",
             "--user",
             "alice",
             "--name",
@@ -329,7 +341,7 @@ fn jobs_alias_lists_submitted_job_ids() {
     let job_id = String::from_utf8_lossy(&output.stdout)
         .split_whitespace()
         .find(|value| uuid::Uuid::parse_str(value).is_ok())
-        .expect("submit output contains a job ID")
+        .expect("add output contains a job ID")
         .to_owned();
 
     stoker_in(repo.path())

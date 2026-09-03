@@ -9,7 +9,7 @@ use support::{TempStokerHome, stoker_with_home};
 
 fn start_service(home: &TempStokerHome) {
     let status = Command::new(assert_cmd::cargo::cargo_bin("stoker"))
-        .arg("serve")
+        .arg("start")
         .env("STOKER_HOME", home.path())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -39,7 +39,16 @@ fn stop_requires_running_service() {
         .args(["stop"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Start it with 'stoker serve'"));
+        .stderr(predicate::str::contains("Start it with 'stoker start'"));
+}
+
+#[test]
+fn serve_command_is_no_longer_available() {
+    stoker_with_home(TempStokerHome::new())
+        .args(["serve"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand 'serve'"));
 }
 
 #[test]
@@ -47,7 +56,7 @@ fn duplicate_service_does_not_replace_running_endpoint() {
     let home = TempStokerHome::new();
     start_service(&home);
     stoker_with_home(&home)
-        .args(["serve"])
+        .args(["start"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("already running"));
@@ -62,7 +71,7 @@ fn serve_never_replaces_non_socket_endpoint() {
     let home = TempStokerHome::new();
     let endpoint = home.path().join("stoker.sock");
     std::fs::write(&endpoint, "preserve me").expect("write endpoint sentinel");
-    stoker_with_home(&home).args(["serve"]).assert().failure();
+    stoker_with_home(&home).args(["start"]).assert().failure();
     assert_eq!(std::fs::read_to_string(endpoint).unwrap(), "preserve me");
 }
 
