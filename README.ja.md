@@ -6,89 +6,133 @@
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | 日本語
 
-**stoker はローカル command 向けのジョブスケジューラーです。**
-各 Job は作成したときのディレクトリで実行され、`.stoker/runs` にはログだけが保存されます。環境と成果物はユーザー自身が管理します。
+**stoker は軽量でクロスプラットフォームな、ローカルのコマンドライン（CLI）ジョブスケジューラーです。**
+各 Job は作成時のディレクトリで実行されます。
 
 ## インストール
 
-[GitHub Releases](https://github.com/qinodes/stoker/releases) から環境に合うアーカイブをダウンロードし、`stoker` 実行ファイルを展開して `PATH` に追加してください。
+### Cargo をインストールしていない場合
+
+[GitHub Releases](https://github.com/qinodes/stoker/releases) から環境に合うアーカイブをダウンロードし、`stoker` 実行ファイルを展開して、そのディレクトリを `PATH` に追加してください。
 
 - Windows: `stoker-windows-x86_64.zip`
 - Linux: `stoker-linux-x86_64.tar.gz`
 - macOS Apple Silicon: `stoker-macos-arm64.tar.gz`
 
-各 release には platform binary と `SHA256SUMS` も含まれます。Rust 開発者は Cargo でのインストールも利用できます。
+ダウンロードした実行ファイルは環境変数に自動で追加されません。実行ファイルのあるディレクトリを `PATH` に追加してください。
+
+- Windows: 「環境変数」の「ユーザー環境変数」で `Path` を編集し、実行ファイルのあるディレクトリを追加してから、ターミナルを再起動します。
+- macOS／Linux: `/path/to/stoker` を実行ファイルのある実際のディレクトリに置き換え、次の内容を `~/.zshrc`（macOS）または `~/.bashrc`（Linux）に追加してから、ターミナルを再起動します。
+
+  ```bash
+  export PATH="/path/to/stoker:$PATH"
+  ```
+
+  書き込んだ後、現在のターミナルにすぐ反映する場合は、次を実行します。
+
+  ```bash
+  source ~/.bashrc  # Linux
+  source ~/.zshrc    # macOS
+  ```
+
+各 release には、プラットフォーム用の実行ファイルと `SHA256SUMS` も含まれます。
+
+### Cargo がインストール済みの場合
+
+```bash
+cargo install stoker-engine
+```
 
 ## クイックスタート
 
-Rust と、command を実行するディレクトリが必要です。
-
 ```bash
-# Cargo が利用できる場合は crates.io からインストール
-cargo install stoker-engine
 
-# scheduler をバックグラウンドで起動（Linux / Windows）
+# scheduler をバックグラウンドで起動（Linux、macOS、Windows）
 stoker serve
 
-# 現在のディレクトリで DRAFT Job を作成
-stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
+# 対象ディレクトリで DRAFT Job を作成
+stoker submit --user <任意のユーザー名> --name <Job 名> --cmd <実行するコマンド>
+# 例:
+# stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
 
 # 内容を確認して queue に追加（<JOB_ID> は直前の出力を使用）
+# Job の詳細を表示
 stoker show <JOB_ID>
+# Job を送信（DRAFT -> QUEUED）
 stoker commit <JOB_ID>
 
 # 確認と管理
+
+# scheduler の状態を確認
 stoker status
+
+# すべての Job の状態を表示
 stoker jobs
+
+# Job を絞り込み
 stoker jobs --user alice
 stoker jobs --state draft
 stoker jobs --state queued
+
+# 現在あるログを表示して終了
 stoker logs <JOB_ID>
+
+# 新しいログを Job の終了まで表示（Ctrl+C でも停止できます）
 stoker logs -f <JOB_ID>
+
+# Job をキャンセル（DRAFT、QUEUED、STARTING、RUNNING、CANCELLING）
 stoker cancel <JOB_ID>
+
+# scheduler を停止
+# 実行中の Job はキャンセルされます。
+# QUEUED の Job は次回の scheduler 起動時まで保持されます。
 stoker stop
+
+# 現在のバージョンを表示
 stoker --version
+
+# 最新版に更新
+# 更新前に scheduler を停止してください。
 stoker update
+
+# アンインストール
+# アンインストール前に scheduler を停止してください。
+# Job データとログは Stoker のデータフォルダーに保持されます
+# （macOS/Linux: ~/.stoker、Windows: %USERPROFILE%\.stoker）。
 stoker uninstall
 ```
 
 `--cmd` 以降はすべて実行プログラムへそのまま渡されます。stoker 自身のオプションは `--cmd` より前に指定してください。
 
-`--user` は論理的な owner ラベルであり、OS アカウントや認証機能ではありません。同じマシンを複数人で使う場合に、ジョブの識別と絞り込みに利用できます。
-
-`jobs` は queue の概要として、`queue_order`、`job_id`、owner、名前、状態、時刻を表示します。QUEUED Job は `queue_order` 順、それ以外の状態は `-` です。`--state draft` または `--state queued` で絞り込めます。
-
-Job の詳細、command、実行パスは `stoker show <JOB_ID>` で確認できます。
+`--user` は stoker の論理的な owner ラベルであり、OS アカウントや認証機能ではありません。
 
 ## Job の状態とキャンセル
 
 | 状態 | 説明 |
 | --- | --- |
-| `DRAFT` | submit 済みですが、まだ queue に commit されていません。 |
+| `DRAFT` | submit 済みですが、まだ commit されていません。 |
 | `QUEUED` | commit 済みで、実行待ちです。 |
 | `STARTING` | scheduler が Job を取得し、ソースディレクトリとプロセスを準備しています。 |
 | `RUNNING` | Job のプロセスが実行中です。 |
-| `CANCELLING` | キャンセル済みで、stoker がプロセスの停止とクリーンアップを行っています。 |
+| `CANCELLING` | キャンセルが要求され、stoker がプロセスの停止とクリーンアップを行っています。 |
 | `SUCCEEDED` | Job が正常に完了しました。 |
-| `FAILED` | Job のプロセスが失敗したか、stoker が実行を完了できませんでした。 |
+| `FAILED` | Job のプロセスが失敗したか、stoker が実行フローを完了できませんでした。 |
 | `CANCELLED` | Job はキャンセルされました。 |
 | `LOST` | scheduler の再起動時に、実行中だった Job の管理状態が失われました。 |
 
-`stoker cancel <JOB_ID>` を使うと、実行前の `DRAFT` または `QUEUED` Job をキャンセルでき、`STARTING` または `RUNNING` Job を停止することもできます。実行中の Job をキャンセルすると、まず `CANCELLING` になり、stoker が Job のプロセスツリーを終了してクリーンアップを待った後、`CANCELLED` として記録します。`cancel` を使うには scheduler が実行中である必要があります。
+## 補足説明
 
-`stoker stop` は scheduler を停止し、現在実行中の Job をキャンセルします。`QUEUED` の Job は保持され、次回 scheduler を起動したときに処理されます。
+ソースディレクトリのファイルに対して command が行った変更は保持されます。stoker はそのディレクトリ内のファイルを自動で変更または復元しません。
 
-Job は実行開始時点のソースディレクトリの内容を使用し、command による変更はそこに残ります。stoker はディレクトリ内のファイルを自動で変更または復元しません。
+特定のバージョンをインストールする場合：
 
-`stoker update` は GitHub Releases から更新を確認し、`SHA256SUMS` でダウンロードした binary を検証します。明示的に `y` または `yes` を入力した場合のみ更新します。更新前に scheduler を停止してください。
+`cargo install stoker-engine --version <VERSION> --force`。
 
-Cargo を使わず特定バージョンを入れるには、そのバージョンの GitHub Release から環境に合う asset をダウンロードしてください。Rust 開発者は `cargo install stoker-engine --version <VERSION> --force` も使用できます。
-
-`stoker uninstall` も明示的な確認が必要です。先に scheduler を停止してください。Job データと logs は Stoker のデータフォルダー（通常は `~/.stoker`）に保持されます。
+ログは `.stoker/runs/<JOB_ID>/stdout.log` と `.stoker/runs/<JOB_ID>/stderr.log` に保存されます。
 
 ## 対象範囲と制限
 
 - 単一マシンの queue のみ対応。複数マシン、リモート実行、分散学習、GPU 割り当て、コンテナのスケジューリングには対応しません。
-- submit 時のディレクトリが存在している必要があります。ディレクトリ内のファイル変更は検査しません。
+- submit 時の作業ディレクトリが存在し、ディレクトリである必要があります。中のファイルは検査しません。
 - Python/Conda/CUDA 環境、データセット、checkpoint、artifact、実験メトリクスは管理しません。
 - stoker のアカウント、ログイン、権限管理はありません。`--user` は識別と絞り込み専用です。

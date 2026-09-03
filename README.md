@@ -6,59 +6,105 @@
 
 [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | English
 
-**stoker is a local command job scheduler.**
-Each job runs in the directory where it was created; `.stoker/runs` stores logs only. Environments and artifacts remain under the user's control.
+**stoker is a lightweight, cross-platform local command-line (CLI) job scheduler.**
+Each job runs in the directory where it was submitted.
 
 ## Installation
 
-Download the archive for your platform from [GitHub Releases](https://github.com/qinodes/stoker/releases), extract the `stoker` executable, and put it on your `PATH`:
+### Without Cargo
+
+Download the archive for your platform from [GitHub Releases](https://github.com/qinodes/stoker/releases), extract the `stoker` executable, and add its directory to `PATH`:
 
 - Windows: `stoker-windows-x86_64.zip`
 - Linux: `stoker-linux-x86_64.tar.gz`
 - macOS Apple Silicon: `stoker-macos-arm64.tar.gz`
 
-Each release also includes a platform binary and `SHA256SUMS`. Cargo installation remains available for Rust developers.
+Downloaded executables are not added to the environment automatically. Add the directory containing the executable to `PATH` permanently:
+
+- Windows: edit `Path` under User variables in Environment Variables, add the executable's directory, and then reopen the terminal.
+- macOS/Linux: add the following to `~/.zshrc` (macOS) or `~/.bashrc` (Linux), replacing `/path/to/stoker` with the actual directory containing the executable, and then reopen the terminal:
+
+  ```bash
+  export PATH="/path/to/stoker:$PATH"
+  ```
+
+  To apply the setting immediately in the current terminal, run:
+
+  ```bash
+  source ~/.bashrc  # Linux
+  source ~/.zshrc    # macOS
+  ```
+
+Each release also includes a platform binary and `SHA256SUMS`.
+
+### With Cargo already installed
+
+```bash
+cargo install stoker-engine
+```
 
 ## Quick start
 
-You need Rust and a directory in which to run the command:
-
 ```bash
-# Or install from crates.io if Cargo is available
-cargo install stoker-engine
 
-# Start the scheduler in the background (Linux and Windows)
+# Start the scheduler in the background (Linux, macOS, and Windows)
 stoker serve
 
-# Create a DRAFT job in the current directory
-stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
+# Create a DRAFT job in the target directory
+stoker submit --user <USER_NAME> --name <JOB_NAME> --cmd <COMMAND>
+# Example:
+# stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
 
 # Review it, then add it to the queue (<JOB_ID> comes from the previous command)
+# View the job details
 stoker show <JOB_ID>
+# Submit the job (DRAFT -> QUEUED)
 stoker commit <JOB_ID>
 
 # Inspect and manage jobs
+
+# Check the scheduler status
 stoker status
+
+# List all jobs
 stoker jobs
+
+# Filter jobs
 stoker jobs --user alice
 stoker jobs --state draft
 stoker jobs --state queued
+
+# View the existing logs and exit when finished
 stoker logs <JOB_ID>
+
+# Follow new log output until the job ends or you press Ctrl+C
 stoker logs -f <JOB_ID>
+
+# Cancel a job (DRAFT, QUEUED, STARTING, RUNNING, or CANCELLING)
 stoker cancel <JOB_ID>
+
+# Stop the scheduler
+# This cancels the currently running job.
+# QUEUED jobs remain for the next scheduler run.
 stoker stop
+
+# Show the current version
 stoker --version
+
+# Update to the latest version
+# Stop the scheduler before updating.
 stoker update
+
+# Uninstall
+# Stop the scheduler before uninstalling.
+# Job data and logs are kept in the Stoker data folder
+# (macOS/Linux: ~/.stoker; Windows: %USERPROFILE%\.stoker).
 stoker uninstall
 ```
 
-Everything after `--cmd` is passed unchanged to the program being run. Put stoker's own options before `--cmd`.
+Everything after `--cmd` is passed unchanged to the program being run; put stoker's other options before `--cmd`.
 
-`--user` is a logical owner label, not an operating-system account or an authentication mechanism. It lets people sharing one machine identify and filter their jobs.
-
-`jobs` shows the queue summary: `queue_order`, `job_id`, owner, name, state, and time. Queued jobs are ordered by `queue_order`; other states show `-`. Filter with `--state draft` or `--state queued`.
-
-Use `stoker show <JOB_ID>` for the Job's full details, command, and execution paths.
+`--user` is a logical owner label, not an operating-system account or an authentication mechanism.
 
 ## Job states and cancellation
 
@@ -74,21 +120,19 @@ Use `stoker show <JOB_ID>` for the Job's full details, command, and execution pa
 | `CANCELLED` | The job was cancelled. |
 | `LOST` | The scheduler restarted after losing management of an in-progress job. |
 
-Use `stoker cancel <JOB_ID>` to cancel a `DRAFT` or `QUEUED` job before it runs, or to stop a `STARTING` or `RUNNING` job. An active cancellation first becomes `CANCELLING`; stoker terminates the job's process tree, waits for cleanup, and then records `CANCELLED`. The scheduler must be running for `cancel` to work.
+## Additional notes
 
-`stoker stop` stops the scheduler and cancels its active job. Jobs still in `QUEUED` remain queued for the next scheduler run.
+Changes made by a command to files in the source directory are retained. stoker does not automatically modify or restore files in that directory.
 
-Jobs use the source directory contents available when they start; changes made by a command remain there. stoker never automatically modifies or restores files in the directory.
+Install a specific version:
 
-`stoker update` checks GitHub Releases, verifies the downloaded binary with `SHA256SUMS`, and only updates after an explicit `y` or `yes` confirmation. Stop the scheduler before updating.
+`cargo install stoker-engine --version <VERSION> --force`.
 
-To install a specific version without Cargo, download the matching platform asset from the version's GitHub Release. Rust developers can use `cargo install stoker-engine --version <VERSION> --force`.
-
-`stoker uninstall` requires an explicit confirmation. Stop the scheduler first; your Job data and logs are kept in the Stoker data folder (normally `~/.stoker`).
+Logs are stored in `.stoker/runs/<JOB_ID>/stdout.log` and `.stoker/runs/<JOB_ID>/stderr.log`.
 
 ## Scope and limits
 
 - Single-machine queue only; no multi-machine, remote, distributed-training, GPU-allocation, or container scheduling.
-- The submission directory must exist and be a directory. Files in the directory are not inspected.
+- The submission directory must exist and be a directory; files in the directory are not inspected.
 - stoker does not manage Python/Conda/CUDA environments, datasets, checkpoints, artifacts, or experiment metrics.
 - No stoker accounts, login, or authorization; `--user` is only for identification and filtering.
