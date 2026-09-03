@@ -1,9 +1,29 @@
 mod support;
 
+use std::path::PathBuf;
+
 use predicates::prelude::*;
 use rusqlite::Connection;
-use stoker::Store;
+use stoker::{JobState, NewJob, Store};
 use support::{TestRepo, stoker_in};
+
+fn job(name: &str, user: &str) -> NewJob {
+    NewJob {
+        name: name.into(),
+        user: user.into(),
+        cwd: PathBuf::from("."),
+        command: vec!["echo".into(), name.into()],
+    }
+}
+
+fn finish_job(store: &Store, name: &str, user: &str, exit_code: Option<i32>) -> uuid::Uuid {
+    let id = store.create_job(job(name, user)).unwrap();
+    store.commit_job(id).unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.set_running(id, 1).unwrap();
+    store.finish(id, exit_code, None).unwrap();
+    id
+}
 
 #[test]
 fn submit_records_absolute_cwd_as_draft() {
@@ -84,6 +104,94 @@ fn jobs_user_filter_excludes_other_owners() {
         .success()
         .stdout(predicate::str::contains("alice-job"))
         .stdout(predicate::str::contains("bob-job").not());
+}
+
+#[test]
+fn jobs_combines_user_and_state_filters() {
+    let repo = TestRepo::new();
+    let home = repo.path().parent().unwrap().join(format!(
+        ".{}-stoker-home",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    finish_job(&store, "alice-failed", "alice", Some(1));
+    finish_job(&store, "alice-succeeded", "alice", Some(0));
+    finish_job(&store, "bob-failed", "bob", Some(1));
+
+    stoker_in(repo.path())
+        .args(["jobs", "--user", "alice", "--state", "failed"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("alice-failed"))
+        .stdout(predicate::str::contains("alice-succeeded").not())
+        .stdout(predicate::str::contains("bob-failed").not());
+}
+
+#[test]
+fn jobs_lists_queued_by_queue_order_and_other_jobs_newest_first() {
+    let repo = TestRepo::new();
+    let home = repo.path().parent().unwrap().join(format!(
+        ".{}-stoker-home",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    let queued_first = store.create_job(job("queued-first", "alice")).unwrap();
+    let queued_second = store.create_job(job("queued-second", "alice")).unwrap();
+    store.commit_job(queued_first).unwrap();
+    store.commit_job(queued_second).unwrap();
+    store.create_job(job("draft-old", "alice")).unwrap();
+    store.create_job(job("draft-new", "alice")).unwrap();
+
+    let output = stoker_in(repo.path()).args(["jobs"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.find("queued-first").unwrap() < stdout.find("queued-second").unwrap());
+    assert!(stdout.find("draft-new").unwrap() < stdout.find("draft-old").unwrap());
+}
+
+#[test]
+fn clean_removes_all_terminal_jobs_and_their_logs() {
+    let repo = TestRepo::new();
+    let home = repo.path().parent().unwrap().join(format!(
+        ".{}-stoker-home",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    let succeeded = finish_job(&store, "succeeded", "alice", Some(0));
+    let failed = finish_job(&store, "failed", "alice", Some(1));
+    let cancelled = store.create_job(job("cancelled", "alice")).unwrap();
+    store.cancel_not_started(cancelled).unwrap();
+    let lost = store.create_job(job("lost", "alice")).unwrap();
+    store.commit_job(lost).unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.mark_runtime_jobs_lost().unwrap();
+    let draft = store.create_job(job("draft", "alice")).unwrap();
+    let queued = store.create_job(job("queued", "alice")).unwrap();
+    store.commit_job(queued).unwrap();
+
+    for id in [succeeded, failed, cancelled, lost, draft, queued] {
+        std::fs::create_dir_all(home.join("runs").join(id.to_string())).unwrap();
+    }
+
+    stoker_in(repo.path())
+        .args(["clean"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("4"));
+
+    assert!(
+        store
+            .list_jobs(None)
+            .unwrap()
+            .iter()
+            .all(|job| { matches!(job.state, JobState::Draft | JobState::Queued) })
+    );
+    for id in [succeeded, failed, cancelled, lost] {
+        assert!(!home.join("runs").join(id.to_string()).exists());
+    }
+    for id in [draft, queued] {
+        assert!(home.join("runs").join(id.to_string()).exists());
+    }
 }
 
 #[test]

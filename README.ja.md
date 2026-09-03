@@ -74,6 +74,12 @@ stoker jobs
 stoker jobs --user alice
 stoker jobs --state draft
 stoker jobs --state queued
+# 絞り込み条件を組み合わせる
+stoker jobs --user alice --state failed
+
+# SUCCEEDED、FAILED、CANCELLED、LOST の Job とログを削除
+# scheduler 実行中でも使用できます。
+stoker clean
 
 # 現在あるログを表示して終了
 stoker logs <JOB_ID>

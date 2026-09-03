@@ -74,6 +74,12 @@ stoker jobs
 stoker jobs --user alice
 stoker jobs --state draft
 stoker jobs --state queued
+# Combine filters
+stoker jobs --user alice --state failed
+
+# Remove SUCCEEDED, FAILED, CANCELLED, and LOST jobs and their logs
+# This can also be run while the scheduler is running.
+stoker clean
 
 # View the existing logs and exit when finished
 stoker logs <JOB_ID>

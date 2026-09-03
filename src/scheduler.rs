@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::domain::{Job, JobState};
 use crate::ipc::{LogStream, ServiceStatus};
 use crate::process::{DefaultProcessController, ProcessController, ProcessSpec};
-use crate::{StokerPaths, Store};
+use crate::{StokerPaths, Store, StoreError};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LogEvent {
@@ -412,10 +412,18 @@ impl Scheduler {
         let mut cleanup_failed = false;
         let mut cleared = false;
         let mut clear_error = None;
+        let mut job_removed = false;
         for _ in 0..3 {
             match self.store.clear_runtime(job.id) {
                 Ok(_) => {
                     cleared = true;
+                    break;
+                }
+                Err(StoreError::NotFound { .. }) => {
+                    // `stoker clean` may remove a terminal job after finish
+                    // persisted it but before scheduler cleanup completed.
+                    cleared = true;
+                    job_removed = true;
                     break;
                 }
                 Err(error) => {
@@ -432,13 +440,15 @@ impl Scheduler {
             ));
         }
         let mut diagnostics_persistence_error = None;
-        if !diagnostics.is_empty() {
+        if !diagnostics.is_empty() && !job_removed {
             let detail = diagnostics.join("; ");
             if let Err(error) = self.store.record_failure_detail(job.id, &detail) {
-                diagnostics_persistence_error = Some(format!(
-                    "persist scheduler diagnostics for job {}: {error}; {detail}",
-                    job.id
-                ));
+                if !matches!(error, StoreError::NotFound { .. }) {
+                    diagnostics_persistence_error = Some(format!(
+                        "persist scheduler diagnostics for job {}: {error}; {detail}",
+                        job.id
+                    ));
+                }
             } else {
                 eprintln!("job {} scheduler diagnostics: {detail}", job.id);
             }

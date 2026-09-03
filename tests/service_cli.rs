@@ -128,3 +128,37 @@ fn service_restart_marks_stranded_running_job_lost() {
     );
     stoker_with_home(&home).args(["stop"]).assert().success();
 }
+
+#[test]
+fn clean_can_remove_terminal_jobs_while_service_is_running() {
+    let home = TempStokerHome::new();
+    let db_path = home.path().join("stoker.db");
+    let store = Store::open(&db_path).unwrap();
+    let job = store
+        .create_job(NewJob {
+            name: "finished".into(),
+            user: "test".into(),
+            cwd: PathBuf::from("/tmp/repository"),
+            command: vec!["echo".into(), "finished".into()],
+        })
+        .unwrap();
+    store.commit_job(job).unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.set_running(job, 1).unwrap();
+    store.finish(job, Some(0), None).unwrap();
+    std::fs::create_dir_all(home.path().join("runs").join(job.to_string())).unwrap();
+
+    start_service(&home);
+    stoker_with_home(&home)
+        .args(["clean"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1"));
+    stoker_with_home(&home).args(["stop"]).assert().success();
+
+    assert!(!home.path().join("runs").join(job.to_string()).exists());
+    assert!(matches!(
+        Store::open(&db_path).unwrap().get_job(job),
+        Err(stoker::StoreError::NotFound { .. })
+    ));
+}

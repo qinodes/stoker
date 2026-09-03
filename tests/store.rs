@@ -275,3 +275,65 @@ fn restart_marks_only_runtime_states_lost() {
     assert_eq!(store.get_job(cancelling).unwrap().state, JobState::Lost);
     assert_eq!(store.get_job(queued).unwrap().state, JobState::Queued);
 }
+
+#[test]
+fn clean_terminal_jobs_removes_all_terminal_states_but_keeps_active_and_pending() {
+    let store = test_store();
+    let succeeded = store.create_job(new_job_named("succeeded")).unwrap();
+    store.commit_job(succeeded).unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.set_running(succeeded, 1).unwrap();
+    store.finish(succeeded, Some(0), None).unwrap();
+
+    let failed = store.create_job(new_job_named("failed")).unwrap();
+    store.commit_job(failed).unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.set_running(failed, 1).unwrap();
+    store.finish(failed, Some(1), Some("failed")).unwrap();
+
+    let cancelled = store.create_job(new_job_named("cancelled")).unwrap();
+    store.cancel_not_started(cancelled).unwrap();
+
+    let lost = store.create_job(new_job_named("lost")).unwrap();
+    store.commit_job(lost).unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.mark_runtime_jobs_lost().unwrap();
+
+    let draft = store.create_job(new_job_named("draft")).unwrap();
+    let running = store.create_job(new_job_named("running")).unwrap();
+    store.commit_job(running).unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.set_running(running, 1).unwrap();
+    let queued = store.create_job(new_job_named("queued")).unwrap();
+    store.commit_job(queued).unwrap();
+
+    let removed = store.clean_terminal_jobs().unwrap();
+    assert_eq!(removed.len(), 4);
+    for state in [
+        JobState::Succeeded,
+        JobState::Failed,
+        JobState::Cancelled,
+        JobState::Lost,
+    ] {
+        assert!(removed.iter().any(|job| job.state == state));
+    }
+    assert!(matches!(
+        store.get_job(succeeded),
+        Err(StoreError::NotFound { .. })
+    ));
+    assert!(matches!(
+        store.get_job(failed),
+        Err(StoreError::NotFound { .. })
+    ));
+    assert!(matches!(
+        store.get_job(cancelled),
+        Err(StoreError::NotFound { .. })
+    ));
+    assert!(matches!(
+        store.get_job(lost),
+        Err(StoreError::NotFound { .. })
+    ));
+    assert_eq!(store.get_job(draft).unwrap().state, JobState::Draft);
+    assert_eq!(store.get_job(queued).unwrap().state, JobState::Queued);
+    assert_eq!(store.get_job(running).unwrap().state, JobState::Running);
+}

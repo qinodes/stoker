@@ -41,6 +41,8 @@ pub enum CliCommand {
         #[arg(long, value_parser = parse_job_state)]
         state: Option<JobState>,
     },
+    #[command(about = "Remove terminal job records and logs")]
+    Clean,
     #[command(about = "Update stoker from GitHub Releases")]
     Update,
     #[command(about = "Uninstall stoker with confirmation")]
@@ -89,6 +91,7 @@ pub fn run_command(command: CliCommand) -> anyhow::Result<()> {
         CliCommand::Submit(args) => submit(args),
         CliCommand::Show { id } => show(id),
         CliCommand::Jobs { user, state } => jobs(user.as_deref(), state),
+        CliCommand::Clean => clean(),
         CliCommand::Update => update(),
         CliCommand::Uninstall => uninstall(),
         CliCommand::Serve => serve(),
@@ -647,6 +650,20 @@ fn jobs(owner: Option<&str>, state: Option<JobState>) -> anyhow::Result<()> {
             )
         );
     }
+    Ok(())
+}
+
+fn clean() -> anyhow::Result<()> {
+    let paths = open_paths()?;
+    let jobs = Store::open(&paths.database)?.clean_terminal_jobs()?;
+    for job in &jobs {
+        let run_dir = paths.runs.join(job.id.to_string());
+        if run_dir.exists() {
+            fs::remove_dir_all(&run_dir)
+                .with_context(|| format!("remove logs for job {}", job.id))?;
+        }
+    }
+    println!("Cleaned {} terminal job(s).", jobs.len());
     Ok(())
 }
 

@@ -75,6 +75,12 @@ stoker jobs
 stoker jobs --user alice
 stoker jobs --state draft
 stoker jobs --state queued
+# 組合篩選條件
+stoker jobs --user alice --state failed
+
+# 清除 SUCCEEDED、FAILED、CANCELLED、LOST Job 與其 logs
+# scheduler 執行中也可以使用
+stoker clean
 
 # 查看目前已有的日誌，輸出完即結束。
 stoker logs <JOB_ID>
