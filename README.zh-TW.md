@@ -81,7 +81,7 @@ stoker logs <JOB_ID>
 # 持續顯示該 Job 新產生的 log，直到 Job 結束或你按 Ctrl+C
 stoker logs -f <JOB_ID>
 
-# 取消指定Job(draft、queued、running、STARTING、RUNNING都可以取消)
+# 取消指定Job（DRAFT、QUEUED、STARTING、RUNNING、CANCELLING 都可以取消）
 stoker cancel <JOB_ID>
 
 # 停止server(scheduler)
@@ -98,7 +98,7 @@ stoker update
 
 # 解除安裝
 # 解除前要先停止 scheduler
-# Job 資料與 logs 會保留在 Stoker 資料夾（預設為 `~/.stoker`）。
+# Job 資料與 logs 會保留在 Stoker 資料夾（預設為 macOS／Linux 的 `~/.stoker`、Windows 的 `%USERPROFILE%\.stoker`）。
 stoker uninstall
 ```
 
@@ -129,7 +129,7 @@ command 對來源目錄的檔案變更會保留。stoker 不會自動修改或�
 
 `cargo install stoker-engine --version <VERSION> --force`。
 
-logs保存於`.stoker/runs`
+logs 保存於 `.stoker/runs/<JOB_ID>/stdout.log` 與 `.stoker/runs/<JOB_ID>/stderr.log`。
 
 ## 邊界與限制
 
