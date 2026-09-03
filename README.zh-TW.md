@@ -32,7 +32,7 @@
 
   ```bash
   source ~/.bashrc  # Linux
-  source ~/.zshrc    # macOS
+  source ~/.zshrc   # macOS
   ```
 
 

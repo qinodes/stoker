@@ -32,7 +32,7 @@
 
   ```bash
   source ~/.bashrc  # Linux
-  source ~/.zshrc    # macOS
+  source ~/.zshrc   # macOS
   ```
 
 各 release には、プラットフォーム用の実行ファイルと `SHA256SUMS` も含まれます。

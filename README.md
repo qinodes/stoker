@@ -32,7 +32,7 @@ Downloaded executables are not added to the environment automatically. Add the d
 
   ```bash
   source ~/.bashrc  # Linux
-  source ~/.zshrc    # macOS
+  source ~/.zshrc   # macOS
   ```
 
 Each release also includes a platform binary and `SHA256SUMS`.
