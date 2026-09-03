@@ -19,6 +19,22 @@
 - Linux：`stoker-linux-x86_64.tar.gz`
 - macOS Apple Silicon：`stoker-macos-arm64.tar.gz`
 
+下載的執行檔不會自動加入環境變數，請將執行檔所在的資料夾加入 `PATH`：
+
+- Windows：在「環境變數」的「使用者變數」中編輯 `Path`，新增執行檔所在的資料夾，然後重新開啟終端機。
+- macOS／Linux：將以下內容加入 `~/.zshrc`（macOS）或 `~/.bashrc`（Linux），把 `/path/to/stoker` 換成執行檔所在的實際資料夾，然後重新開啟終端機：
+
+  ```bash
+  export PATH="/path/to/stoker:$PATH"
+  ```
+
+  寫入後若要讓目前的終端機立即套用設定，可執行：
+
+  ```bash
+  source ~/.bashrc  # Linux
+  source ~/.zshrc    # macOS
+  ```
+
 
 每個 release 也會提供平台 binary 與 `SHA256SUMS`。
 
