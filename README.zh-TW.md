@@ -6,59 +6,89 @@
 
 [English](README.md) | [日本語](README.ja.md) | 繁體中文
 
-**stoker 是單機、本機 command 的任務排程器。**
-每個 Job 都會在建立時所在的資料夾執行；`.stoker/runs` 只保存 logs。環境與產物由使用者自行管理。
+**stoker 是輕量、跨平台、本機 command(CLI) 的任務排程器。**
+每個 Job 都會自動在建立時所在的資料夾執行。
 
 ## 安裝
 
-請從 [GitHub Releases](https://github.com/qinodes/stoker/releases) 下載符合平台的壓縮檔，解壓縮 `stoker` 執行檔後加入 `PATH`：
+### 已安裝cargo
+
+從 [GitHub Releases](https://github.com/qinodes/stoker/releases) 下載符合平台的壓縮檔，解壓縮 `stoker` 執行檔後加入 `PATH`：
 
 - Windows：`stoker-windows-x86_64.zip`
 - Linux：`stoker-linux-x86_64.tar.gz`
 - macOS Apple Silicon：`stoker-macos-arm64.tar.gz`
 
-每個 release 也會提供平台 binary 與 `SHA256SUMS`。Rust 開發者仍可使用 Cargo 安裝。
+
+每個 release 也會提供平台 binary 與 `SHA256SUMS`。
+
+### 未安裝cargo
+
+```bash
+cargo install stoker-engine
+```
 
 ## 快速開始
 
-需要 Rust，以及一個要執行 command 的目錄：
-
 ```bash
-# 若已安裝 Cargo，也可以從 crates.io 安裝
-cargo install stoker-engine
 
-# 啟動背景 scheduler（Linux 與 Windows 皆適用）
+# 啟動背景 scheduler（Linux, Macos和 Windows 皆適用）
 stoker serve
 
-# 在目前目錄建立 DRAFT Job
-stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
+# 在目標目錄建立 DRAFT Job
+stoker submit --user <任意使用者名稱> --name <job名稱> --cmd <待執行指令>
+# 例如: 
+# stoker submit --user alice --name exp-a --cmd python train.py --lr 0.0001
 
 # 確認內容後加入 queue（<JOB_ID> 由上一個指令輸出）
+# 查看Job設定細節
 stoker show <JOB_ID>
+# 送出Job(draft->queued)
 stoker commit <JOB_ID>
 
 # 查詢與管理
+
+# 查看stoker server(scheduler)狀態
 stoker status
+
+# 查看所有Job狀態
 stoker jobs
+
+# 查看指定Job狀態(篩選)
 stoker jobs --user alice
 stoker jobs --state draft
 stoker jobs --state queued
+
+# 查看目前已有的日誌，輸出完即結束。
 stoker logs <JOB_ID>
+
+# 持續顯示該 Job 新產生的 log，直到 Job 結束或你按 Ctrl+C
 stoker logs -f <JOB_ID>
+
+# 取消指定Job(draft、queued、running、STARTING、RUNNING都可以取消)
 stoker cancel <JOB_ID>
+
+# 停止server(scheduler)
+# 會停止 scheduler 並取消當前執行中的 Job
+# 仍是 `QUEUED` 的 Job 會保留，等下次啟動 scheduler 後再處理
 stoker stop
+
+# 查看當前版本
 stoker --version
+
+# 更新到最新版
+# 更新前要先停止 scheduler
 stoker update
+
+# 解除安裝
+# 解除前要先停止 scheduler
+# Job 資料與 logs 會保留在 Stoker 資料夾（預設為 `~/.stoker`）。
 stoker uninstall
 ```
 
-`--cmd` 後面的內容會完整傳給要執行的程序；請把 stoker 自己的選項放在 `--cmd` 前。
+`--cmd` 後面的內容會完整傳給要執行的程序；stoker 的其他參數要放在 `--cmd` 前。
 
-`--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證；多人共用同一台機器時，可用它辨識及篩選各自的 Job。
-
-`jobs` 顯示 queue 摘要：`queue_order`、`job_id`、owner、名稱、狀態與時間。QUEUED Job 依 `queue_order` 排序，其他狀態顯示 `-`。可用 `--state draft` 或 `--state queued` 篩選。
-
-要查看 Job 的完整資料、command 與執行路徑，請使用 `stoker show <JOB_ID>`。
+`--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證；
 
 ## Job 狀態與取消
 
@@ -74,17 +104,16 @@ stoker uninstall
 | `CANCELLED` | Job 已被取消。 |
 | `LOST` | scheduler 重啟時，發現先前執行中的 Job 已失去管理。 |
 
-使用 `stoker cancel <JOB_ID>` 可以在 Job 執行前取消 `DRAFT` 或 `QUEUED` Job，也可以停止 `STARTING` 或 `RUNNING` Job。取消執行中的 Job 時，狀態會先變為 `CANCELLING`；stoker 會終止 Job 的程序樹、等待清理完成，再記錄為 `CANCELLED`。`cancel` 需要 scheduler 正在執行。
 
-`stoker stop` 會停止 scheduler 並取消當前執行中的 Job；仍是 `QUEUED` 的 Job 會保留，等下次啟動 scheduler 後再處理。
+## 補充說明
 
-Job 使用執行開始時來源目錄的內容；command 對來源目錄的檔案變更會保留。stoker 不會自動修改或還原目錄中的檔案。
+command 對來源目錄的檔案變更會保留。stoker 不會自動修改或還原目錄中的檔案。
 
-`stoker update` 會從 GitHub Releases 檢查版本、使用 `SHA256SUMS` 驗證下載的 binary，且只有在明確輸入 `y` 或 `yes` 後才會更新。更新前請先停止 scheduler。
+安裝指定版本:
 
-若不使用 Cargo，要安裝指定版本請從該版本的 GitHub Release 下載符合平台的 asset。Rust 開發者可使用 `cargo install stoker-engine --version <VERSION> --force`。
+`cargo install stoker-engine --version <VERSION> --force`。
 
-`stoker uninstall` 也需要明確確認。請先停止 scheduler；你的 Job 資料與 logs 會保留在 Stoker 資料夾（預設為 `~/.stoker`）。
+logs保存於`.stoker/runs`
 
 ## 邊界與限制
 
