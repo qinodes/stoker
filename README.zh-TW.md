@@ -6,12 +6,12 @@
 
 [English](README.md) | [日本語](README.ja.md) | 繁體中文
 
-**stoker 是輕量、跨平台、本機 command(CLI) 的任務排程器。**
+**stoker 是一個輕量、跨平台、本機 command(CLI) 的任務排程器。**
 每個 Job 都會自動在建立時所在的資料夾執行。
 
 ## 安裝
 
-### 已安裝cargo
+### 未安裝cargo
 
 從 [GitHub Releases](https://github.com/qinodes/stoker/releases) 下載符合平台的壓縮檔，解壓縮 `stoker` 執行檔後加入 `PATH`：
 
@@ -22,7 +22,7 @@
 
 每個 release 也會提供平台 binary 與 `SHA256SUMS`。
 
-### 未安裝cargo
+### 已安裝cargo
 
 ```bash
 cargo install stoker-engine
