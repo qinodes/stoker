@@ -21,19 +21,20 @@
 
 ダウンロードした実行ファイルは環境変数に自動で追加されません。実行ファイルのあるディレクトリを `PATH` に追加してください。
 
-- Windows: 「環境変数」の「ユーザー環境変数」で `Path` を編集し、実行ファイルのあるディレクトリを追加してから、ターミナルを再起動します。
-- macOS／Linux: `/path/to/stoker` を実行ファイルのある実際のディレクトリに置き換え、次の内容を `~/.zshrc`（macOS）または `~/.bashrc`（Linux）に追加してから、ターミナルを再起動します。
+**Windows:** 「環境変数」の「ユーザー環境変数」で `Path` を編集し、実行ファイルのあるディレクトリを追加してから、ターミナルを再起動します。
 
-  ```bash
-  export PATH="/path/to/stoker:$PATH"
-  ```
+**macOS／Linux:** `/path/to/stoker` を実行ファイルのある実際のディレクトリに置き換え、次の内容を `~/.zshrc`（macOS）または `~/.bashrc`（Linux）に追加してから、ターミナルを再起動します。
 
-  書き込んだ後、現在のターミナルにすぐ反映する場合は、次を実行します。
+```bash
+export PATH="/path/to/stoker:$PATH"
+```
 
-  ```bash
-  source ~/.bashrc  # Linux
-  source ~/.zshrc   # macOS
-  ```
+書き込んだ後、現在のターミナルにすぐ反映する場合は、次を実行します。
+
+```bash
+source ~/.bashrc  # Linux
+source ~/.zshrc   # macOS
+```
 
 各 release には、プラットフォーム用の実行ファイルと `SHA256SUMS` も含まれます。
 

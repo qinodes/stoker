@@ -19,21 +19,22 @@ Download the archive for your platform from [GitHub Releases](https://github.com
 - Linux: `stoker-linux-x86_64.tar.gz`
 - macOS Apple Silicon: `stoker-macos-arm64.tar.gz`
 
-Downloaded executables are not added to the environment automatically. Add the directory containing the executable to `PATH` permanently:
+Downloaded executables are not added to the environment automatically. Add the directory containing the executable to `PATH` permanently, then reopen the terminal.
 
-- Windows: edit `Path` under User variables in Environment Variables, add the executable's directory, and then reopen the terminal.
-- macOS/Linux: add the following to `~/.zshrc` (macOS) or `~/.bashrc` (Linux), replacing `/path/to/stoker` with the actual directory containing the executable, and then reopen the terminal:
+**Windows:** Edit `Path` under User variables in Environment Variables and add the executable's directory.
 
-  ```bash
-  export PATH="/path/to/stoker:$PATH"
-  ```
+**macOS/Linux:** Add the following to `~/.zshrc` (macOS) or `~/.bashrc` (Linux), replacing `/path/to/stoker` with the actual directory containing the executable:
 
-  To apply the setting immediately in the current terminal, run:
+```bash
+export PATH="/path/to/stoker:$PATH"
+```
 
-  ```bash
-  source ~/.bashrc  # Linux
-  source ~/.zshrc   # macOS
-  ```
+To apply the setting immediately in the current terminal, run:
+
+```bash
+source ~/.bashrc  # Linux
+source ~/.zshrc   # macOS
+```
 
 Each release also includes a platform binary and `SHA256SUMS`.
 
