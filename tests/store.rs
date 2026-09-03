@@ -73,6 +73,93 @@ fn queued_jobs_have_contiguous_orders_after_cancel_and_claim() {
 }
 
 #[test]
+fn pause_and_resume_restore_paused_jobs_before_newer_queue_entries() {
+    let store = test_store();
+    let first = store.create_job(new_job_named("first")).unwrap();
+    let second = store.create_job(new_job_named("second")).unwrap();
+    store.commit_job(first).unwrap();
+    store.commit_job(second).unwrap();
+
+    let paused = store.pause_queued_jobs().unwrap();
+    assert_eq!(
+        paused.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [first, second]
+    );
+    assert_eq!(store.get_job(first).unwrap().state, JobState::Paused);
+    assert_eq!(store.get_job(first).unwrap().queue_order, Some(1));
+    assert_eq!(store.get_job(second).unwrap().queue_order, Some(2));
+
+    let newer = store.create_job(new_job_named("newer")).unwrap();
+    store.commit_job(newer).unwrap();
+    assert_eq!(store.get_job(newer).unwrap().queue_order, Some(1));
+
+    let resumed = store.resume_paused_jobs().unwrap();
+    assert_eq!(
+        resumed.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [first, second]
+    );
+    let queued = store
+        .list_jobs_with_state(None, Some(JobState::Queued))
+        .unwrap();
+    assert_eq!(
+        queued.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [first, second, newer]
+    );
+    assert_eq!(
+        queued.iter().map(|job| job.queue_order).collect::<Vec<_>>(),
+        [Some(1), Some(2), Some(3)]
+    );
+}
+
+#[test]
+fn commit_all_drafts_uses_creation_time_order() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("stoker.db");
+    let store = Store::open(&db_path).unwrap();
+    let first = store.create_job(new_job_named("first")).unwrap();
+    let second = store.create_job(new_job_named("second")).unwrap();
+    let third = store.create_job(new_job_named("third")).unwrap();
+    let connection = Connection::open(&db_path).unwrap();
+    for (id, created_at) in [
+        (first, "2026-01-01T00:02:00+00:00"),
+        (second, "2026-01-01T00:01:00+00:00"),
+        (third, "2026-01-01T00:00:00+00:00"),
+    ] {
+        connection
+            .execute(
+                "UPDATE jobs SET created_at = ?2 WHERE id = ?1",
+                params![id.to_string(), created_at],
+            )
+            .unwrap();
+    }
+
+    let committed = store.commit_all_drafts().unwrap();
+    assert_eq!(
+        committed.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [third, second, first]
+    );
+    assert_eq!(
+        committed
+            .iter()
+            .map(|job| job.queue_order)
+            .collect::<Vec<_>>(),
+        [Some(1), Some(2), Some(3)]
+    );
+}
+
+#[test]
+fn cancel_can_remove_a_paused_job_before_it_starts() {
+    let store = test_store();
+    let id = store.create_job(new_job()).unwrap();
+    store.commit_job(id).unwrap();
+    store.pause_queued_jobs().unwrap();
+
+    let cancelled = store.cancel_not_started(id).unwrap();
+    assert_eq!(cancelled.state, JobState::Cancelled);
+    assert_eq!(cancelled.queue_order, None);
+}
+
+#[test]
 fn legacy_database_migrates_queued_jobs_to_queue_order() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("stoker.db");

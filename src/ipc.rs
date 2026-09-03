@@ -21,6 +21,9 @@ pub enum IpcRequest {
     Status,
     Stop,
     Commit { id: Uuid },
+    CommitAll,
+    Pause,
+    Resume,
     Cancel { id: Uuid },
     FollowLogs { id: Uuid },
 }
@@ -28,6 +31,7 @@ pub enum IpcRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IpcResponse {
     Ack,
+    JobCount { count: usize },
     Status(ServiceStatus),
     LogChunk { stream: LogStream, bytes: Vec<u8> },
     LogEnd,
@@ -119,7 +123,9 @@ impl ServiceClient {
     pub async fn status(&self) -> anyhow::Result<ServiceStatus> {
         match self.request(IpcRequest::Status).await? {
             IpcResponse::Status(status) => Ok(status),
-            IpcResponse::Ack => anyhow::bail!("service returned an invalid status response"),
+            IpcResponse::Ack | IpcResponse::JobCount { .. } => {
+                anyhow::bail!("service returned an invalid status response")
+            }
             IpcResponse::LogChunk { .. } | IpcResponse::LogEnd => {
                 anyhow::bail!("service returned an invalid status response")
             }
@@ -148,7 +154,9 @@ impl ServiceClient {
                 }
                 Ok(())
             }
-            IpcResponse::Status(_) => anyhow::bail!("service returned an invalid stop response"),
+            IpcResponse::Status(_) | IpcResponse::JobCount { .. } => {
+                anyhow::bail!("service returned an invalid stop response")
+            }
             IpcResponse::LogChunk { .. } | IpcResponse::LogEnd => {
                 anyhow::bail!("service returned an invalid stop response")
             }
@@ -161,6 +169,30 @@ impl ServiceClient {
             IpcResponse::Ack => Ok(()),
             IpcResponse::Error { message } => anyhow::bail!("{message}"),
             _ => anyhow::bail!("service returned an invalid commit response"),
+        }
+    }
+
+    pub async fn commit_all(&self) -> anyhow::Result<usize> {
+        match self.request(IpcRequest::CommitAll).await? {
+            IpcResponse::JobCount { count } => Ok(count),
+            IpcResponse::Error { message } => anyhow::bail!("{message}"),
+            _ => anyhow::bail!("service returned an invalid commit response"),
+        }
+    }
+
+    pub async fn pause(&self) -> anyhow::Result<()> {
+        match self.request(IpcRequest::Pause).await? {
+            IpcResponse::Ack => Ok(()),
+            IpcResponse::Error { message } => anyhow::bail!("{message}"),
+            _ => anyhow::bail!("service returned an invalid pause response"),
+        }
+    }
+
+    pub async fn resume(&self) -> anyhow::Result<()> {
+        match self.request(IpcRequest::Resume).await? {
+            IpcResponse::Ack => Ok(()),
+            IpcResponse::Error { message } => anyhow::bail!("{message}"),
+            _ => anyhow::bail!("service returned an invalid resume response"),
         }
     }
 

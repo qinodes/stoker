@@ -224,6 +224,29 @@ fn jobs_lists_queued_by_queue_order_and_other_jobs_newest_first() {
 }
 
 #[test]
+fn jobs_list_paused_jobs_after_queue_in_their_saved_order() {
+    let repo = TestRepo::new();
+    let home = repo.path().parent().unwrap().join(format!(
+        ".{}-stoker-home",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    let first = store.create_job(job("paused-first", "alice")).unwrap();
+    let second = store.create_job(job("paused-second", "alice")).unwrap();
+    store.commit_job(first).unwrap();
+    store.commit_job(second).unwrap();
+    store.pause_queued_jobs().unwrap();
+    let queued = store.create_job(job("queued", "alice")).unwrap();
+    store.commit_job(queued).unwrap();
+
+    let output = stoker_in(repo.path()).args(["jobs"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.find("queued").unwrap() < stdout.find("paused-first").unwrap());
+    assert!(stdout.find("paused-first").unwrap() < stdout.find("paused-second").unwrap());
+}
+
+#[test]
 fn clean_removes_all_terminal_jobs_and_their_logs() {
     let repo = TestRepo::new();
     let home = repo.path().parent().unwrap().join(format!(

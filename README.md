@@ -61,6 +61,12 @@ stoker add --user <USER_NAME> --name <JOB_NAME> --cmd <COMMAND>
 stoker show <JOB_ID>
 # Add the job (DRAFT -> QUEUED)
 stoker commit <JOB_ID>
+# Add every DRAFT job to the queue in creation order
+stoker commit --all
+
+# Temporarily hold all queued jobs, then restore them later
+stoker pause
+stoker resume
 
 # Inspect and manage jobs
 
@@ -87,12 +93,12 @@ stoker logs <JOB_ID>
 # Follow new log output until the job ends or you press Ctrl+C
 stoker logs -f <JOB_ID>
 
-# Cancel a job (DRAFT, QUEUED, STARTING, RUNNING, or CANCELLING)
+# Cancel a job (DRAFT, QUEUED, PAUSED, STARTING, RUNNING, or CANCELLING)
 stoker cancel <JOB_ID>
 
 # Stop the scheduler
-# This cancels the currently running job.
-# QUEUED jobs remain for the next scheduler run.
+# If a job is active, stoker asks before force-cancelling it.
+# QUEUED and PAUSED jobs remain for the next scheduler run.
 stoker stop
 
 # Show the current version
@@ -121,6 +127,7 @@ Jobs run in the background without an interactive terminal. Use non-interactive 
 | --- | --- |
 | `DRAFT` | Submitted, but not committed to the queue yet. |
 | `QUEUED` | Committed and waiting to run. |
+| `PAUSED` | Temporarily held; use `stoker resume` to return it to the queue. |
 | `STARTING` | Claimed by the scheduler; its source directory and process are being prepared. |
 | `RUNNING` | The job process is running. |
 | `CANCELLING` | A cancellation has been requested; stoker is stopping the process and cleaning up. |

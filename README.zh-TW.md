@@ -62,6 +62,12 @@ stoker add --user <任意使用者名稱> --name <job名稱> --cmd <待執行指
 stoker show <JOB_ID>
 # 送出Job(draft->queued)
 stoker commit <JOB_ID>
+# 將所有 DRAFT Job 依建立時間加入 queue
+stoker commit --all
+
+# 暫時保留所有 queued Job，之後再恢復
+stoker pause
+stoker resume
 
 # 查詢與管理
 
@@ -88,12 +94,12 @@ stoker logs <JOB_ID>
 # 持續顯示該 Job 新產生的 log，直到 Job 結束或你按 Ctrl+C
 stoker logs -f <JOB_ID>
 
-# 取消指定Job（DRAFT、QUEUED、STARTING、RUNNING、CANCELLING 都可以取消）
+# 取消指定Job（DRAFT、QUEUED、PAUSED、STARTING、RUNNING、CANCELLING 都可以取消）
 stoker cancel <JOB_ID>
 
 # 停止server(scheduler)
-# 會停止 scheduler 並取消當前執行中的 Job
-# 仍是 `QUEUED` 的 Job 會保留，等下次啟動 scheduler 後再處理
+# 若有正在執行的 Job，stoker 會先詢問是否強制取消
+# `QUEUED` 與 `PAUSED` Job 會保留，等下次啟動 scheduler 後再處理
 stoker stop
 
 # 查看當前版本
@@ -121,6 +127,7 @@ Job 會在背景執行，不具備互動式終端機。請使用非互動式指�
 | --- | --- |
 | `DRAFT` | 已 add，但尚未 commit 到 queue。 |
 | `QUEUED` | 已 commit，正在等待執行。 |
+| `PAUSED` | 暫時保留；以 `stoker resume` 放回 queue。 |
 | `STARTING` | scheduler 已取出 Job，正在準備來源目錄與程序。 |
 | `RUNNING` | Job 的程序正在執行。 |
 | `CANCELLING` | 已要求取消，stoker 正在停止程序並清理。 |

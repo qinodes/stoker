@@ -53,8 +53,13 @@ pub enum CliCommand {
     Status,
     Stop,
     Commit {
-        id: Uuid,
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        id: Option<Uuid>,
+        #[arg(long)]
+        all: bool,
     },
+    Pause,
+    Resume,
     Cancel {
         id: Uuid,
     },
@@ -97,7 +102,9 @@ pub fn run_command(command: CliCommand) -> anyhow::Result<()> {
         CliCommand::ServiceRun => service_run(),
         CliCommand::Status => status(),
         CliCommand::Stop => stop(),
-        CliCommand::Commit { id } => commit(id),
+        CliCommand::Commit { id, all } => commit(id, all),
+        CliCommand::Pause => pause(),
+        CliCommand::Resume => resume(),
         CliCommand::Cancel { id } => cancel(id),
         CliCommand::Logs { id, follow } => logs(id, follow),
     }
@@ -224,8 +231,19 @@ fn status() -> anyhow::Result<()> {
 
 fn stop() -> anyhow::Result<()> {
     let paths = open_paths()?;
-    match runtime()?.block_on(ServiceClient::new(paths).stop()) {
-        Ok(()) => Ok(()),
+    let client = ServiceClient::new(paths);
+    match runtime()?.block_on(client.status()) {
+        Ok(status) => {
+            if let Some(id) = status.active_job
+                && !request_confirmation(&format!(
+                    "Job {id} is active. Force-cancel it and stop the scheduler"
+                ))?
+            {
+                println!("Stop cancelled.");
+                return Ok(());
+            }
+            runtime()?.block_on(client.stop())
+        }
         Err(error) if is_service_unavailable(&error) => {
             anyhow::bail!("Scheduler is not running. Start it with 'stoker start'.")
         }
@@ -550,9 +568,28 @@ fn windows_update_script(
     )
 }
 
-fn commit(id: Uuid) -> anyhow::Result<()> {
+fn commit(id: Option<Uuid>, all: bool) -> anyhow::Result<()> {
     let paths = open_paths()?;
-    runtime()?.block_on(ServiceClient::new(paths).commit(id))
+    if all {
+        let count = runtime()?.block_on(ServiceClient::new(paths).commit_all())?;
+        println!("Committed {count} DRAFT job(s).");
+        return Ok(());
+    }
+    runtime()?.block_on(ServiceClient::new(paths).commit(id.expect("clap requires a job ID")))
+}
+
+fn pause() -> anyhow::Result<()> {
+    let paths = open_paths()?;
+    runtime()?.block_on(ServiceClient::new(paths).pause())?;
+    println!("Paused queued jobs.");
+    Ok(())
+}
+
+fn resume() -> anyhow::Result<()> {
+    let paths = open_paths()?;
+    runtime()?.block_on(ServiceClient::new(paths).resume())?;
+    println!("Resumed paused jobs.");
+    Ok(())
 }
 
 fn cancel(id: Uuid) -> anyhow::Result<()> {
@@ -757,7 +794,7 @@ fn parse_job_state(value: &str) -> Result<JobState, String> {
 fn print_job(job: &Job) {
     let execution_cwd = &job.cwd;
     let execution_cwd_status = match job.state {
-        JobState::Draft | JobState::Queued => "planned",
+        JobState::Draft | JobState::Queued | JobState::Paused => "planned",
         JobState::Starting | JobState::Running | JobState::Cancelling => "active",
         _ => "source directory retained",
     };

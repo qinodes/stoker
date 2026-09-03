@@ -380,6 +380,24 @@ async fn handle_client<S>(
                     message: error.to_string(),
                 },
             },
+            IpcRequest::CommitAll => match scheduler.handle_commit_all(&wake_tx) {
+                Ok(jobs) => IpcResponse::JobCount { count: jobs.len() },
+                Err(error) => IpcResponse::Error {
+                    message: error.to_string(),
+                },
+            },
+            IpcRequest::Pause => match scheduler.handle_pause() {
+                Ok(_) => IpcResponse::Ack,
+                Err(error) => IpcResponse::Error {
+                    message: error.to_string(),
+                },
+            },
+            IpcRequest::Resume => match scheduler.handle_resume(&wake_tx) {
+                Ok(_) => IpcResponse::Ack,
+                Err(error) => IpcResponse::Error {
+                    message: error.to_string(),
+                },
+            },
             IpcRequest::Cancel { id } => match scheduler.handle_cancel(id).await {
                 Ok(_) => IpcResponse::Ack,
                 Err(error) => IpcResponse::Error {

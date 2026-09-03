@@ -61,6 +61,12 @@ stoker add --user <任意のユーザー名> --name <Job 名> --cmd <実行す�
 stoker show <JOB_ID>
 # Job を送信（DRAFT -> QUEUED）
 stoker commit <JOB_ID>
+# すべての DRAFT Job を作成時間順に queue へ追加
+stoker commit --all
+
+# queued Job を一時保留し、後で復元
+stoker pause
+stoker resume
 
 # 確認と管理
 
@@ -87,12 +93,12 @@ stoker logs <JOB_ID>
 # 新しいログを Job の終了まで表示（Ctrl+C でも停止できます）
 stoker logs -f <JOB_ID>
 
-# Job をキャンセル（DRAFT、QUEUED、STARTING、RUNNING、CANCELLING）
+# Job をキャンセル（DRAFT、QUEUED、PAUSED、STARTING、RUNNING、CANCELLING）
 stoker cancel <JOB_ID>
 
 # scheduler を停止
-# 実行中の Job はキャンセルされます。
-# QUEUED の Job は次回の scheduler 起動時まで保持されます。
+# 実行中の Job がある場合、強制キャンセル前に確認します。
+# QUEUED と PAUSED の Job は次回の scheduler 起動時まで保持されます。
 stoker stop
 
 # 現在のバージョンを表示
@@ -121,6 +127,7 @@ Job は対話型 terminal のないバックグラウンドで実行されます
 | --- | --- |
 | `DRAFT` | add 済みですが、まだ commit されていません。 |
 | `QUEUED` | commit 済みで、実行待ちです。 |
+| `PAUSED` | 一時保留中です。`stoker resume` で queue に戻します。 |
 | `STARTING` | scheduler が Job を取得し、ソースディレクトリとプロセスを準備しています。 |
 | `RUNNING` | Job のプロセスが実行中です。 |
 | `CANCELLING` | キャンセルが要求され、stoker がプロセスの停止とクリーンアップを行っています。 |

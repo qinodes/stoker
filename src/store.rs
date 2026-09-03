@@ -140,36 +140,36 @@ impl Store {
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE user = ?1 AND state = ?2
-                 ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
-                          CASE WHEN state = 'QUEUED' THEN queue_order END,
-                          CASE WHEN state <> 'QUEUED' THEN COALESCE(committed_at, created_at) END DESC,
+                 ORDER BY CASE state WHEN 'QUEUED' THEN 0 WHEN 'PAUSED' THEN 1 ELSE 2 END,
+                          CASE WHEN state IN ('QUEUED', 'PAUSED') THEN queue_order END,
+                          CASE WHEN state NOT IN ('QUEUED', 'PAUSED') THEN COALESCE(committed_at, created_at) END DESC,
                           id",
             )?,
             (false, Some(_)) => conn.prepare(
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE state = ?1
-                 ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
-                          CASE WHEN state = 'QUEUED' THEN queue_order END,
-                          CASE WHEN state <> 'QUEUED' THEN COALESCE(committed_at, created_at) END DESC,
+                 ORDER BY CASE state WHEN 'QUEUED' THEN 0 WHEN 'PAUSED' THEN 1 ELSE 2 END,
+                          CASE WHEN state IN ('QUEUED', 'PAUSED') THEN queue_order END,
+                          CASE WHEN state NOT IN ('QUEUED', 'PAUSED') THEN COALESCE(committed_at, created_at) END DESC,
                           id",
             )?,
             (true, None) => conn.prepare(
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE user = ?1
-                 ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
-                          CASE WHEN state = 'QUEUED' THEN queue_order END,
-                          CASE WHEN state <> 'QUEUED' THEN COALESCE(committed_at, created_at) END DESC,
+                 ORDER BY CASE state WHEN 'QUEUED' THEN 0 WHEN 'PAUSED' THEN 1 ELSE 2 END,
+                          CASE WHEN state IN ('QUEUED', 'PAUSED') THEN queue_order END,
+                          CASE WHEN state NOT IN ('QUEUED', 'PAUSED') THEN COALESCE(committed_at, created_at) END DESC,
                           id",
             )?,
             (false, None) => conn.prepare(
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs
-                 ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
-                          CASE WHEN state = 'QUEUED' THEN queue_order END,
-                          CASE WHEN state <> 'QUEUED' THEN COALESCE(committed_at, created_at) END DESC,
+                 ORDER BY CASE state WHEN 'QUEUED' THEN 0 WHEN 'PAUSED' THEN 1 ELSE 2 END,
+                          CASE WHEN state IN ('QUEUED', 'PAUSED') THEN queue_order END,
+                          CASE WHEN state NOT IN ('QUEUED', 'PAUSED') THEN COALESCE(committed_at, created_at) END DESC,
                           id",
             )?,
         };
@@ -243,11 +243,102 @@ impl Store {
         Ok(job)
     }
 
+    pub fn commit_all_drafts(&self) -> Result<Vec<Job>, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let ids = tx
+            .prepare(
+                "SELECT id FROM jobs WHERE state = 'DRAFT'
+                 ORDER BY created_at, id",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let first_order = next_queue_order(&tx)?;
+        let committed_at = Utc::now().to_rfc3339();
+        for (index, id) in ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE jobs SET state = 'QUEUED', queue_order = ?2, committed_at = ?3
+                 WHERE id = ?1 AND state = 'DRAFT'",
+                params![
+                    id,
+                    first_order + i64::try_from(index).expect("queue length fits i64"),
+                    committed_at,
+                ],
+            )?;
+        }
+        if !ids.is_empty() {
+            normalize_queue(&tx)?;
+        }
+        let jobs = ids
+            .into_iter()
+            .map(|id| get_job_with(&tx, parse_uuid(&id)?))
+            .collect::<Result<Vec<_>, _>>()?;
+        tx.commit()?;
+        Ok(jobs)
+    }
+
+    pub fn pause_queued_jobs(&self) -> Result<Vec<Job>, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let ids = tx
+            .prepare(
+                "SELECT id FROM jobs WHERE state = 'QUEUED'
+                 ORDER BY queue_order, id",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for id in &ids {
+            tx.execute(
+                "UPDATE jobs SET state = 'PAUSED'
+                 WHERE id = ?1 AND state = 'QUEUED'",
+                [id],
+            )?;
+        }
+        let jobs = ids
+            .into_iter()
+            .map(|id| get_job_with(&tx, parse_uuid(&id)?))
+            .collect::<Result<Vec<_>, _>>()?;
+        tx.commit()?;
+        Ok(jobs)
+    }
+
+    pub fn resume_paused_jobs(&self) -> Result<Vec<Job>, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let ids = tx
+            .prepare(
+                "SELECT id FROM jobs WHERE state = 'PAUSED'
+                 ORDER BY queue_order, id",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if !ids.is_empty() {
+            tx.execute(
+                "UPDATE jobs SET queue_order = queue_order + ?1 WHERE state = 'QUEUED'",
+                [i64::try_from(ids.len()).expect("queue length fits i64")],
+            )?;
+            for (index, id) in ids.iter().enumerate() {
+                tx.execute(
+                    "UPDATE jobs SET state = 'QUEUED', queue_order = ?2
+                     WHERE id = ?1 AND state = 'PAUSED'",
+                    params![id, i64::try_from(index + 1).expect("queue length fits i64")],
+                )?;
+            }
+            normalize_queue(&tx)?;
+        }
+        let jobs = ids
+            .into_iter()
+            .map(|id| get_job_with(&tx, parse_uuid(&id)?))
+            .collect::<Result<Vec<_>, _>>()?;
+        tx.commit()?;
+        Ok(jobs)
+    }
+
     pub fn cancel_not_started(&self, id: Uuid) -> Result<Job, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let state = self.current_state(&tx, id)?;
-        if !matches!(state, JobState::Draft | JobState::Queued) {
+        if !matches!(state, JobState::Draft | JobState::Queued | JobState::Paused) {
             return Err(StoreError::InvalidTransition {
                 id,
                 state,
@@ -256,7 +347,7 @@ impl Store {
         }
         if tx.execute(
             "UPDATE jobs SET state = 'CANCELLED', queue_order = NULL, finished_at = ?2
-             WHERE id = ?1 AND state IN ('DRAFT', 'QUEUED')",
+             WHERE id = ?1 AND state IN ('DRAFT', 'QUEUED', 'PAUSED')",
             params![id.to_string(), Utc::now().to_rfc3339()],
         )? != 1
         {
@@ -508,7 +599,7 @@ fn migrate_queue_order(connection: &mut Connection) -> Result<(), StoreError> {
         }
     }
     tx.execute(
-        "UPDATE jobs SET queue_order = NULL WHERE state <> 'QUEUED'",
+        "UPDATE jobs SET queue_order = NULL WHERE state NOT IN ('QUEUED', 'PAUSED')",
         [],
     )?;
     tx.commit()?;
