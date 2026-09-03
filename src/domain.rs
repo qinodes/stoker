@@ -74,6 +74,9 @@ pub struct Job {
     pub user: String,
     pub cwd: PathBuf,
     pub command: Vec<String>,
+    /// The original shell command for jobs added through the CLI.
+    /// `None` identifies jobs created by older Stoker versions.
+    pub command_line: Option<String>,
     pub state: JobState,
     pub queue_order: Option<i64>,
     pub created_at: DateTime<Utc>,

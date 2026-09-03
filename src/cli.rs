@@ -74,11 +74,10 @@ pub struct AddArgs {
     #[arg(
         long = "cmd",
         required = true,
-        num_args = 1..,
         allow_hyphen_values = true,
-        help = "Command and arguments to execute (must be last)"
+        help = "Complete shell command string (quote it when it contains spaces)"
     )]
-    pub command: Vec<String>,
+    pub command: String,
 }
 
 pub fn run() -> anyhow::Result<()> {
@@ -586,9 +585,7 @@ fn add(args: AddArgs) -> anyhow::Result<()> {
     if args.name.trim().is_empty() {
         anyhow::bail!("--name must not be empty");
     }
-    if args.command.is_empty() {
-        anyhow::bail!("at least one command element is required after `--cmd`");
-    }
+    let command = parse_command_line(&args.command)?;
 
     let current_dir = std::env::current_dir().context("determine current directory")?;
     let cwd = normalize_path(
@@ -596,14 +593,91 @@ fn add(args: AddArgs) -> anyhow::Result<()> {
             .canonicalize()
             .context("resolve working directory")?,
     );
-    let id = open_store()?.create_job(NewJob {
-        name: args.name,
-        user: args.user,
-        cwd,
-        command: args.command,
-    })?;
+    let id = open_store()?.create_shell_job(
+        NewJob {
+            name: args.name,
+            user: args.user,
+            cwd,
+            command,
+        },
+        args.command,
+    )?;
     println!("Created job {id} (DRAFT)");
     Ok(())
+}
+
+fn parse_command_line(input: &str) -> anyhow::Result<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut token = String::new();
+    let mut token_started = false;
+    let mut quote = None;
+    let mut chars = input.chars().peekable();
+
+    while let Some(character) = chars.next() {
+        match quote {
+            Some('\'') => {
+                if character == '\'' {
+                    quote = None;
+                } else {
+                    token.push(character);
+                }
+            }
+            Some('"') => {
+                if character == '"' {
+                    quote = None;
+                } else if character == '\\' && matches!(chars.peek(), Some('"') | Some('\\')) {
+                    token.push(chars.next().expect("peeked character exists"));
+                } else {
+                    token.push(character);
+                }
+            }
+            Some(_) => unreachable!("command parser only uses single or double quotes"),
+            None if character.is_whitespace() => {
+                if token_started {
+                    tokens.push(std::mem::take(&mut token));
+                    token_started = false;
+                }
+            }
+            None if character == '\'' || character == '"' => {
+                quote = Some(character);
+                token_started = true;
+            }
+            None if character == '\\' => {
+                if matches!(
+                    chars.peek(),
+                    Some(' ') | Some('\t') | Some('\n') | Some('\'') | Some('"') | Some('\\')
+                ) {
+                    token.push(chars.next().expect("peeked character exists"));
+                } else {
+                    token.push(character);
+                }
+                token_started = true;
+            }
+            None if character == '&' && chars.peek() == Some(&'&') => {
+                if token_started {
+                    tokens.push(std::mem::take(&mut token));
+                    token_started = false;
+                }
+                chars.next();
+                tokens.push("&&".to_owned());
+            }
+            None => {
+                token.push(character);
+                token_started = true;
+            }
+        }
+    }
+
+    if let Some(quote) = quote {
+        anyhow::bail!("--cmd contains an unterminated {quote} quote");
+    }
+    if token_started {
+        tokens.push(token);
+    }
+    if tokens.is_empty() {
+        anyhow::bail!("--cmd must not be empty");
+    }
+    Ok(tokens)
 }
 
 fn show(id: Uuid) -> anyhow::Result<()> {

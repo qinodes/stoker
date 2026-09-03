@@ -54,7 +54,7 @@ stoker start
 # 対象ディレクトリで DRAFT Job を作成
 stoker add --user <任意のユーザー名> --name <Job 名> --cmd <実行するコマンド>
 # 例:
-# stoker add --user alice --name exp-a --cmd python train.py --lr 0.0001
+# stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
 # 内容を確認して queue に追加（<JOB_ID> は直前の出力を使用）
 # Job の詳細を表示
@@ -109,7 +109,9 @@ stoker update
 stoker uninstall
 ```
 
-`--cmd` 以降はすべて実行プログラムへそのまま渡されます。stoker 自身のオプションは `--cmd` より前に指定してください。
+`--cmd` の後ろの完全なコマンドは、引用符で囲む必要があります。
+
+Job は対話型 terminal のないバックグラウンドで実行されます。対話なしで実行できるコマンドとオプションを使用してください。
 
 `--user` は stoker の論理的な owner ラベルであり、OS アカウントや認証機能ではありません。
 

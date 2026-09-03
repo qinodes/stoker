@@ -55,7 +55,7 @@ stoker start
 # 在目標目錄建立 DRAFT Job
 stoker add --user <任意使用者名稱> --name <job名稱> --cmd <待執行指令>
 # 例如: 
-# stoker add --user alice --name exp-a --cmd python train.py --lr 0.0001
+# stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
 # 確認內容後加入 queue（<JOB_ID> 由上一個指令輸出）
 # 查看Job設定細節
@@ -109,7 +109,9 @@ stoker update
 stoker uninstall
 ```
 
-`--cmd` 後面的內容會完整傳給要執行的程序；stoker 的其他參數要放在 `--cmd` 前。
+`--cmd` 後面的完整指令必須用引號包住。
+
+Job 會在背景執行，不具備互動式終端機。請使用非互動式指令與參數。
 
 `--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證；
 

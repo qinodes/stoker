@@ -22,7 +22,7 @@ fn start_service(home: &TempStokerHome) {
 }
 
 #[test]
-fn serve_detaches_and_status_reports_running_service() {
+fn start_detaches_and_status_reports_running_service() {
     let home = TempStokerHome::new();
     start_service(&home);
     stoker_with_home(&home)
@@ -67,7 +67,7 @@ fn duplicate_service_does_not_replace_running_endpoint() {
 
 #[cfg(unix)]
 #[test]
-fn serve_never_replaces_non_socket_endpoint() {
+fn start_never_replaces_non_socket_endpoint() {
     let home = TempStokerHome::new();
     let endpoint = home.path().join("stoker.sock");
     std::fs::write(&endpoint, "preserve me").expect("write endpoint sentinel");

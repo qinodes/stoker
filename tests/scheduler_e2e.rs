@@ -10,7 +10,7 @@ use predicates::prelude::*;
 use stoker::{JobState, Store};
 use uuid::Uuid;
 
-use support::{TestCommand, TestRepo, stoker_with_home, stoker_with_home_and_dir};
+use support::{TestRepo, stoker_with_home, stoker_with_home_and_dir};
 
 static JOB_HOMES: OnceLock<Mutex<HashMap<Uuid, PathBuf>>> = OnceLock::new();
 
@@ -36,11 +36,8 @@ fn add_script_from(
     script: &str,
     name: &str,
 ) -> Uuid {
-    let mut args = vec!["add", "--user", "test", "--name", name, "--cmd"];
-    let shell = TestCommand::shell(script);
-    args.extend(shell.iter().map(String::as_str));
     let output = stoker_with_home_and_dir(&home_for(repo), current_dir)
-        .args(args)
+        .args(["add", "--user", "test", "--name", name, "--cmd", script])
         .output()
         .unwrap();
     assert!(
@@ -234,6 +231,25 @@ fn service_runs_jobs_in_recorded_cwd_in_queue_order() {
         "job should run in the recorded source cwd"
     );
     stoker_stop(first).assert().success();
+}
+
+#[test]
+fn service_executes_the_recorded_command_through_a_shell() {
+    let repo = TestRepo::new();
+    let job = add_script(
+        &repo,
+        if cfg!(windows) {
+            "echo first && echo second"
+        } else {
+            "printf first && printf second"
+        },
+        "shell",
+    );
+    start_service_and_commit(&[job]);
+    assert_terminal(job, JobState::Succeeded);
+    assert_log_contains(job, "first");
+    assert_log_contains(job, "second");
+    stoker_stop(job).assert().success();
 }
 
 #[test]

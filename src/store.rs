@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     user TEXT NOT NULL,
     cwd TEXT NOT NULL,
     command TEXT NOT NULL,
+    command_line TEXT,
     state TEXT NOT NULL,
     queue_order INTEGER,
     created_at TEXT NOT NULL,
@@ -73,6 +74,7 @@ impl Store {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.execute_batch(SCHEMA)?;
         migrate_legacy_git_schema(&mut connection)?;
+        migrate_command_line(&connection)?;
         migrate_queue_order(&mut connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -80,20 +82,37 @@ impl Store {
     }
 
     pub fn create_job(&self, new_job: NewJob) -> Result<Uuid, StoreError> {
+        self.create_job_with_command_line(new_job, None)
+    }
+
+    pub fn create_shell_job(
+        &self,
+        new_job: NewJob,
+        command_line: String,
+    ) -> Result<Uuid, StoreError> {
+        self.create_job_with_command_line(new_job, Some(command_line))
+    }
+
+    fn create_job_with_command_line(
+        &self,
+        new_job: NewJob,
+        command_line: Option<String>,
+    ) -> Result<Uuid, StoreError> {
         let id = Uuid::new_v4();
         let created_at = Utc::now();
         let command = serde_json::to_string(&new_job.command)?;
         let cwd = storage_path(&new_job.cwd);
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO jobs (id,name,user,cwd,command,state,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO jobs (id,name,user,cwd,command,command_line,state,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 id.to_string(),
                 new_job.name,
                 new_job.user,
                 cwd,
                 command,
+                command_line,
                 JobState::Draft.as_str(),
                 created_at.to_rfc3339(),
             ],
@@ -118,7 +137,7 @@ impl Store {
         let conn = self.lock()?;
         let mut statement = match (owner.is_some(), state) {
             (true, Some(_)) => conn.prepare(
-                "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE user = ?1 AND state = ?2
                  ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
@@ -127,7 +146,7 @@ impl Store {
                           id",
             )?,
             (false, Some(_)) => conn.prepare(
-                "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE state = ?1
                  ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
@@ -136,7 +155,7 @@ impl Store {
                           id",
             )?,
             (true, None) => conn.prepare(
-                "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs WHERE user = ?1
                  ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
@@ -145,7 +164,7 @@ impl Store {
                           id",
             )?,
             (false, None) => conn.prepare(
-                "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs
                  ORDER BY CASE WHEN state = 'QUEUED' THEN 0 ELSE 1 END,
@@ -178,7 +197,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let jobs = {
             let mut statement = tx.prepare(
-                "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+                "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                         committed_at,started_at,finished_at,exit_code,pid,failure_detail
                  FROM jobs
                  WHERE state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'LOST')",
@@ -547,6 +566,7 @@ fn migrate_legacy_git_schema(connection: &mut Connection) -> Result<(), StoreErr
             user TEXT NOT NULL,
             cwd TEXT NOT NULL,
             command TEXT NOT NULL,
+            command_line TEXT,
             state TEXT NOT NULL,
             queue_order INTEGER,
             created_at TEXT NOT NULL,
@@ -612,6 +632,19 @@ fn migrate_legacy_git_schema(connection: &mut Connection) -> Result<(), StoreErr
     Ok(())
 }
 
+fn migrate_command_line(connection: &Connection) -> Result<(), StoreError> {
+    let has_command_line = connection
+        .prepare("PRAGMA table_info(jobs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "command_line");
+    if !has_command_line {
+        connection.execute("ALTER TABLE jobs ADD COLUMN command_line TEXT", [])?;
+    }
+    Ok(())
+}
+
 fn next_queue_order(conn: &Connection) -> Result<i64, StoreError> {
     Ok(conn.query_row(
         "SELECT COALESCE(MAX(queue_order), 0) + 1 FROM jobs WHERE state = 'QUEUED'",
@@ -643,7 +676,7 @@ fn storage_path(path: &Path) -> String {
 
 fn get_job_with(conn: &Connection, id: Uuid) -> Result<Job, StoreError> {
     conn.query_row(
-        "SELECT id,name,user,cwd,command,state,queue_order,created_at,
+        "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
                 committed_at,started_at,finished_at,exit_code,pid,failure_detail
          FROM jobs WHERE id = ?1",
         [id.to_string()],
@@ -656,13 +689,14 @@ fn get_job_with(conn: &Connection, id: Uuid) -> Result<Job, StoreError> {
 fn row_to_job(row: &Row<'_>) -> rusqlite::Result<Job> {
     let id: String = row.get(0)?;
     let command: String = row.get(4)?;
-    let state: String = row.get(5)?;
-    let queue_order: Option<i64> = row.get(6)?;
-    let created_at: String = row.get(7)?;
-    let committed_at: Option<String> = row.get(8)?;
-    let started_at: Option<String> = row.get(9)?;
-    let finished_at: Option<String> = row.get(10)?;
-    let pid: Option<i64> = row.get(12)?;
+    let command_line: Option<String> = row.get(5)?;
+    let state: String = row.get(6)?;
+    let queue_order: Option<i64> = row.get(7)?;
+    let created_at: String = row.get(8)?;
+    let committed_at: Option<String> = row.get(9)?;
+    let started_at: Option<String> = row.get(10)?;
+    let finished_at: Option<String> = row.get(11)?;
+    let pid: Option<i64> = row.get(13)?;
     let parse = |value: &str| {
         DateTime::parse_from_rfc3339(value)
             .map(|time| time.with_timezone(&Utc))
@@ -681,18 +715,19 @@ fn row_to_job(row: &Row<'_>) -> rusqlite::Result<Job> {
         user: row.get(2)?,
         cwd: PathBuf::from(row.get::<_, String>(3)?),
         command: serde_json::from_str(&command).map_err(to_sql_error)?,
+        command_line,
         state: parse_state(&state).map_err(to_sql_error)?,
         queue_order,
         created_at: parse(&created_at)?,
         committed_at: parse_opt(committed_at)?,
         started_at: parse_opt(started_at)?,
         finished_at: parse_opt(finished_at)?,
-        exit_code: row.get(11)?,
+        exit_code: row.get(12)?,
         pid: pid
             .map(u32::try_from)
             .transpose()
             .map_err(|err| to_sql_error(err.to_string()))?,
-        failure_detail: row.get(13)?,
+        failure_detail: row.get(14)?,
     })
 }
 

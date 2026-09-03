@@ -54,7 +54,7 @@ stoker start
 # Create a DRAFT job in the target directory
 stoker add --user <USER_NAME> --name <JOB_NAME> --cmd <COMMAND>
 # Example:
-# stoker add --user alice --name exp-a --cmd python train.py --lr 0.0001
+# stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
 # Review it, then add it to the queue (<JOB_ID> comes from the previous command)
 # View the job details
@@ -109,7 +109,9 @@ stoker update
 stoker uninstall
 ```
 
-Everything after `--cmd` is passed unchanged to the program being run; put stoker's other options before `--cmd`.
+The command after `--cmd` must be enclosed in quotes as one complete command string.
+
+Jobs run in the background without an interactive terminal. Use non-interactive commands and flags.
 
 `--user` is a logical owner label, not an operating-system account or an authentication mechanism.
 

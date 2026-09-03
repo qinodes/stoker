@@ -30,8 +30,13 @@ fn add_records_absolute_cwd_as_draft() {
     let repo = TestRepo::new();
     let output = stoker_in(&repo.join("experiments/llama"))
         .args([
-            "add", "--user", "alice", "--name", "lr", "--cmd", "python", "train.py", "--lr",
-            "0.0001",
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "lr",
+            "--cmd",
+            "python train.py --lr 0.0001",
         ])
         .output()
         .unwrap();
@@ -43,19 +48,22 @@ fn add_records_absolute_cwd_as_draft() {
 
     let home = repo.join("experiments").join(".llama-stoker-home");
     let db = Connection::open(home.join("stoker.db")).unwrap();
-    let (state, cwd, command): (String, String, String) = db
-        .query_row("SELECT state, cwd, command FROM jobs LIMIT 1", [], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })
+    let (state, cwd, command, command_line): (String, String, String, String) = db
+        .query_row(
+            "SELECT state, cwd, command, command_line FROM jobs LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
         .unwrap();
     assert_eq!(state, "DRAFT");
     assert!(std::path::Path::new(&cwd).is_absolute());
     assert!(cwd.ends_with("experiments/llama"));
     assert_eq!(command, r#"["python","train.py","--lr","0.0001"]"#);
+    assert_eq!(command_line, "python train.py --lr 0.0001");
 }
 
 #[test]
-fn add_accepts_a_non_git_directory() {
+fn add_rejects_unquoted_multiple_command_arguments() {
     let repo = TestRepo::new();
     repo.write("tracked.txt", "changed\n");
     stoker_in(repo.path())
@@ -63,14 +71,69 @@ fn add_accepts_a_non_git_directory() {
             "add", "--user", "alice", "--name", "lr", "--cmd", "echo", "ok",
         ])
         .assert()
+        .failure();
+}
+
+#[test]
+fn add_accepts_a_non_git_directory_and_shell_command() {
+    let repo = TestRepo::new();
+    repo.write("tracked.txt", "changed\n");
+    stoker_in(repo.path())
+        .args(["add", "--user", "alice", "--name", "lr", "--cmd", "echo ok"])
+        .assert()
         .success();
+}
+
+#[test]
+fn add_parses_shell_command_for_show_but_preserves_raw_command() {
+    let repo = TestRepo::new();
+    let output = stoker_in(repo.path())
+        .args([
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "shell",
+            "--cmd",
+            "python --version && timeout /t 30",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let id = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .to_owned();
+
+    stoker_in(repo.path())
+        .args(["show", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "command: [\"python\", \"--version\", \"&&\", \"timeout\", \"/t\", \"30\"]",
+        ));
+
+    let home = repo.path().parent().unwrap().join(format!(
+        ".{}-stoker-home",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    let command_line: String = Connection::open(home.join("stoker.db"))
+        .unwrap()
+        .query_row(
+            "SELECT command_line FROM jobs WHERE id = ?1",
+            [&id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(command_line, "python --version && timeout /t 30");
 }
 
 #[test]
 fn add_requires_user() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
-        .args(["add", "--name", "lr", "--cmd", "echo", "ok"])
+        .args(["add", "--name", "lr", "--cmd", "echo ok"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--user"));
@@ -81,7 +144,7 @@ fn submit_command_is_no_longer_available() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
         .args([
-            "submit", "--user", "alice", "--name", "job", "--cmd", "echo", "ok",
+            "submit", "--user", "alice", "--name", "job", "--cmd", "echo ok",
         ])
         .assert()
         .failure()
@@ -99,14 +162,13 @@ fn jobs_user_filter_excludes_other_owners() {
             "--name",
             "alice-job",
             "--cmd",
-            "echo",
-            "alice",
+            "echo alice",
         ])
         .assert()
         .success();
     stoker_in(repo.path())
         .args([
-            "add", "--user", "bob", "--name", "bob-job", "--cmd", "echo", "bob",
+            "add", "--user", "bob", "--name", "bob-job", "--cmd", "echo bob",
         ])
         .assert()
         .success();
@@ -230,8 +292,7 @@ fn jobs_prints_header_before_rows() {
             "--name",
             "listed-job",
             "--cmd",
-            "echo",
-            "ok",
+            "echo ok",
         ])
         .assert()
         .success();
@@ -250,7 +311,13 @@ fn jobs_state_filter_shows_queue_order() {
     for (name, command) in [("queued-job", "queued"), ("draft-job", "draft")] {
         stoker_in(repo.path())
             .args([
-                "add", "--user", "alice", "--name", name, "--cmd", "echo", command,
+                "add",
+                "--user",
+                "alice",
+                "--name",
+                name,
+                "--cmd",
+                &format!("echo {command}"),
             ])
             .assert()
             .success();
@@ -297,8 +364,7 @@ fn show_displays_recorded_and_execution_directories() {
             "--name",
             "details-job",
             "--cmd",
-            "echo",
-            "ok",
+            "echo ok",
         ])
         .assert()
         .success();
@@ -332,8 +398,7 @@ fn jobs_alias_lists_submitted_job_ids() {
             "--name",
             "listed-job",
             "--cmd",
-            "echo",
-            "ok",
+            "echo ok",
         ])
         .output()
         .unwrap();

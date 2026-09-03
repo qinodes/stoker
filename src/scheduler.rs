@@ -1,6 +1,7 @@
 //! FIFO, single-slot execution of committed jobs.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -306,15 +307,31 @@ impl Scheduler {
             if !metadata.is_dir() {
                 anyhow::bail!("job cwd {} is not a directory", cwd.display());
             }
-            let (program, args) = job
-                .command
-                .split_first()
-                .ok_or_else(|| anyhow::anyhow!("job command is empty"))?;
+            let (program, args): (OsString, Vec<OsString>) =
+                if let Some(command_line) = job.command_line.as_deref() {
+                    #[cfg(unix)]
+                    {
+                        ("sh".into(), vec!["-c".into(), command_line.into()])
+                    }
+                    #[cfg(windows)]
+                    {
+                        ("cmd.exe".into(), vec!["/C".into(), command_line.into()])
+                    }
+                } else {
+                    let (program, args) = job
+                        .command
+                        .split_first()
+                        .ok_or_else(|| anyhow::anyhow!("job command is empty"))?;
+                    (
+                        program.clone().into(),
+                        args.iter().cloned().map(Into::into).collect(),
+                    )
+                };
             let process = self
                 .controller
                 .spawn(ProcessSpec {
-                    program: program.clone().into(),
-                    args: args.iter().cloned().map(Into::into).collect(),
+                    program,
+                    args,
                     cwd,
                     stdout_log: stdout.clone(),
                     stderr_log: stderr.clone(),

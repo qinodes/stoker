@@ -150,6 +150,48 @@ fn legacy_database_migrates_queued_jobs_to_queue_order() {
             .cwd
             .ends_with(PathBuf::from("repo").join("experiments/second"))
     );
+    assert_eq!(first_job.command_line, None);
+    assert_eq!(second_job.command_line, None);
+}
+
+#[test]
+fn current_database_without_command_line_gets_migrated() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("stoker.db");
+    Connection::open(&db_path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE jobs (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                user TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                command TEXT NOT NULL,
+                state TEXT NOT NULL,
+                queue_order INTEGER,
+                created_at TEXT NOT NULL,
+                committed_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                exit_code INTEGER,
+                pid INTEGER,
+                failure_detail TEXT
+            )",
+        )
+        .unwrap();
+
+    let store = Store::open(&db_path).unwrap();
+    let columns: Vec<String> = Connection::open(&db_path)
+        .unwrap()
+        .prepare("PRAGMA table_info(jobs)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(columns.iter().any(|column| column == "command_line"));
+    let id = store.create_job(new_job()).unwrap();
+    assert_eq!(store.get_job(id).unwrap().command_line, None);
 }
 
 #[test]
