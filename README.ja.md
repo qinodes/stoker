@@ -71,6 +71,12 @@ stoker commit --all
 stoker pause
 stoker resume
 
+# queued Job の順序を変更する前にロックし、完了後に明示的に解除
+stoker lock-queue
+stoker queue edit
+stoker status
+stoker unlock-queue
+
 # 確認と管理
 
 # scheduler の状態を確認
@@ -127,6 +133,27 @@ stoker uninstall
 Job は対話型 terminal のないバックグラウンドで実行されます。対話なしで実行できるコマンドとオプションを使用してください。
 
 `--user` は stoker の論理的な owner ラベルであり、OS アカウントや認証機能ではありません。
+
+## Queue のロックとエディター
+
+queue を編集する前に `stoker lock-queue` を実行し、scheduler に処理を再開させる準備ができたら `stoker unlock-queue` を実行します。ロックは永続的です。CLI の終了、scheduler の停止、scheduler の再起動後も有効です。ロック中、scheduler は別の `QUEUED` Job を claim しません。すでに `STARTING`、`RUNNING`、または `CANCELLING` の Job は停止せず、通常どおり完了できます。
+
+`stoker status` は常に `Queue: locked` または `Queue: unlocked` を表示します。ロック中は、scheduler が次の queued Job を開始しないことも表示します。Queue がロックされている間は、`stoker commit`、`stoker commit --all`、`stoker pause`、`stoker resume` が拒否されます。`stoker cancel` は引き続き使用でき、`stoker add` も `DRAFT` Job を作成するため使用できます。
+
+`stoker queue edit` は queue がロックされている場合にのみ使用できます。空の queue でもロックは成功し、`Queue locked. No queued jobs to reorder.` と表示されます。空の queue を編集すると `No queued jobs to reorder.` と表示され、空のターミナル UI は開きません。エディターを終了しても queue のロックは解除されません。
+
+エディターには実行順の `QUEUED` Job だけが表示されます。
+
+| モード | キー | 操作 |
+| --- | --- | --- |
+| Browse | `↑` / `↓` | Job を選択します。 |
+| Browse | `Enter` | 選択した Job の移動モードに入ります。 |
+| Browse | `q` | queue をロックしたままエディターを終了します。 |
+| Move | `↑` / `↓` | 選択した Job の位置を調整します。 |
+| Move | `Enter` | 移動を確定して Browse モードに戻ります。 |
+| Move | `q` | 現在の移動だけを元に戻して Browse モードに戻ります。 |
+
+編集中に別のターミナルが選択中の Job をキャンセルした場合、次の移動または取り消しでその Job が復元されることはありません。エディターは削除されたことを知らせ、queued の一覧を再読み込みします。別の queued Job がキャンセルされた場合、次の移動では現在の順序を使い、そのキャンセルを保持します。
 
 ## Job の状態とキャンセル
 

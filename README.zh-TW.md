@@ -72,6 +72,12 @@ stoker commit --all
 stoker pause
 stoker resume
 
+# 重新排序 queued Job 前先鎖定 queue，完成後明確解除鎖定
+stoker lock-queue
+stoker queue edit
+stoker status
+stoker unlock-queue
+
 # 查詢與管理
 
 # 查看 stoker server(scheduler) 狀態
@@ -127,6 +133,27 @@ stoker uninstall
 Job 會在背景執行，不具備互動式終端機。請使用非互動式指令與參數。
 
 `--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證；
+
+## Queue 鎖定與編輯器
+
+編輯 queue 前先執行 `stoker lock-queue`，準備讓 scheduler 繼續接收工作時再執行 `stoker unlock-queue`。鎖定狀態會持久保存：CLI 結束、scheduler 停止或重新啟動後仍然有效。鎖定時 scheduler 不會再 claim 其他 `QUEUED` Job。已經處於 `STARTING`、`RUNNING` 或 `CANCELLING` 的 Job 不會被停止，仍可正常完成。
+
+`stoker status` 一律顯示 `Queue: locked` 或 `Queue: unlocked`。鎖定時也會提示 scheduler 不會再啟動下一個 queued Job。Queue 鎖定時，`stoker commit`、`stoker commit --all`、`stoker pause` 與 `stoker resume` 都會被拒絕；`stoker cancel` 仍可使用，`stoker add` 也仍可使用，因為它建立的是 `DRAFT` Job。
+
+`stoker queue edit` 必須在 queue 已鎖定時使用。空 queue 仍可成功鎖定，並顯示 `Queue locked. No queued jobs to reorder.`；編輯空 queue 會成功顯示 `No queued jobs to reorder.`，不會開啟空白的終端機編輯器。離開編輯器不會解除 queue 鎖定。
+
+編輯器只顯示依執行順序排列的 `QUEUED` Job：
+
+| 模式 | 按鍵 | 動作 |
+| --- | --- | --- |
+| 瀏覽 | `↑` / `↓` | 選取 Job。 |
+| 瀏覽 | `Enter` | 對選取的 Job 進入移動模式。 |
+| 瀏覽 | `q` | 離開編輯器並保持 queue 鎖定。 |
+| 移動 | `↑` / `↓` | 調整選取 Job 的位置。 |
+| 移動 | `Enter` | 保留移動結果並返回瀏覽模式。 |
+| 移動 | `q` | 只復原目前這次移動，並返回瀏覽模式。 |
+
+如果另一個終端機在編輯期間取消了選取的 Job，下一次移動或復原不會把它恢復；編輯器會提示 Job 已移除並重新載入 queued 清單。如果被取消的是其他 queued Job，編輯器會在下一次移動時使用目前的順序，並保留該取消結果。
 
 ## Job 狀態與取消
 

@@ -71,6 +71,12 @@ stoker commit --all
 stoker pause
 stoker resume
 
+# Lock the queue before reordering queued jobs, then unlock it explicitly
+stoker lock-queue
+stoker queue edit
+stoker status
+stoker unlock-queue
+
 # Inspect and manage jobs
 
 # Check the scheduler status
@@ -127,6 +133,27 @@ The command after `--cmd` must be enclosed in quotes as one complete command str
 Jobs run in the background without an interactive terminal. Use non-interactive commands and flags.
 
 `--user` is a logical owner label, not an operating-system account or an authentication mechanism.
+
+## Queue lock and editor
+
+Use `stoker lock-queue` before editing the queue and `stoker unlock-queue` when you are ready to let the scheduler continue. The lock is durable: it remains after the CLI exits, the scheduler stops, or the scheduler restarts. While locked, the scheduler does not claim another `QUEUED` job. A job already `STARTING`, `RUNNING`, or `CANCELLING` is not stopped and can finish normally.
+
+`stoker status` always shows `Queue: locked` or `Queue: unlocked`. When locked, it also reports that the scheduler will not start another queued job. A locked queue rejects `stoker commit`, `stoker commit --all`, `stoker pause`, and `stoker resume`; `stoker cancel` remains available, and `stoker add` remains available because it creates a `DRAFT` job.
+
+`stoker queue edit` requires a locked queue. Locking an empty queue succeeds with `Queue locked. No queued jobs to reorder.` Editing an empty queue succeeds with `No queued jobs to reorder.` and does not open a blank editor. Leaving the editor never unlocks the queue.
+
+The editor shows only `QUEUED` jobs in execution order:
+
+| Mode | Keys | Action |
+| --- | --- | --- |
+| Browse | `↑` / `↓` | Select a job. |
+| Browse | `Enter` | Enter move mode for the selected job. |
+| Browse | `q` | Leave the editor and keep the queue locked. |
+| Move | `↑` / `↓` | Adjust the selected job's position. |
+| Move | `Enter` | Keep the move and return to browse mode. |
+| Move | `q` | Undo only the current move and return to browse mode. |
+
+If another terminal cancels the selected job while you are editing, the next move or undo will not restore it; the editor reports that it was removed and reloads the queued list. If a different queued job is cancelled, the editor uses the current order on the next move and preserves that cancellation.
 
 ## Job states and cancellation
 
