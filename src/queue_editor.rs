@@ -424,9 +424,11 @@ fn render<T: TerminalBackend>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::io;
     use std::path::PathBuf;
+    use std::rc::Rc;
 
     use chrono::Utc;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -791,7 +793,7 @@ mod tests {
         let second_id = second.id;
         let third_id = third.id;
         let initial_ids = vec![first.id, second_id, third_id];
-        let mut persisted = vec![first, second, third];
+        let persisted = Rc::new(RefCell::new(vec![first, second, third]));
         let mut moves = Vec::new();
         let mut terminal = RecordingTerminal::with_events([
             key(KeyCode::Down),
@@ -805,12 +807,15 @@ mod tests {
             key(KeyCode::Char('q')),
             key(KeyCode::Char('q')),
         ]);
+        let move_state = Rc::clone(&persisted);
+        let reload_state = Rc::clone(&persisted);
 
         run_queue_editor_with_input(
             &mut terminal,
-            persisted.clone(),
+            persisted.borrow().clone(),
             |id, target_order| {
                 moves.push((id, target_order));
+                let mut persisted = move_state.borrow_mut();
                 let selected = persisted
                     .iter()
                     .position(|job| job.id == id)
@@ -822,7 +827,7 @@ mod tests {
                 }
                 Ok::<_, anyhow::Error>(persisted.clone())
             },
-            || Ok::<_, anyhow::Error>(persisted.clone()),
+            move || Ok::<_, anyhow::Error>(reload_state.borrow().clone()),
         )
         .unwrap();
 
@@ -831,7 +836,11 @@ mod tests {
             vec![(second_id, 1), (second_id, 2), (third_id, 2), (third_id, 3),]
         );
         assert_eq!(
-            persisted.iter().map(|job| job.id).collect::<Vec<_>>(),
+            persisted
+                .borrow()
+                .iter()
+                .map(|job| job.id)
+                .collect::<Vec<_>>(),
             initial_ids
         );
         terminal.assert_cleaned_up();
