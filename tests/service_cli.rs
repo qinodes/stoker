@@ -76,12 +76,12 @@ fn start_detaches_and_status_reports_running_service() {
 }
 
 #[test]
-fn stop_requires_running_service() {
+fn stop_when_service_is_not_running_is_successful() {
     stoker_with_home(TempStokerHome::new())
         .args(["stop"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("Start it with 'stoker start'"));
+        .success()
+        .stdout(predicate::str::contains("Scheduler is not running."));
 }
 
 #[test]

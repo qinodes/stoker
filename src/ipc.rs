@@ -276,21 +276,25 @@ impl ServiceClient {
     }
 
     fn service_lock_is_available(&self) -> bool {
-        let Ok(lock) = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .open(&self.paths.lock)
-        else {
-            return false;
-        };
-        if lock.try_lock_exclusive().is_err() {
-            return false;
-        }
-        let _ = FileExt::unlock(&lock);
-        true
+        service_lock_is_available(&self.paths)
     }
+}
+
+fn service_lock_is_available(paths: &StokerPaths) -> bool {
+    let Ok(lock) = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&paths.lock)
+    else {
+        return false;
+    };
+    if lock.try_lock_exclusive().is_err() {
+        return false;
+    }
+    let _ = FileExt::unlock(&lock);
+    true
 }
 
 pub(crate) async fn send_response<S>(
@@ -324,6 +328,7 @@ async fn connect_with_retry(paths: &StokerPaths) -> std::io::Result<IpcStream> {
                 Ok(client) => return Ok(client),
                 Err(error)
                     if error.kind() == std::io::ErrorKind::NotFound
+                        && !service_lock_is_available(paths)
                         && tokio::time::Instant::now() < deadline =>
                 {
                     // The service creates a fresh named-pipe instance after
@@ -344,6 +349,7 @@ async fn connect_with_retry(paths: &StokerPaths) -> std::io::Result<IpcStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn frames_include_protocol_version_and_round_trip() {
@@ -372,6 +378,29 @@ mod tests {
             error
                 .to_string()
                 .contains("unsupported IPC protocol version")
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn missing_service_returns_without_waiting_for_retry_window() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = StokerPaths {
+            database: root.path().join("stoker.db"),
+            runs: root.path().join("runs"),
+            lock: root.path().join("stoker.lock"),
+            endpoint: root.path().join("stoker.sock"),
+            root: root.path().to_path_buf(),
+        };
+        let started = Instant::now();
+
+        let error = connect_with_retry(&paths).await.unwrap_err();
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "missing service took {:?} to report unavailable",
+            started.elapsed()
         );
     }
 }

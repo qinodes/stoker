@@ -245,7 +245,8 @@ fn stop() -> anyhow::Result<()> {
             runtime()?.block_on(client.stop())
         }
         Err(error) if is_service_unavailable(&error) => {
-            anyhow::bail!("Scheduler is not running. Start it with 'stoker start'.")
+            println!("Scheduler is not running.");
+            Ok(())
         }
         Err(error) => Err(error),
     }
@@ -545,15 +546,15 @@ fn schedule_windows_update(
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn windows_uninstall_script(process_id: u32, executable: &Path) -> String {
     format!(
-        "@echo off\r\n:wait_for_stoker\r\ntasklist /FI \"PID eq {process_id}\" /NH | findstr \"{process_id}\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait_for_stoker\r\n)\r\ndel /F /Q \"{}\"\r\ndel \"%~f0\"\r\n",
+        "@echo off\r\n:wait_for_stoker\r\ntasklist /FI \"PID eq {process_id}\" /NH | findstr \"{process_id}\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait_for_stoker\r\n)\r\ndel /F /Q \"{}\"\r\nstart \"\" /B \"%ComSpec%\" /C del /F /Q \"%~f0\" >NUL 2>&1\r\nexit /B 0\r\n",
         executable.display()
     )
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn windows_update_script(
     process_id: u32,
     executable: &Path,
@@ -561,7 +562,7 @@ fn windows_update_script(
     update_dir: &Path,
 ) -> String {
     format!(
-        "@echo off\r\n:wait_for_stoker\r\ntasklist /FI \"PID eq {process_id}\" /NH | findstr \"{process_id}\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait_for_stoker\r\n)\r\nmove /Y \"{}\" \"{}\" >NUL\r\nif errorlevel 1 (\r\n  echo Failed to replace Stoker executable.\r\n  exit /b 1\r\n)\r\nrmdir /S /Q \"{}\"\r\ndel \"%~f0\"\r\n",
+        "@echo off\r\n:wait_for_stoker\r\ntasklist /FI \"PID eq {process_id}\" /NH | findstr \"{process_id}\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait_for_stoker\r\n)\r\nmove /Y \"{}\" \"{}\" >NUL\r\nif errorlevel 1 (\r\n  echo Failed to replace Stoker executable.\r\n  exit /b 1\r\n)\r\nrmdir /S /Q \"{}\"\r\nstart \"\" /B \"%ComSpec%\" /C del /F /Q \"%~f0\" >NUL 2>&1\r\nexit /B 0\r\n",
         update_binary.display(),
         executable.display(),
         update_dir.display()
@@ -894,7 +895,7 @@ mod update_tests {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod windows_uninstall_tests {
     use super::{windows_uninstall_script, windows_update_script};
     use std::path::Path;
@@ -904,6 +905,8 @@ mod windows_uninstall_tests {
         let script = windows_uninstall_script(1234, Path::new(r"C:\Tools\stoker.exe"));
         assert!(script.contains("PID eq 1234"));
         assert!(script.contains("del /F /Q \"C:\\Tools\\stoker.exe\""));
+        assert!(script.contains("start \"\" /B \"%ComSpec%\" /C del /F /Q \"%~f0\" >NUL 2>&1"));
+        assert!(script.ends_with("exit /B 0\r\n"));
     }
 
     #[test]
@@ -916,5 +919,7 @@ mod windows_uninstall_tests {
         );
         assert!(script.contains("PID eq 1234"));
         assert!(script.contains("move /Y \"C:\\Temp\\stoker.exe\" \"C:\\Tools\\stoker.exe\""));
+        assert!(script.contains("start \"\" /B \"%ComSpec%\" /C del /F /Q \"%~f0\" >NUL 2>&1"));
+        assert!(script.ends_with("exit /B 0\r\n"));
     }
 }
