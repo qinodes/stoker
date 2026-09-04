@@ -211,6 +211,9 @@ fn queue_edit_requires_a_locked_queue() {
 #[test]
 fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
     let home = TempStokerHome::new();
+    let _cleanup = ServiceCleanup {
+        home: home.path().to_path_buf(),
+    };
     let cwd = tempfile::tempdir().unwrap();
     let store = Store::open(home.path().join("stoker.db")).unwrap();
     let active = store
@@ -287,6 +290,9 @@ fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
 
 fn run_queue_edit_cancel_race(cancel_selected: bool) {
     let home = TempStokerHome::new();
+    let _cleanup = ServiceCleanup {
+        home: home.path().to_path_buf(),
+    };
     let cwd = tempfile::tempdir().unwrap();
     let store = Store::open(home.path().join("stoker.db")).unwrap();
     let active = store
@@ -306,9 +312,6 @@ fn run_queue_edit_cancel_race(cancel_selected: bool) {
     }
 
     start_service(&home);
-    let _cleanup = ServiceCleanup {
-        home: home.path().to_path_buf(),
-    };
     wait_for_state(&store, active, JobState::Running);
 
     let paths = service_paths(&home);
@@ -379,6 +382,85 @@ fn queue_edit_cancel_selected_race_does_not_resurrect_cancelled_job() {
 #[test]
 fn queue_edit_cancel_non_selected_race_does_not_resurrect_cancelled_job() {
     run_queue_edit_cancel_race(false);
+}
+
+#[test]
+fn queue_edit_selected_move_cancel_then_stale_rollback_does_not_resurrect_job() {
+    let home = TempStokerHome::new();
+    let _cleanup = ServiceCleanup {
+        home: home.path().to_path_buf(),
+    };
+    let cwd = tempfile::tempdir().unwrap();
+    let store = Store::open(home.path().join("stoker.db")).unwrap();
+    let active = store
+        .create_job(long_running_job("active", cwd.path().to_path_buf()))
+        .unwrap();
+    let first = store
+        .create_job(queued_job("first", cwd.path().to_path_buf()))
+        .unwrap();
+    let second = store
+        .create_job(queued_job("second", cwd.path().to_path_buf()))
+        .unwrap();
+    let selected = store
+        .create_job(queued_job("selected", cwd.path().to_path_buf()))
+        .unwrap();
+    for id in [active, first, second, selected] {
+        store.commit_job(id).unwrap();
+    }
+
+    start_service(&home);
+    wait_for_state(&store, active, JobState::Running);
+
+    let paths = service_paths(&home);
+    let runtime = Runtime::new().unwrap();
+    let editor_client = ServiceClient::new(paths.clone());
+    let cancel_client = ServiceClient::new(paths);
+    runtime.block_on(editor_client.lock_queue()).unwrap();
+    wait_for_service_status(&runtime, &editor_client, "queue lock", |status| {
+        status.queue_locked && status.queued_jobs == 3
+    });
+
+    let moved = runtime
+        .block_on(editor_client.move_queued(selected, 1))
+        .unwrap();
+    assert_eq!(
+        moved.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [selected, first, second]
+    );
+
+    // A second terminal cancels the job after the editor has persisted its
+    // move. The editor then attempts its stale move-mode rollback.
+    runtime.block_on(cancel_client.cancel(selected)).unwrap();
+    wait_for_state(&store, selected, JobState::Cancelled);
+    let rollback = runtime.block_on(editor_client.move_queued(selected, 3));
+    let rollback_error = rollback.unwrap_err();
+    assert!(
+        rollback_error.to_string().contains("cannot move job"),
+        "unexpected stale rollback result: {rollback_error:#}"
+    );
+
+    let status = wait_for_service_status(
+        &runtime,
+        &editor_client,
+        "stale rollback result",
+        |status| {
+            status.queue_locked && status.active_job == Some(active) && status.queued_jobs == 2
+        },
+    );
+    assert!(status.queue_locked);
+    assert_eq!(store.get_job(selected).unwrap().state, JobState::Cancelled);
+    assert_eq!(store.get_job(selected).unwrap().queue_order, None);
+    let queued = store
+        .list_jobs_with_state(None, Some(JobState::Queued))
+        .unwrap();
+    assert_eq!(
+        queued.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [first, second]
+    );
+    assert_eq!(
+        queued.iter().map(|job| job.queue_order).collect::<Vec<_>>(),
+        [Some(1), Some(2)]
+    );
 }
 
 #[test]

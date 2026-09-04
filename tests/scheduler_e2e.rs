@@ -116,6 +116,17 @@ fn long_running_command() -> &'static str {
     }
 }
 
+fn completing_command() -> &'static str {
+    #[cfg(unix)]
+    {
+        "sleep 5"
+    }
+    #[cfg(windows)]
+    {
+        "ping 127.0.0.1 -n 6 > NUL"
+    }
+}
+
 fn follow_command() -> &'static str {
     #[cfg(unix)]
     {
@@ -430,16 +441,16 @@ fn stop_releases_queued_log_followers() {
 #[test]
 fn queue_lock_scheduler_does_not_claim_until_restart_and_unlock_then_uses_edited_order() {
     let repo = TestRepo::new();
+    let home = home_for(&repo);
+    let _cleanup = ServiceCleanup { home: home.clone() };
     let order_dir = tempfile::tempdir().unwrap();
     let order_path = order_dir.path().join("order.log");
-    let active = add_script(&repo, long_running_command(), "active");
+    let active = add_script(&repo, completing_command(), "active");
     let first = add_script(&repo, &order_job(&repo, "first", &order_path), "first");
     let second = add_script(&repo, &order_job(&repo, "second", &order_path), "second");
     let third = add_script(&repo, &order_job(&repo, "third", &order_path), "third");
 
     start_service_and_commit(&[active, first, second, third]);
-    let home = homes().lock().unwrap().get(&active).cloned().unwrap();
-    let _cleanup = ServiceCleanup { home: home.clone() };
     wait_for_state(active, JobState::Running);
 
     let paths = service_paths(&home);
@@ -458,8 +469,7 @@ fn queue_lock_scheduler_does_not_claim_until_restart_and_unlock_then_uses_edited
 
     // The active job is allowed to finish, but the lock must prevent the
     // scheduler from claiming any of the reordered queued jobs.
-    runtime.block_on(client.cancel(active)).unwrap();
-    wait_for_state(active, JobState::Cancelled);
+    wait_for_state(active, JobState::Succeeded);
     wait_for_service_status(&runtime, &client, "locked idle scheduler", |status| {
         status.queue_locked && status.active_job.is_none() && status.queued_jobs == 3
     });
