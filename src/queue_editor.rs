@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use anyhow::Context;
 use crossterm::cursor::{Hide, MoveTo, Show};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use uuid::Uuid;
@@ -350,7 +350,11 @@ where
         if state.jobs.is_empty() {
             return Ok(());
         }
-        let intent = state.reduce(terminal.read_key()?);
+        let key = terminal.read_key()?;
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        let intent = state.reduce(key);
         match intent {
             EditorIntent::None => {}
             EditorIntent::Exit => return Ok(()),
@@ -431,7 +435,7 @@ mod tests {
     use std::rc::Rc;
 
     use chrono::Utc;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
     use uuid::Uuid;
 
     use crate::{Job, JobState};
@@ -464,6 +468,10 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::CONTROL)
     }
 
+    fn key_with_kind(code: KeyCode, kind: KeyEventKind) -> KeyEvent {
+        KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind)
+    }
+
     #[test]
     fn browse_down_selects_the_next_row() {
         let jobs = vec![job("first", 1), job("second", 2)];
@@ -471,6 +479,31 @@ mod tests {
 
         assert_eq!(state.reduce(key(KeyCode::Down)), EditorIntent::None);
         assert_eq!(state.selected_index(), 1);
+    }
+
+    #[test]
+    fn key_release_does_not_move_selection_again() {
+        let mut terminal = RecordingTerminal::with_events([
+            key(KeyCode::Down),
+            key_with_kind(KeyCode::Down, KeyEventKind::Release),
+            key(KeyCode::Char('q')),
+        ]);
+
+        run_queue_editor_with_input(
+            &mut terminal,
+            vec![job("first", 1), job("second", 2), job("third", 3)],
+            |_id, _target| -> Result<Vec<Job>, anyhow::Error> { unreachable!() },
+            || -> anyhow::Result<Vec<Job>> { unreachable!() },
+        )
+        .unwrap();
+
+        let rendered_rows = terminal
+            .output
+            .lines()
+            .filter(|line| line.starts_with("> "))
+            .collect::<Vec<_>>();
+        assert!(rendered_rows.iter().any(|line| line.contains("second")));
+        assert!(!rendered_rows.iter().any(|line| line.contains("third")));
     }
 
     #[test]
@@ -493,6 +526,7 @@ mod tests {
     fn up_returns_move_intent_for_the_new_position() {
         let first = job("first", 1);
         let second = job("second", 2);
+        let first_id = first.id;
         let second_id = second.id;
         let mut state = EditorState::new(vec![first, second]);
         state.reduce(key(KeyCode::Down));
@@ -507,7 +541,7 @@ mod tests {
         );
         assert_eq!(
             state.jobs().iter().map(|job| job.id).collect::<Vec<_>>(),
-            vec![second_id, first.id]
+            vec![second_id, first_id]
         );
     }
 
@@ -542,7 +576,11 @@ mod tests {
             }
         );
 
-        state.replace_jobs_after_move(vec![second, first], second_id, 2);
+        let mut moved_jobs = vec![second, first];
+        for (index, job) in moved_jobs.iter_mut().enumerate() {
+            job.queue_order = Some((index + 1) as i64);
+        }
+        state.replace_jobs_after_move(moved_jobs, second_id, 2);
 
         assert_eq!(
             state.mode(),
@@ -698,8 +736,8 @@ mod tests {
         run_queue_editor_with_input(
             &mut terminal,
             vec![job("first", 1)],
-            |_id, _target| unreachable!(),
-            || unreachable!(),
+            |_id, _target| -> Result<Vec<Job>, anyhow::Error> { unreachable!() },
+            || -> anyhow::Result<Vec<Job>> { unreachable!() },
         )
         .unwrap();
 
@@ -714,8 +752,10 @@ mod tests {
         let error = run_queue_editor_with_input(
             &mut terminal,
             vec![job("first", 1), job("second", 2)],
-            |_id, _target| Err(anyhow::anyhow!("simulated move failure")),
-            || unreachable!(),
+            |_id, _target| -> Result<Vec<Job>, anyhow::Error> {
+                Err(anyhow::anyhow!("simulated move failure"))
+            },
+            || -> anyhow::Result<Vec<Job>> { unreachable!() },
         )
         .unwrap_err();
 
@@ -730,8 +770,8 @@ mod tests {
         run_queue_editor_with_input(
             &mut terminal,
             vec![job("first", 1)],
-            |_id, _target| unreachable!(),
-            || unreachable!(),
+            |_id, _target| -> Result<Vec<Job>, anyhow::Error> { unreachable!() },
+            || -> anyhow::Result<Vec<Job>> { unreachable!() },
         )
         .unwrap();
 
@@ -810,9 +850,10 @@ mod tests {
         let move_state = Rc::clone(&persisted);
         let reload_state = Rc::clone(&persisted);
 
+        let initial_jobs = persisted.borrow().clone();
         run_queue_editor_with_input(
             &mut terminal,
-            persisted.borrow().clone(),
+            initial_jobs,
             |id, target_order| {
                 moves.push((id, target_order));
                 let mut persisted = move_state.borrow_mut();
