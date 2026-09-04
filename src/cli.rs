@@ -53,8 +53,6 @@ pub enum CliCommand {
     #[command(name = "service-run", hide = true)]
     ServiceRun,
     Status,
-    LockQueue,
-    UnlockQueue,
     Queue {
         #[command(subcommand)]
         command: QueueCommand,
@@ -78,7 +76,9 @@ pub enum CliCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum QueueCommand {
+    Lock,
     Edit,
+    Unlock,
 }
 
 #[derive(Debug, Args)]
@@ -125,10 +125,10 @@ pub fn run_command(command: CliCommand) -> anyhow::Result<()> {
         CliCommand::Start => start(),
         CliCommand::ServiceRun => service_run(),
         CliCommand::Status => status(),
-        CliCommand::LockQueue => lock_queue(),
-        CliCommand::UnlockQueue => unlock_queue(),
         CliCommand::Queue { command } => match command {
+            QueueCommand::Lock => lock_queue(),
             QueueCommand::Edit => queue_edit(),
+            QueueCommand::Unlock => unlock_queue(),
         },
         CliCommand::Stop(args) => stop(args.yes),
         CliCommand::Commit { id, all } => commit(id, all),
@@ -360,7 +360,7 @@ fn queue_edit() -> anyhow::Result<()> {
     let paths = open_paths()?;
     let snapshot = queue_snapshot(&paths)?;
     if !snapshot.locked {
-        anyhow::bail!("Queue is unlocked. Run 'stoker lock-queue' first.");
+        anyhow::bail!("Queue is unlocked. Run 'stoker queue lock' first.");
     }
 
     let store = Store::open(&paths.database)?;
@@ -1096,6 +1096,17 @@ mod update_tests {
     #[test]
     fn uninstall_is_a_valid_cli_command() {
         assert!(Cli::try_parse_from(["stoker", "uninstall"]).is_ok());
+    }
+
+    #[test]
+    fn queue_operations_use_one_consistent_namespace() {
+        for args in [
+            ["stoker", "queue", "lock"],
+            ["stoker", "queue", "edit"],
+            ["stoker", "queue", "unlock"],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
     }
 
     #[test]

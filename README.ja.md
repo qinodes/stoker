@@ -72,10 +72,10 @@ stoker pause
 stoker resume
 
 # queued Job の順序を変更する前にロックし、完了後に明示的に解除
-stoker lock-queue
+stoker queue lock
 stoker queue edit
 stoker status
-stoker unlock-queue
+stoker queue unlock
 
 # 確認と管理
 
@@ -136,7 +136,7 @@ Job は対話型 terminal のないバックグラウンドで実行されます
 
 ## Queue のロックとエディター
 
-queue を編集する前に `stoker lock-queue` を実行し、scheduler に処理を再開させる準備ができたら `stoker unlock-queue` を実行します。ロックは永続的です。CLI の終了、scheduler の停止、scheduler の再起動後も有効です。ロック中、scheduler は別の `QUEUED` Job を claim しません。すでに `STARTING`、`RUNNING`、または `CANCELLING` の Job は停止せず、通常どおり完了できます。
+queue を編集する前に `stoker queue lock` を実行し、scheduler に処理を再開させる準備ができたら `stoker queue unlock` を実行します。ロックは永続的です。CLI の終了、scheduler の停止、scheduler の再起動後も有効です。ロック中、scheduler は別の `QUEUED` Job を claim しません。すでに `STARTING`、`RUNNING`、または `CANCELLING` の Job は停止せず、通常どおり完了できます。
 
 `stoker status` は常に `Queue: locked` または `Queue: unlocked` を表示します。ロック中は、scheduler が次の queued Job を開始しないことも表示します。Queue がロックされている間は、`stoker commit`、`stoker commit --all`、`stoker pause`、`stoker resume` が拒否されます。`stoker cancel` は引き続き使用でき、`stoker add` も `DRAFT` Job を作成するため使用できます。
 

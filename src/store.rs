@@ -57,9 +57,9 @@ pub enum StoreError {
         state: JobState,
         action: &'static str,
     },
-    #[error("queue is locked; run 'stoker unlock-queue'")]
+    #[error("queue is locked; run 'stoker queue unlock'")]
     QueueLocked,
-    #[error("queue is unlocked; run 'stoker lock-queue' first")]
+    #[error("queue is unlocked; run 'stoker queue lock' first")]
     QueueUnlocked,
     #[error("cannot move job {id} to queue position {target_order}; queue has {queued_count} jobs")]
     InvalidQueueOrder {

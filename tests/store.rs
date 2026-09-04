@@ -70,7 +70,7 @@ fn queue_lock_rejects_queue_mutations_but_allows_cancellation() {
 
     let commit_error = store.commit_job(draft).unwrap_err();
     assert!(matches!(&commit_error, StoreError::QueueLocked));
-    assert!(commit_error.to_string().contains("stoker unlock-queue"));
+    assert!(commit_error.to_string().contains("stoker queue unlock"));
     assert!(matches!(
         store.commit_all_drafts(),
         Err(StoreError::QueueLocked)

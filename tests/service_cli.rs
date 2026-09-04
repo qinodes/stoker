@@ -139,12 +139,12 @@ fn queue_lock_stopped_service_is_idempotent_and_status_reports_state() {
     let home = TempStokerHome::new();
 
     stoker_with_home(&home)
-        .args(["lock-queue"])
+        .args(["queue", "lock"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Queue locked."));
     stoker_with_home(&home)
-        .args(["lock-queue"])
+        .args(["queue", "lock"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Queue already locked."));
@@ -161,12 +161,12 @@ fn queue_lock_stopped_service_is_idempotent_and_status_reports_state() {
         );
 
     stoker_with_home(&home)
-        .args(["unlock-queue"])
+        .args(["queue", "unlock"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Queue unlocked."));
     stoker_with_home(&home)
-        .args(["unlock-queue"])
+        .args(["queue", "unlock"])
         .assert()
         .success()
         .stdout(predicate::str::contains("Queue already unlocked."));
@@ -184,7 +184,7 @@ fn queue_lock_stopped_service_is_idempotent_and_status_reports_state() {
 fn locking_empty_queue_reports_that_there_is_nothing_to_reorder() {
     let home = TempStokerHome::new();
     stoker_with_home(&home)
-        .args(["lock-queue"])
+        .args(["queue", "lock"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -204,7 +204,7 @@ fn queue_edit_requires_a_locked_queue() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "Queue is unlocked. Run 'stoker lock-queue' first.",
+            "Queue is unlocked. Run 'stoker queue lock' first.",
         ));
 }
 
@@ -232,7 +232,7 @@ fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
         .unwrap();
 
     stoker_with_home(&home)
-        .args(["lock-queue"])
+        .args(["queue", "lock"])
         .assert()
         .success();
     stoker_with_home(&home)
@@ -250,7 +250,7 @@ fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
         .failure()
         .stderr(
             predicate::str::contains("queue is locked")
-                .and(predicate::str::contains("stoker unlock-queue")),
+                .and(predicate::str::contains("stoker queue unlock")),
         );
     stoker_with_home(&home)
         .args(["commit", "--all"])
@@ -258,7 +258,7 @@ fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
         .failure()
         .stderr(
             predicate::str::contains("queue is locked")
-                .and(predicate::str::contains("stoker unlock-queue")),
+                .and(predicate::str::contains("stoker queue unlock")),
         );
     stoker_with_home(&home)
         .args(["pause"])
@@ -266,7 +266,7 @@ fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
         .failure()
         .stderr(
             predicate::str::contains("queue is locked")
-                .and(predicate::str::contains("stoker unlock-queue")),
+                .and(predicate::str::contains("stoker queue unlock")),
         );
     stoker_with_home(&home)
         .args(["resume"])
@@ -274,7 +274,7 @@ fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
         .failure()
         .stderr(
             predicate::str::contains("queue is locked")
-                .and(predicate::str::contains("stoker unlock-queue")),
+                .and(predicate::str::contains("stoker queue unlock")),
         );
     stoker_with_home(&home)
         .args(["cancel", &queued.to_string(), "--yes"])

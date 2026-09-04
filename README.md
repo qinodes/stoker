@@ -72,10 +72,10 @@ stoker pause
 stoker resume
 
 # Lock the queue before reordering queued jobs, then unlock it explicitly
-stoker lock-queue
+stoker queue lock
 stoker queue edit
 stoker status
-stoker unlock-queue
+stoker queue unlock
 
 # Inspect and manage jobs
 
@@ -136,7 +136,7 @@ Jobs run in the background without an interactive terminal. Use non-interactive 
 
 ## Queue lock and editor
 
-Use `stoker lock-queue` before editing the queue and `stoker unlock-queue` when you are ready to let the scheduler continue. The lock is durable: it remains after the CLI exits, the scheduler stops, or the scheduler restarts. While locked, the scheduler does not claim another `QUEUED` job. A job already `STARTING`, `RUNNING`, or `CANCELLING` is not stopped and can finish normally.
+Use `stoker queue lock` before editing the queue and `stoker queue unlock` when you are ready to let the scheduler continue. The lock is durable: it remains after the CLI exits, the scheduler stops, or the scheduler restarts. While locked, the scheduler does not claim another `QUEUED` job. A job already `STARTING`, `RUNNING`, or `CANCELLING` is not stopped and can finish normally.
 
 `stoker status` always shows `Queue: locked` or `Queue: unlocked`. When locked, it also reports that the scheduler will not start another queued job. A locked queue rejects `stoker commit`, `stoker commit --all`, `stoker pause`, and `stoker resume`; `stoker cancel` remains available, and `stoker add` remains available because it creates a `DRAFT` job.
 
