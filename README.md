@@ -95,11 +95,13 @@ stoker logs -f <JOB_ID>
 
 # Cancel a job (DRAFT, QUEUED, PAUSED, STARTING, RUNNING, or CANCELLING)
 stoker cancel <JOB_ID>
+# Add --yes to skip the confirmation prompt in scripts.
 
 # Stop the scheduler
 # If a job is active, stoker asks before force-cancelling it.
 # QUEUED and PAUSED jobs remain for the next scheduler run.
 stoker stop
+# Add --yes to skip the confirmation prompt in scripts.
 
 # Show the current version
 stoker --version
@@ -107,12 +109,14 @@ stoker --version
 # Update to the latest version
 # Stop the scheduler before updating.
 stoker update
+# Add --yes to skip the confirmation prompt in scripts.
 
 # Uninstall
 # Stop the scheduler before uninstalling.
 # Job data and logs are kept in the Stoker data folder
 # (macOS/Linux: ~/.stoker; Windows: %USERPROFILE%\.stoker).
 stoker uninstall
+# Add --yes to skip the confirmation prompt in scripts.
 ```
 
 The command after `--cmd` must be enclosed in quotes as one complete command string.

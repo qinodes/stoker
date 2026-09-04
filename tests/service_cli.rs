@@ -85,6 +85,19 @@ fn stop_when_service_is_not_running_is_successful() {
 }
 
 #[test]
+fn cancel_requires_confirmation() {
+    stoker_with_home(TempStokerHome::new())
+        .args(["cancel", "00000000-0000-0000-0000-000000000001"])
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Cancel job 00000000-0000-0000-0000-000000000001? [y/N]:")
+                .and(predicate::str::contains("Cancel cancelled.")),
+        );
+}
+
+#[test]
 fn serve_command_is_no_longer_available() {
     stoker_with_home(TempStokerHome::new())
         .args(["serve"])

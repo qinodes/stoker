@@ -96,11 +96,13 @@ stoker logs -f <JOB_ID>
 
 # 取消指定Job（DRAFT、QUEUED、PAUSED、STARTING、RUNNING、CANCELLING 都可以取消）
 stoker cancel <JOB_ID>
+# 在腳本中可加上 --yes 略過確認提示。
 
 # 停止server(scheduler)
 # 若有正在執行的 Job，stoker 會先詢問是否強制取消
 # `QUEUED` 與 `PAUSED` Job 會保留，等下次啟動 scheduler 後再處理
 stoker stop
+# 在腳本中可加上 --yes 略過確認提示。
 
 # 查看當前版本
 stoker --version
@@ -108,11 +110,13 @@ stoker --version
 # 更新到最新版
 # 更新前要先停止 scheduler
 stoker update
+# 在腳本中可加上 --yes 略過確認提示。
 
 # 解除安裝
 # 解除前要先停止 scheduler
 # Job 資料與 logs 會保留在 Stoker 資料夾（預設為 macOS／Linux 的 `~/.stoker`、Windows 的 `%USERPROFILE%\.stoker`）。
 stoker uninstall
+# 在腳本中可加上 --yes 略過確認提示。
 ```
 
 `--cmd` 後面的完整指令必須用引號包住。

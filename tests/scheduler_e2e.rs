@@ -188,14 +188,14 @@ pub fn stoker_logs_follow(id: Uuid) -> assert_cmd::Command {
 pub fn stoker_cancel(id: Uuid) -> assert_cmd::Command {
     let home = homes().lock().unwrap().get(&id).cloned().unwrap();
     let mut command = stoker_with_home(&home);
-    command.args(["cancel", &id.to_string()]);
+    command.args(["cancel", &id.to_string(), "--yes"]);
     command
 }
 
 pub fn stoker_stop(id: Uuid) -> assert_cmd::Command {
     let home = homes().lock().unwrap().get(&id).cloned().unwrap();
     let mut command = stoker_with_home(&home);
-    command.args(["stop"]).write_stdin("y\n");
+    command.args(["stop", "--yes"]);
     command
 }
 

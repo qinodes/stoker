@@ -95,11 +95,13 @@ stoker logs -f <JOB_ID>
 
 # Job をキャンセル（DRAFT、QUEUED、PAUSED、STARTING、RUNNING、CANCELLING）
 stoker cancel <JOB_ID>
+# スクリプトでは --yes を付けて確認プロンプトを省略できます。
 
 # scheduler を停止
 # 実行中の Job がある場合、強制キャンセル前に確認します。
 # QUEUED と PAUSED の Job は次回の scheduler 起動時まで保持されます。
 stoker stop
+# スクリプトでは --yes を付けて確認プロンプトを省略できます。
 
 # 現在のバージョンを表示
 stoker --version
@@ -107,12 +109,14 @@ stoker --version
 # 最新版に更新
 # 更新前に scheduler を停止してください。
 stoker update
+# スクリプトでは --yes を付けて確認プロンプトを省略できます。
 
 # アンインストール
 # アンインストール前に scheduler を停止してください。
 # Job データとログは Stoker のデータフォルダーに保持されます
 # （macOS/Linux: ~/.stoker、Windows: %USERPROFILE%\.stoker）。
 stoker uninstall
+# スクリプトでは --yes を付けて確認プロンプトを省略できます。
 ```
 
 `--cmd` の後ろの完全なコマンドは、引用符で囲む必要があります。

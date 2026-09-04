@@ -44,14 +44,14 @@ pub enum CliCommand {
     #[command(about = "Remove terminal job records and logs")]
     Clean,
     #[command(about = "Update stoker from GitHub Releases")]
-    Update,
+    Update(ConfirmationArgs),
     #[command(about = "Uninstall stoker with confirmation")]
-    Uninstall,
+    Uninstall(ConfirmationArgs),
     Start,
     #[command(name = "service-run", hide = true)]
     ServiceRun,
     Status,
-    Stop,
+    Stop(ConfirmationArgs),
     Commit {
         #[arg(required_unless_present = "all", conflicts_with = "all")]
         id: Option<Uuid>,
@@ -60,9 +60,7 @@ pub enum CliCommand {
     },
     Pause,
     Resume,
-    Cancel {
-        id: Uuid,
-    },
+    Cancel(CancelArgs),
     Logs {
         id: Uuid,
         #[arg(short = 'f', long)]
@@ -85,6 +83,19 @@ pub struct AddArgs {
     pub command: String,
 }
 
+#[derive(Debug, Args)]
+pub struct ConfirmationArgs {
+    #[arg(long, help = "Skip the confirmation prompt")]
+    pub yes: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct CancelArgs {
+    pub id: Uuid,
+    #[command(flatten)]
+    pub confirmation: ConfirmationArgs,
+}
+
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     run_command(cli.command)
@@ -96,16 +107,16 @@ pub fn run_command(command: CliCommand) -> anyhow::Result<()> {
         CliCommand::Show { id } => show(id),
         CliCommand::Jobs { user, state } => jobs(user.as_deref(), state),
         CliCommand::Clean => clean(),
-        CliCommand::Update => update(),
-        CliCommand::Uninstall => uninstall(),
+        CliCommand::Update(args) => update(args.yes),
+        CliCommand::Uninstall(args) => uninstall(args.yes),
         CliCommand::Start => start(),
         CliCommand::ServiceRun => service_run(),
         CliCommand::Status => status(),
-        CliCommand::Stop => stop(),
+        CliCommand::Stop(args) => stop(args.yes),
         CliCommand::Commit { id, all } => commit(id, all),
         CliCommand::Pause => pause(),
         CliCommand::Resume => resume(),
-        CliCommand::Cancel { id } => cancel(id),
+        CliCommand::Cancel(args) => cancel(args.id, args.confirmation.yes),
         CliCommand::Logs { id, follow } => logs(id, follow),
     }
 }
@@ -229,12 +240,13 @@ fn status() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn stop() -> anyhow::Result<()> {
+fn stop(yes: bool) -> anyhow::Result<()> {
     let paths = open_paths()?;
     let client = ServiceClient::new(paths);
     match runtime()?.block_on(client.status()) {
         Ok(status) => {
             if let Some(id) = status.active_job
+                && !yes
                 && !request_confirmation(&format!(
                     "Job {id} is active. Force-cancel it and stop the scheduler"
                 ))?
@@ -252,7 +264,7 @@ fn stop() -> anyhow::Result<()> {
     }
 }
 
-fn update() -> anyhow::Result<()> {
+fn update(yes: bool) -> anyhow::Result<()> {
     let current =
         Version::parse(env!("CARGO_PKG_VERSION")).context("parse current Stoker version")?;
     let release = latest_release()?;
@@ -271,7 +283,7 @@ fn update() -> anyhow::Result<()> {
     }
 
     println!("Stoker will update from {current} to {latest}.");
-    if !request_confirmation("Continue with update")? {
+    if !yes && !request_confirmation("Continue with update")? {
         println!("Update cancelled.");
         return Ok(());
     }
@@ -287,7 +299,7 @@ fn update() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn uninstall() -> anyhow::Result<()> {
+fn uninstall(yes: bool) -> anyhow::Result<()> {
     let paths = StokerPaths::from_env()?;
     match runtime()?.block_on(ServiceClient::new(paths.clone()).status()) {
         Ok(_) => {
@@ -302,7 +314,7 @@ fn uninstall() -> anyhow::Result<()> {
         "Job data and logs will be kept at {}.",
         paths.root.display()
     );
-    if !request_confirmation("Continue with uninstall")? {
+    if !yes && !request_confirmation("Continue with uninstall")? {
         println!("Uninstall cancelled.");
         return Ok(());
     }
@@ -593,8 +605,12 @@ fn resume() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cancel(id: Uuid) -> anyhow::Result<()> {
+fn cancel(id: Uuid, yes: bool) -> anyhow::Result<()> {
     let paths = open_paths()?;
+    if !yes && !request_confirmation(&format!("Cancel job {id}"))? {
+        println!("Cancel cancelled.");
+        return Ok(());
+    }
     runtime()?.block_on(ServiceClient::new(paths).cancel(id))
 }
 
@@ -892,6 +908,23 @@ mod update_tests {
     #[test]
     fn uninstall_is_a_valid_cli_command() {
         assert!(Cli::try_parse_from(["stoker", "uninstall"]).is_ok());
+    }
+
+    #[test]
+    fn destructive_commands_accept_yes_flag() {
+        for args in [
+            vec!["stoker", "stop", "--yes"],
+            vec!["stoker", "update", "--yes"],
+            vec!["stoker", "uninstall", "--yes"],
+            vec![
+                "stoker",
+                "cancel",
+                "00000000-0000-0000-0000-000000000001",
+                "--yes",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
     }
 }
 
