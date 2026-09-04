@@ -14,8 +14,9 @@ use uuid::Uuid;
 
 use crate::config::normalize_path;
 use crate::domain::{Job, JobState, NewJob};
+use crate::queue_editor::{self, EditorMoveError};
 use crate::service::Service;
-use crate::{ServiceClient, StokerPaths, Store, is_service_unavailable};
+use crate::{ServiceClient, StokerPaths, Store, StoreError, is_service_unavailable};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -51,6 +52,12 @@ pub enum CliCommand {
     #[command(name = "service-run", hide = true)]
     ServiceRun,
     Status,
+    LockQueue,
+    UnlockQueue,
+    Queue {
+        #[command(subcommand)]
+        command: QueueCommand,
+    },
     Stop(ConfirmationArgs),
     Commit {
         #[arg(required_unless_present = "all", conflicts_with = "all")]
@@ -66,6 +73,11 @@ pub enum CliCommand {
         #[arg(short = 'f', long)]
         follow: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum QueueCommand {
+    Edit,
 }
 
 #[derive(Debug, Args)]
@@ -112,6 +124,11 @@ pub fn run_command(command: CliCommand) -> anyhow::Result<()> {
         CliCommand::Start => start(),
         CliCommand::ServiceRun => service_run(),
         CliCommand::Status => status(),
+        CliCommand::LockQueue => lock_queue(),
+        CliCommand::UnlockQueue => unlock_queue(),
+        CliCommand::Queue { command } => match command {
+            QueueCommand::Edit => queue_edit(),
+        },
         CliCommand::Stop(args) => stop(args.yes),
         CliCommand::Commit { id, all } => commit(id, all),
         CliCommand::Pause => pause(),
@@ -225,19 +242,182 @@ fn status() -> anyhow::Result<()> {
                     .unwrap_or_else(|| "-".into())
             );
             println!("Queued jobs: {}", service.queued_jobs);
+            print_queue_status(service.queue_locked);
         }
         Err(error) if is_service_unavailable(&error) => {
-            let queued = Store::open(&paths.database)?
+            let store = Store::open(&paths.database)?;
+            let queued = store
                 .list_jobs(None)?
                 .into_iter()
                 .filter(|job| job.state == crate::JobState::Queued)
                 .count();
             println!("Scheduler: stopped");
             println!("Queued jobs: {queued}");
+            print_queue_status(store.queue_locked()?);
         }
         Err(error) => return Err(error),
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct QueueSnapshot {
+    service_online: bool,
+    locked: bool,
+    queued_jobs: usize,
+}
+
+fn print_queue_status(locked: bool) {
+    println!("Queue: {}", if locked { "locked" } else { "unlocked" });
+    if locked {
+        println!("Scheduler will not start another queued job while the queue is locked.");
+    }
+}
+
+fn queue_snapshot(paths: &StokerPaths) -> anyhow::Result<QueueSnapshot> {
+    match runtime()?.block_on(ServiceClient::new(paths.clone()).status()) {
+        Ok(status) => Ok(QueueSnapshot {
+            service_online: true,
+            locked: status.queue_locked,
+            queued_jobs: status.queued_jobs,
+        }),
+        Err(error) if is_service_unavailable(&error) => {
+            let store = Store::open(&paths.database)?;
+            let queued_jobs = store
+                .list_jobs_with_state(None, Some(JobState::Queued))?
+                .len();
+            Ok(QueueSnapshot {
+                service_online: false,
+                locked: store.queue_locked()?,
+                queued_jobs,
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn lock_queue() -> anyhow::Result<()> {
+    set_queue_lock(true)
+}
+
+fn unlock_queue() -> anyhow::Result<()> {
+    set_queue_lock(false)
+}
+
+fn set_queue_lock(lock: bool) -> anyhow::Result<()> {
+    let paths = open_paths()?;
+    let before = queue_snapshot(&paths)?;
+    let client = ServiceClient::new(paths.clone());
+    let operation = if before.service_online {
+        let result = if lock {
+            runtime()?.block_on(client.lock_queue())
+        } else {
+            runtime()?.block_on(client.unlock_queue())
+        };
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) if is_service_unavailable(&error) => {
+                let store = Store::open(&paths.database)?;
+                if lock {
+                    store.lock_queue().map_err(anyhow::Error::from)
+                } else {
+                    store.unlock_queue().map_err(anyhow::Error::from)
+                }
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        let store = Store::open(&paths.database)?;
+        if lock {
+            store.lock_queue().map_err(anyhow::Error::from)
+        } else {
+            store.unlock_queue().map_err(anyhow::Error::from)
+        }
+    };
+    operation?;
+
+    let state = if lock {
+        if before.locked {
+            "Queue already locked."
+        } else {
+            "Queue locked."
+        }
+    } else if before.locked {
+        "Queue unlocked."
+    } else {
+        "Queue already unlocked."
+    };
+    if lock && before.queued_jobs == 0 {
+        println!("{state} No queued jobs to reorder.");
+    } else {
+        println!("{state}");
+    }
+    Ok(())
+}
+
+fn queue_edit() -> anyhow::Result<()> {
+    let paths = open_paths()?;
+    let snapshot = queue_snapshot(&paths)?;
+    if !snapshot.locked {
+        anyhow::bail!("Queue is unlocked. Run 'stoker lock-queue' first.");
+    }
+
+    let store = Store::open(&paths.database)?;
+    let initial_jobs = queued_jobs(&store)?;
+    if initial_jobs.is_empty() {
+        println!("No queued jobs to reorder.");
+        return Ok(());
+    }
+
+    let client = ServiceClient::new(paths);
+    queue_editor::run_queue_editor(
+        initial_jobs,
+        |id, target_order| {
+            let result = if snapshot.service_online {
+                match runtime() {
+                    Ok(runtime) => match runtime.block_on(client.move_queued(id, target_order)) {
+                        Ok(jobs) => Ok(jobs),
+                        Err(error) if is_service_unavailable(&error) => store
+                            .move_queued_job(id, target_order)
+                            .map_err(anyhow::Error::from),
+                        Err(error) => Err(error),
+                    },
+                    Err(error) => Err(error),
+                }
+            } else {
+                store
+                    .move_queued_job(id, target_order)
+                    .map_err(anyhow::Error::from)
+            };
+            result.map_err(editor_move_error)
+        },
+        || queued_jobs(&store).map_err(anyhow::Error::from),
+    )
+}
+
+fn queued_jobs(store: &Store) -> Result<Vec<Job>, StoreError> {
+    store.list_jobs_with_state(None, Some(JobState::Queued))
+}
+
+fn editor_move_error(error: anyhow::Error) -> EditorMoveError {
+    if is_stale_move_error(&error) {
+        EditorMoveError::Stale
+    } else {
+        EditorMoveError::Callback(error)
+    }
+}
+
+fn is_stale_move_error(error: &anyhow::Error) -> bool {
+    if let Some(error) = error.downcast_ref::<StoreError>() {
+        return matches!(
+            error,
+            StoreError::NotFound { .. }
+                | StoreError::InvalidQueueOrder { .. }
+                | StoreError::InvalidTransition { action: "move", .. }
+        );
+    }
+    let message = error.to_string();
+    message.contains("cannot move job") || message.contains("does not exist")
 }
 
 fn stop(yes: bool) -> anyhow::Result<()> {

@@ -85,6 +85,157 @@ fn stop_when_service_is_not_running_is_successful() {
 }
 
 #[test]
+fn queue_lock_stopped_service_is_idempotent_and_status_reports_state() {
+    let home = TempStokerHome::new();
+
+    stoker_with_home(&home)
+        .args(["lock-queue"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Queue locked."));
+    stoker_with_home(&home)
+        .args(["lock-queue"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Queue already locked."));
+    stoker_with_home(&home)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Scheduler: stopped")
+                .and(predicate::str::contains("Queue: locked"))
+                .and(predicate::str::contains(
+                    "will not start another queued job",
+                )),
+        );
+
+    stoker_with_home(&home)
+        .args(["unlock-queue"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Queue unlocked."));
+    stoker_with_home(&home)
+        .args(["unlock-queue"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Queue already unlocked."));
+    stoker_with_home(&home)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Scheduler: stopped")
+                .and(predicate::str::contains("Queue: unlocked")),
+        );
+}
+
+#[test]
+fn locking_empty_queue_reports_that_there_is_nothing_to_reorder() {
+    let home = TempStokerHome::new();
+    stoker_with_home(&home)
+        .args(["lock-queue"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Queue locked. No queued jobs to reorder.",
+        ));
+    stoker_with_home(&home)
+        .args(["queue", "edit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No queued jobs to reorder."));
+}
+
+#[test]
+fn queue_edit_requires_a_locked_queue() {
+    stoker_with_home(TempStokerHome::new())
+        .args(["queue", "edit"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Queue is unlocked. Run 'stoker lock-queue' first.",
+        ));
+}
+
+#[test]
+fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
+    let home = TempStokerHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let store = Store::open(home.path().join("stoker.db")).unwrap();
+    let active = store
+        .create_job(long_running_job("active", cwd.path().to_path_buf()))
+        .unwrap();
+    let queued = store
+        .create_job(queued_job("queued", cwd.path().to_path_buf()))
+        .unwrap();
+    store.commit_job(active).unwrap();
+    store.commit_job(queued).unwrap();
+
+    start_service(&home);
+    wait_for_state(&store, active, JobState::Running);
+    let draft = store
+        .create_job(queued_job("draft", cwd.path().to_path_buf()))
+        .unwrap();
+
+    stoker_with_home(&home)
+        .args(["lock-queue"])
+        .assert()
+        .success();
+    stoker_with_home(&home)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Scheduler: running")
+                .and(predicate::str::contains("Queue: locked")),
+        );
+
+    stoker_with_home(&home)
+        .args(["commit", &draft.to_string()])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("queue is locked")
+                .and(predicate::str::contains("stoker unlock-queue")),
+        );
+    stoker_with_home(&home)
+        .args(["commit", "--all"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("queue is locked")
+                .and(predicate::str::contains("stoker unlock-queue")),
+        );
+    stoker_with_home(&home)
+        .args(["pause"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("queue is locked")
+                .and(predicate::str::contains("stoker unlock-queue")),
+        );
+    stoker_with_home(&home)
+        .args(["resume"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("queue is locked")
+                .and(predicate::str::contains("stoker unlock-queue")),
+        );
+    stoker_with_home(&home)
+        .args(["cancel", &queued.to_string(), "--yes"])
+        .assert()
+        .success();
+    assert_eq!(store.get_job(queued).unwrap().state, JobState::Cancelled);
+
+    stoker_with_home(&home)
+        .args(["stop", "--yes"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn cancel_requires_confirmation() {
     stoker_with_home(TempStokerHome::new())
         .args(["cancel", "00000000-0000-0000-0000-000000000001"])
@@ -279,7 +430,7 @@ fn status_surfaces_online_protocol_errors_instead_of_offline_fallback() {
         let mut request = vec![0; length];
         stream.read_exact(&mut request).expect("read request frame");
         let response =
-            br#"{"version":2,"response":{"Status":{"pid":1,"active_job":null,"queued_jobs":0}}}"#;
+            br#"{"version":1,"response":{"Status":{"pid":1,"active_job":null,"queued_jobs":0,"queue_locked":false}}}"#;
         stream
             .write_all(&(response.len() as u32).to_be_bytes())
             .expect("write response frame header");
