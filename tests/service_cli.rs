@@ -4,9 +4,12 @@ use predicates::prelude::*;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use stoker::{JobState, NewJob, Store};
+use stoker::{JobState, NewJob, ServiceClient, ServiceStatus, StokerPaths, Store};
 use support::{TempStokerHome, stoker_with_home};
+use tokio::runtime::Runtime;
+use tokio::sync::Barrier;
 
 fn start_service(home: &TempStokerHome) {
     let status = Command::new(assert_cmd::cargo::cargo_bin("stoker"))
@@ -28,6 +31,53 @@ fn wait_for_state(store: &Store, id: uuid::Uuid, expected: JobState) {
         assert!(
             Instant::now() < deadline,
             "job {id} did not reach {expected}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn service_paths(home: &TempStokerHome) -> StokerPaths {
+    let root = home.path().to_path_buf();
+    StokerPaths {
+        database: root.join("stoker.db"),
+        runs: root.join("runs"),
+        lock: root.join("stoker.lock"),
+        endpoint: root.join("stoker.sock"),
+        root,
+    }
+}
+
+struct ServiceCleanup {
+    home: PathBuf,
+}
+
+impl Drop for ServiceCleanup {
+    fn drop(&mut self) {
+        let _ = stoker_with_home(&self.home)
+            .args(["stop", "--yes"])
+            .output();
+    }
+}
+
+fn wait_for_service_status<F>(
+    runtime: &Runtime,
+    client: &ServiceClient,
+    description: &str,
+    predicate: F,
+) -> ServiceStatus
+where
+    F: Fn(&ServiceStatus) -> bool,
+{
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(status) = runtime.block_on(client.status())
+            && predicate(&status)
+        {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {description}"
         );
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -233,6 +283,102 @@ fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
         .args(["stop", "--yes"])
         .assert()
         .success();
+}
+
+fn run_queue_edit_cancel_race(cancel_selected: bool) {
+    let home = TempStokerHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let store = Store::open(home.path().join("stoker.db")).unwrap();
+    let active = store
+        .create_job(long_running_job("active", cwd.path().to_path_buf()))
+        .unwrap();
+    let first = store
+        .create_job(queued_job("first", cwd.path().to_path_buf()))
+        .unwrap();
+    let second = store
+        .create_job(queued_job("second", cwd.path().to_path_buf()))
+        .unwrap();
+    let selected = store
+        .create_job(queued_job("selected", cwd.path().to_path_buf()))
+        .unwrap();
+    for id in [active, first, second, selected] {
+        store.commit_job(id).unwrap();
+    }
+
+    start_service(&home);
+    let _cleanup = ServiceCleanup {
+        home: home.path().to_path_buf(),
+    };
+    wait_for_state(&store, active, JobState::Running);
+
+    let paths = service_paths(&home);
+    let runtime = Runtime::new().unwrap();
+    let lock_client = ServiceClient::new(paths.clone());
+    runtime.block_on(lock_client.lock_queue()).unwrap();
+    wait_for_service_status(&runtime, &lock_client, "queue lock", |status| {
+        status.queue_locked && status.queued_jobs == 3
+    });
+
+    let cancelled = if cancel_selected { selected } else { first };
+    let move_client = ServiceClient::new(paths.clone());
+    let cancel_client = ServiceClient::new(paths);
+    let barrier = Arc::new(Barrier::new(3));
+    let move_barrier = Arc::clone(&barrier);
+    let move_handle = runtime.handle().spawn(async move {
+        move_barrier.wait().await;
+        move_client.move_queued(selected, 1).await
+    });
+    let cancel_barrier = Arc::clone(&barrier);
+    let cancel_handle = runtime.handle().spawn(async move {
+        cancel_barrier.wait().await;
+        cancel_client.cancel(cancelled).await
+    });
+    runtime.block_on(barrier.wait());
+    let (move_result, cancel_result) =
+        runtime.block_on(async { (move_handle.await.unwrap(), cancel_handle.await.unwrap()) });
+
+    if let Err(error) = move_result {
+        assert!(
+            error.to_string().contains("cannot move job")
+                || error.to_string().contains("no longer queued"),
+            "unexpected move result: {error:#}"
+        );
+    }
+    cancel_result.unwrap();
+    wait_for_state(&store, cancelled, JobState::Cancelled);
+    let status = wait_for_service_status(&runtime, &lock_client, "locked race result", |status| {
+        status.queue_locked && status.active_job == Some(active) && status.queued_jobs == 2
+    });
+    assert!(status.queue_locked);
+
+    let queued = store
+        .list_jobs_with_state(None, Some(JobState::Queued))
+        .unwrap();
+    let expected_ids = if cancel_selected {
+        vec![first, second]
+    } else {
+        vec![selected, second]
+    };
+    assert_eq!(
+        queued.iter().map(|job| job.id).collect::<Vec<_>>(),
+        expected_ids
+    );
+    assert_eq!(
+        queued.iter().map(|job| job.queue_order).collect::<Vec<_>>(),
+        [Some(1), Some(2)]
+    );
+    assert_eq!(store.get_job(cancelled).unwrap().state, JobState::Cancelled);
+    assert_eq!(store.get_job(cancelled).unwrap().queue_order, None);
+}
+
+#[test]
+fn queue_edit_cancel_selected_race_does_not_resurrect_cancelled_job() {
+    run_queue_edit_cancel_race(true);
+}
+
+#[test]
+fn queue_edit_cancel_non_selected_race_does_not_resurrect_cancelled_job() {
+    run_queue_edit_cancel_race(false);
 }
 
 #[test]

@@ -7,7 +7,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use predicates::prelude::*;
-use stoker::{JobState, Store};
+use stoker::{JobState, ServiceClient, ServiceStatus, StokerPaths, Store};
+use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use support::{TestRepo, stoker_with_home, stoker_with_home_and_dir};
@@ -126,11 +127,67 @@ fn follow_command() -> &'static str {
     }
 }
 
+fn service_paths(home: &std::path::Path) -> StokerPaths {
+    StokerPaths {
+        database: home.join("stoker.db"),
+        runs: home.join("runs"),
+        lock: home.join("stoker.lock"),
+        endpoint: home.join("stoker.sock"),
+        root: home.to_path_buf(),
+    }
+}
+
+struct ServiceCleanup {
+    home: PathBuf,
+}
+
+impl Drop for ServiceCleanup {
+    fn drop(&mut self) {
+        let _ = stoker_with_home(&self.home)
+            .args(["stop", "--yes"])
+            .output();
+    }
+}
+
+fn wait_for_service_status<F>(
+    runtime: &Runtime,
+    client: &ServiceClient,
+    description: &str,
+    predicate: F,
+) -> ServiceStatus
+where
+    F: Fn(&ServiceStatus) -> bool,
+{
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(status) = runtime.block_on(client.status())
+            && predicate(&status)
+        {
+            return status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {description}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 pub fn start_service_and_commit(ids: &[Uuid]) {
     let home = homes().lock().unwrap().get(&ids[0]).cloned().unwrap();
+    start_service_for_home(&home);
+    for id in ids {
+        stoker_with_home(&home)
+            .args(["commit", &id.to_string()])
+            .assert()
+            .success();
+    }
+}
+
+fn start_service_for_home(home: &std::path::Path) {
     let status = Command::new(assert_cmd::cargo::cargo_bin("stoker"))
         .arg("start")
-        .env("STOKER_HOME", &home)
+        .env("STOKER_HOME", home)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -139,12 +196,6 @@ pub fn start_service_and_commit(ids: &[Uuid]) {
         status.success(),
         "failed to start scheduler service: {status}"
     );
-    for id in ids {
-        stoker_with_home(&home)
-            .args(["commit", &id.to_string()])
-            .assert()
-            .success();
-    }
 }
 
 pub fn wait_for_state(id: Uuid, expected: JobState) {
@@ -374,4 +425,77 @@ fn stop_releases_queued_log_followers() {
     );
     assert_terminal(running, JobState::Cancelled);
     assert_terminal(queued, JobState::Queued);
+}
+
+#[test]
+fn queue_lock_scheduler_does_not_claim_until_restart_and_unlock_then_uses_edited_order() {
+    let repo = TestRepo::new();
+    let order_dir = tempfile::tempdir().unwrap();
+    let order_path = order_dir.path().join("order.log");
+    let active = add_script(&repo, long_running_command(), "active");
+    let first = add_script(&repo, &order_job(&repo, "first", &order_path), "first");
+    let second = add_script(&repo, &order_job(&repo, "second", &order_path), "second");
+    let third = add_script(&repo, &order_job(&repo, "third", &order_path), "third");
+
+    start_service_and_commit(&[active, first, second, third]);
+    let home = homes().lock().unwrap().get(&active).cloned().unwrap();
+    let _cleanup = ServiceCleanup { home: home.clone() };
+    wait_for_state(active, JobState::Running);
+
+    let paths = service_paths(&home);
+    let runtime = Runtime::new().unwrap();
+    let client = ServiceClient::new(paths.clone());
+    runtime.block_on(client.lock_queue()).unwrap();
+    wait_for_service_status(&runtime, &client, "queue lock", |status| {
+        status.queue_locked && status.queued_jobs == 3
+    });
+
+    let moved = runtime.block_on(client.move_queued(third, 1)).unwrap();
+    assert_eq!(
+        moved.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [third, first, second]
+    );
+
+    // The active job is allowed to finish, but the lock must prevent the
+    // scheduler from claiming any of the reordered queued jobs.
+    runtime.block_on(client.cancel(active)).unwrap();
+    wait_for_state(active, JobState::Cancelled);
+    wait_for_service_status(&runtime, &client, "locked idle scheduler", |status| {
+        status.queue_locked && status.active_job.is_none() && status.queued_jobs == 3
+    });
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    for id in [first, second, third] {
+        assert_eq!(store.get_job(id).unwrap().state, JobState::Queued);
+    }
+    assert!(
+        !order_path.exists(),
+        "a queued job was claimed while locked"
+    );
+
+    // A service restart must not clear the durable queue lock.
+    runtime.block_on(client.stop()).unwrap();
+    start_service_for_home(&home);
+    wait_for_service_status(&runtime, &client, "locked service restart", |status| {
+        status.queue_locked && status.active_job.is_none() && status.queued_jobs == 3
+    });
+    for id in [first, second, third] {
+        assert_eq!(store.get_job(id).unwrap().state, JobState::Queued);
+    }
+    assert!(
+        !order_path.exists(),
+        "a queued job was claimed after restart while locked"
+    );
+
+    runtime.block_on(client.unlock_queue()).unwrap();
+    assert_terminal(third, JobState::Succeeded);
+    assert_terminal(first, JobState::Succeeded);
+    assert_terminal(second, JobState::Succeeded);
+    assert_eq!(
+        std::fs::read_to_string(&order_path).unwrap(),
+        if cfg!(windows) {
+            "third\r\nfirst\r\nsecond\r\n"
+        } else {
+            "third\nfirst\nsecond\n"
+        }
+    );
 }
