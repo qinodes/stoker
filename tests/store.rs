@@ -178,23 +178,49 @@ fn moving_a_queued_job_races_with_cancellation_without_restoring_it() {
 
 #[test]
 fn moving_after_cancelling_a_different_job_uses_current_queue_order() {
-    let store = test_store();
-    let cancelled = store.create_job(new_job_named("cancelled")).unwrap();
-    let second = store.create_job(new_job_named("second")).unwrap();
-    let selected = store.create_job(new_job_named("selected")).unwrap();
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("stoker.db");
+    let move_store = Arc::new(Store::open(&db_path).unwrap());
+    let cancel_store = Arc::new(Store::open(&db_path).unwrap());
+    let cancelled = move_store.create_job(new_job_named("cancelled")).unwrap();
+    let second = move_store.create_job(new_job_named("second")).unwrap();
+    let selected = move_store.create_job(new_job_named("selected")).unwrap();
     for id in [cancelled, second, selected] {
-        store.commit_job(id).unwrap();
+        move_store.commit_job(id).unwrap();
     }
-    store.lock_queue().unwrap();
-    store.cancel_not_started(cancelled).unwrap();
+    move_store.lock_queue().unwrap();
+    let barrier = Arc::new(Barrier::new(3));
 
-    let moved = store.move_queued_job(selected, 1).unwrap();
+    let move_barrier = Arc::clone(&barrier);
+    let move_handle = std::thread::spawn(move || {
+        move_barrier.wait();
+        move_store.move_queued_job(selected, 1)
+    });
+    let cancel_barrier = Arc::clone(&barrier);
+    let cancel_handle = std::thread::spawn(move || {
+        cancel_barrier.wait();
+        cancel_store.cancel_not_started(cancelled)
+    });
+    barrier.wait();
+
+    assert!(move_handle.join().unwrap().is_ok());
     assert_eq!(
-        moved.iter().map(|job| job.id).collect::<Vec<_>>(),
+        cancel_handle.join().unwrap().unwrap().state,
+        JobState::Cancelled
+    );
+
+    let store = Store::open(&db_path).unwrap();
+    assert_eq!(store.get_job(cancelled).unwrap().state, JobState::Cancelled);
+    assert_eq!(store.get_job(cancelled).unwrap().queue_order, None);
+    let queued = store
+        .list_jobs_with_state(None, Some(JobState::Queued))
+        .unwrap();
+    assert_eq!(
+        queued.iter().map(|job| job.id).collect::<Vec<_>>(),
         [selected, second]
     );
     assert_eq!(
-        moved.iter().map(|job| job.queue_order).collect::<Vec<_>>(),
+        queued.iter().map(|job| job.queue_order).collect::<Vec<_>>(),
         [Some(1), Some(2)]
     );
 }
