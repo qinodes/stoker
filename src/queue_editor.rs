@@ -2,7 +2,7 @@ use std::io::{self, Write};
 
 use anyhow::Context;
 use crossterm::cursor::{Hide, MoveTo, Show};
-use crossterm::event::{self, Event, KeyCode, KeyEvent};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use uuid::Uuid;
@@ -14,6 +14,18 @@ pub(crate) enum EditorIntent {
     None,
     Exit,
     Move { id: Uuid, target_order: usize },
+}
+
+#[derive(Debug)]
+pub(crate) enum EditorMoveError {
+    Stale,
+    Callback(anyhow::Error),
+}
+
+impl From<anyhow::Error> for EditorMoveError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Callback(error)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +84,9 @@ impl EditorState {
     }
 
     pub(crate) fn reduce(&mut self, key: KeyEvent) -> EditorIntent {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return EditorIntent::Exit;
+        }
         match self.mode {
             EditorMode::Browse => self.reduce_browse(key),
             EditorMode::Move { id, original_order } => self.reduce_move(key, id, original_order),
@@ -256,44 +271,63 @@ impl<T: TerminalBackend> Drop for Cleanup<'_, T> {
     }
 }
 
-pub(crate) fn run_queue_editor<F>(initial_jobs: Vec<Job>, move_job: F) -> anyhow::Result<()>
+pub(crate) fn run_queue_editor<F, R, E>(
+    initial_jobs: Vec<Job>,
+    move_job: F,
+    reload_jobs: R,
+) -> anyhow::Result<()>
 where
-    F: FnMut(Uuid, usize) -> anyhow::Result<Vec<Job>>,
+    F: FnMut(Uuid, usize) -> Result<Vec<Job>, E>,
+    E: Into<EditorMoveError>,
+    R: FnMut() -> anyhow::Result<Vec<Job>>,
 {
     let mut terminal = CrosstermTerminal::new();
-    run_queue_editor_with_terminal(&mut terminal, initial_jobs, move_job)
+    run_queue_editor_with_terminal(&mut terminal, initial_jobs, move_job, reload_jobs)
 }
 
-fn run_queue_editor_with_terminal<T, F>(
+fn run_queue_editor_with_terminal<T, F, R, E>(
     terminal: &mut T,
     initial_jobs: Vec<Job>,
     mut move_job: F,
+    mut reload_jobs: R,
 ) -> anyhow::Result<()>
 where
     T: TerminalBackend,
-    F: FnMut(Uuid, usize) -> anyhow::Result<Vec<Job>>,
+    F: FnMut(Uuid, usize) -> Result<Vec<Job>, E>,
+    E: Into<EditorMoveError>,
+    R: FnMut() -> anyhow::Result<Vec<Job>>,
 {
     terminal.enable_raw_mode()?;
     let mut cleanup = Cleanup::new(terminal);
     cleanup.terminal().enter_alternate_screen()?;
     cleanup.terminal().hide_cursor()?;
 
-    let result = run_editor_loop(cleanup.terminal(), initial_jobs, &mut move_job);
+    let result = run_editor_loop(
+        cleanup.terminal(),
+        initial_jobs,
+        &mut move_job,
+        &mut reload_jobs,
+    );
     result
 }
 
-fn run_editor_loop<T, F>(
+fn run_editor_loop<T, F, R, E>(
     terminal: &mut T,
     initial_jobs: Vec<Job>,
     move_job: &mut F,
+    reload_jobs: &mut R,
 ) -> anyhow::Result<()>
 where
     T: TerminalBackend,
-    F: FnMut(Uuid, usize) -> anyhow::Result<Vec<Job>>,
+    F: FnMut(Uuid, usize) -> Result<Vec<Job>, E>,
+    E: Into<EditorMoveError>,
+    R: FnMut() -> anyhow::Result<Vec<Job>>,
 {
     let mut state = EditorState::new(initial_jobs);
+    let mut notice = None;
     loop {
-        render(terminal, &state)?;
+        render(terminal, &state, notice.as_deref())?;
+        notice = None;
         if state.jobs.is_empty() {
             return Ok(());
         }
@@ -302,16 +336,33 @@ where
             EditorIntent::None => {}
             EditorIntent::Exit => return Ok(()),
             EditorIntent::Move { id, target_order } => {
-                let jobs = move_job(id, target_order)?;
-                state.replace_jobs(jobs);
+                let result: Result<Vec<Job>, EditorMoveError> =
+                    move_job(id, target_order).map_err(Into::into);
+                match result {
+                    Ok(jobs) => state.replace_jobs(jobs),
+                    Err(EditorMoveError::Stale) => {
+                        notice = Some("Selected job was removed; reloading queued jobs.");
+                        state.replace_jobs(reload_jobs()?);
+                    }
+                    Err(EditorMoveError::Callback(error)) => return Err(error),
+                }
             }
         }
     }
 }
 
-fn render<T: TerminalBackend>(terminal: &mut T, state: &EditorState) -> anyhow::Result<()> {
+fn render<T: TerminalBackend>(
+    terminal: &mut T,
+    state: &EditorState,
+    notice: Option<&str>,
+) -> anyhow::Result<()> {
     terminal.clear()?;
     let mut output = String::new();
+    if let Some(notice) = notice {
+        output.push_str(notice);
+        output.push('\n');
+        output.push('\n');
+    }
     match state.mode {
         EditorMode::Browse => {
             output.push_str(&format!(
@@ -380,6 +431,10 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn control_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
     }
 
     #[test]
@@ -475,6 +530,21 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_c_in_any_mode_exits() {
+        let mut state = EditorState::new(vec![job("first", 1)]);
+
+        assert_eq!(
+            state.reduce(control_key(KeyCode::Char('c'))),
+            EditorIntent::Exit
+        );
+        state.reduce(key(KeyCode::Enter));
+        assert_eq!(
+            state.reduce(control_key(KeyCode::Char('c'))),
+            EditorIntent::Exit
+        );
+    }
+
+    #[test]
     fn reload_after_removed_selected_job_clamps_selection() {
         let first = job("first", 1);
         let second = job("second", 2);
@@ -492,6 +562,7 @@ mod tests {
     struct RecordingTerminal {
         events: VecDeque<KeyEvent>,
         calls: Vec<&'static str>,
+        output: String,
     }
 
     impl RecordingTerminal {
@@ -499,6 +570,7 @@ mod tests {
             Self {
                 events: events.into_iter().collect(),
                 calls: Vec::new(),
+                output: String::new(),
             }
         }
 
@@ -547,6 +619,7 @@ mod tests {
 
         fn write(&mut self, _output: &str) -> anyhow::Result<()> {
             self.calls.push("write");
+            self.output.push_str(_output);
             Ok(())
         }
 
@@ -565,6 +638,7 @@ mod tests {
             &mut terminal,
             vec![job("first", 1)],
             |_id, _target| unreachable!(),
+            || unreachable!(),
         )
         .unwrap();
 
@@ -580,6 +654,7 @@ mod tests {
             &mut terminal,
             vec![job("first", 1), job("second", 2)],
             |_id, _target| Err(anyhow::anyhow!("simulated move failure")),
+            || unreachable!(),
         )
         .unwrap_err();
 
@@ -587,16 +662,81 @@ mod tests {
         terminal.assert_cleaned_up();
     }
 
-    fn run_queue_editor_with_input<T, F>(
+    #[test]
+    fn ctrl_c_exit_restores_terminal_state() {
+        let mut terminal = RecordingTerminal::with_events([control_key(KeyCode::Char('c'))]);
+
+        run_queue_editor_with_input(
+            &mut terminal,
+            vec![job("first", 1)],
+            |_id, _target| unreachable!(),
+            || unreachable!(),
+        )
+        .unwrap();
+
+        terminal.assert_cleaned_up();
+    }
+
+    #[test]
+    fn stale_move_reloads_jobs_and_exits_cleanly_when_queue_is_empty() {
+        let mut terminal =
+            RecordingTerminal::with_events([key(KeyCode::Enter), key(KeyCode::Down)]);
+        let mut reload_count = 0;
+
+        run_queue_editor_with_input(
+            &mut terminal,
+            vec![job("selected", 1), job("other", 2)],
+            |_id, _target| Err(EditorMoveError::Stale),
+            || {
+                reload_count += 1;
+                Ok(Vec::new())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(reload_count, 1);
+        assert!(terminal.output.contains("removed"));
+        terminal.assert_cleaned_up();
+    }
+
+    #[test]
+    fn stale_move_reloads_current_jobs_and_continues_editing() {
+        let mut terminal = RecordingTerminal::with_events([
+            key(KeyCode::Enter),
+            key(KeyCode::Down),
+            key(KeyCode::Char('q')),
+        ]);
+        let mut reload_count = 0;
+
+        run_queue_editor_with_input(
+            &mut terminal,
+            vec![job("selected", 1), job("other", 2)],
+            |_id, _target| Err(EditorMoveError::Stale),
+            || {
+                reload_count += 1;
+                Ok(vec![job("remaining", 1)])
+            },
+        )
+        .unwrap();
+
+        assert_eq!(reload_count, 1);
+        assert!(terminal.output.contains("removed"));
+        terminal.assert_cleaned_up();
+    }
+
+    fn run_queue_editor_with_input<T, F, R, E>(
         terminal: &mut T,
         jobs: Vec<Job>,
         move_job: F,
+        reload_jobs: R,
     ) -> anyhow::Result<()>
     where
         T: TerminalBackend,
-        F: FnMut(Uuid, usize) -> anyhow::Result<Vec<Job>>,
+        F: FnMut(Uuid, usize) -> Result<Vec<Job>, E>,
+        E: Into<EditorMoveError>,
+        R: FnMut() -> anyhow::Result<Vec<Job>>,
     {
-        run_queue_editor_with_terminal(terminal, jobs, move_job)
+        run_queue_editor_with_terminal(terminal, jobs, move_job, reload_jobs)
     }
 
     #[allow(dead_code)]
