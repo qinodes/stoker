@@ -1,4 +1,7 @@
-# stoker
+<h1 align="center">
+  <img src="assets/logo.svg" width="300" alt="stoker">
+</h1>
+<br>
 
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 ![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-blue)
