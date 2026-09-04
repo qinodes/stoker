@@ -3,6 +3,7 @@ pub mod config;
 pub mod domain;
 pub mod ipc;
 pub mod process;
+pub(crate) mod queue_editor;
 pub mod scheduler;
 pub mod service;
 pub mod store;
