@@ -295,7 +295,9 @@ fn update(yes: bool) -> anyhow::Result<()> {
     #[cfg(unix)]
     println!("Stoker was updated to {latest}.");
     #[cfg(windows)]
-    println!("Stoker update to {latest} has been scheduled.");
+    println!(
+        "Stoker update is being finalized after this command exits. The update helper will report success or failure."
+    );
     Ok(())
 }
 
@@ -553,6 +555,8 @@ fn schedule_windows_update(
     Command::new(command)
         .args(["/C", script.to_string_lossy().as_ref()])
         .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
         .spawn()
         .context("schedule Windows update helper")?;
     Ok(())
@@ -574,7 +578,7 @@ fn windows_update_script(
     update_dir: &Path,
 ) -> String {
     format!(
-        "@echo off\r\n:wait_for_stoker\r\ntasklist /FI \"PID eq {process_id}\" /NH | findstr \"{process_id}\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait_for_stoker\r\n)\r\nmove /Y \"{}\" \"{}\" >NUL\r\nif errorlevel 1 (\r\n  echo Failed to replace Stoker executable.\r\n  exit /b 1\r\n)\r\nrmdir /S /Q \"{}\"\r\nstart \"\" /B \"%ComSpec%\" /C del /F /Q \"%~f0\" >NUL 2>&1\r\nexit /B 0\r\n",
+        "@echo off\r\n:wait_for_stoker\r\ntasklist /FI \"PID eq {process_id}\" /NH | findstr \"{process_id}\" >NUL\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >NUL\r\n  goto wait_for_stoker\r\n)\r\nmove /Y \"{}\" \"{}\" >NUL\r\nif errorlevel 1 (\r\n  echo Stoker update failed: could not replace the executable.\r\n  exit /b 1\r\n)\r\nrmdir /S /Q \"{}\"\r\nif errorlevel 1 (\r\n  echo Stoker update completed, but cleanup failed.\r\n) else (\r\n  echo Stoker update completed successfully.\r\n)\r\nstart \"\" /B \"%ComSpec%\" /C del /F /Q \"%~f0\" >NUL 2>&1\r\nexit /B 0\r\n",
         update_binary.display(),
         executable.display(),
         update_dir.display()
@@ -952,6 +956,8 @@ mod windows_uninstall_tests {
         );
         assert!(script.contains("PID eq 1234"));
         assert!(script.contains("move /Y \"C:\\Temp\\stoker.exe\" \"C:\\Tools\\stoker.exe\""));
+        assert!(script.contains("Stoker update completed successfully."));
+        assert!(script.contains("Stoker update failed: could not replace the executable."));
         assert!(script.contains("start \"\" /B \"%ComSpec%\" /C del /F /Q \"%~f0\" >NUL 2>&1"));
         assert!(script.ends_with("exit /B 0\r\n"));
     }
