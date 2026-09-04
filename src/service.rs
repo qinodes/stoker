@@ -49,6 +49,7 @@ impl Service {
 
     pub fn status(&self) -> anyhow::Result<ServiceStatus> {
         let jobs = self.store.list_jobs(None)?;
+        let queue_locked = self.store.queue_locked()?;
         let active_job = jobs
             .iter()
             .find(|job| {
@@ -66,6 +67,7 @@ impl Service {
             pid: std::process::id(),
             active_job,
             queued_jobs,
+            queue_locked,
         })
     }
 
@@ -404,6 +406,26 @@ async fn handle_client<S>(
                     message: error.to_string(),
                 },
             },
+            IpcRequest::LockQueue => match scheduler.handle_lock_queue() {
+                Ok(()) => IpcResponse::Ack,
+                Err(error) => IpcResponse::Error {
+                    message: error.to_string(),
+                },
+            },
+            IpcRequest::UnlockQueue => match scheduler.handle_unlock_queue(&wake_tx) {
+                Ok(()) => IpcResponse::Ack,
+                Err(error) => IpcResponse::Error {
+                    message: error.to_string(),
+                },
+            },
+            IpcRequest::MoveQueued { id, target_order } => {
+                match scheduler.handle_move_queued(id, target_order) {
+                    Ok(jobs) => IpcResponse::QueuedJobs { jobs },
+                    Err(error) => IpcResponse::Error {
+                        message: error.to_string(),
+                    },
+                }
+            }
             IpcRequest::FollowLogs { .. } => unreachable!(),
         };
         if send_response(&mut framed, &response).await.is_err() {

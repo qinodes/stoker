@@ -96,6 +96,23 @@ impl Scheduler {
         Ok(jobs)
     }
 
+    pub fn handle_lock_queue(&self) -> anyhow::Result<()> {
+        self.store.lock_queue().context("lock queue")?;
+        Ok(())
+    }
+
+    pub fn handle_unlock_queue(&self, wake: &watch::Sender<u64>) -> anyhow::Result<()> {
+        self.store.unlock_queue().context("unlock queue")?;
+        wake.send_modify(|value| *value = value.wrapping_add(1));
+        Ok(())
+    }
+
+    pub fn handle_move_queued(&self, id: Uuid, target_order: usize) -> anyhow::Result<Vec<Job>> {
+        self.store
+            .move_queued_job(id, target_order)
+            .context("move queued job")
+    }
+
     /// Cancel a job, waiting for the active process and runtime cleanup before
     /// acknowledging an active cancellation request.
     pub async fn handle_cancel(&self, id: Uuid) -> anyhow::Result<Job> {
@@ -222,6 +239,7 @@ impl Scheduler {
 
     pub fn service_status(&self) -> anyhow::Result<ServiceStatus> {
         let jobs = self.store.list_jobs(None)?;
+        let queue_locked = self.store.queue_locked()?;
         let active_job = self
             .active
             .lock()
@@ -245,6 +263,7 @@ impl Scheduler {
                 .iter()
                 .filter(|job| job.state == JobState::Queued)
                 .count(),
+            queue_locked,
         })
     }
 

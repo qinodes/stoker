@@ -12,9 +12,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use uuid::Uuid;
 
-use crate::StokerPaths;
+use crate::{Job, StokerPaths};
 
-pub const IPC_VERSION: u16 = 1;
+pub const IPC_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IpcRequest {
@@ -26,12 +26,16 @@ pub enum IpcRequest {
     Resume,
     Cancel { id: Uuid },
     FollowLogs { id: Uuid },
+    LockQueue,
+    UnlockQueue,
+    MoveQueued { id: Uuid, target_order: usize },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IpcResponse {
     Ack,
     JobCount { count: usize },
+    QueuedJobs { jobs: Vec<Job> },
     Status(ServiceStatus),
     LogChunk { stream: LogStream, bytes: Vec<u8> },
     LogEnd,
@@ -49,6 +53,7 @@ pub struct ServiceStatus {
     pub pid: u32,
     pub active_job: Option<Uuid>,
     pub queued_jobs: usize,
+    pub queue_locked: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -123,7 +128,7 @@ impl ServiceClient {
     pub async fn status(&self) -> anyhow::Result<ServiceStatus> {
         match self.request(IpcRequest::Status).await? {
             IpcResponse::Status(status) => Ok(status),
-            IpcResponse::Ack | IpcResponse::JobCount { .. } => {
+            IpcResponse::Ack | IpcResponse::JobCount { .. } | IpcResponse::QueuedJobs { .. } => {
                 anyhow::bail!("service returned an invalid status response")
             }
             IpcResponse::LogChunk { .. } | IpcResponse::LogEnd => {
@@ -154,7 +159,9 @@ impl ServiceClient {
                 }
                 Ok(())
             }
-            IpcResponse::Status(_) | IpcResponse::JobCount { .. } => {
+            IpcResponse::Status(_)
+            | IpcResponse::JobCount { .. }
+            | IpcResponse::QueuedJobs { .. } => {
                 anyhow::bail!("service returned an invalid stop response")
             }
             IpcResponse::LogChunk { .. } | IpcResponse::LogEnd => {
@@ -201,6 +208,33 @@ impl ServiceClient {
             IpcResponse::Ack => Ok(()),
             IpcResponse::Error { message } => anyhow::bail!("{message}"),
             _ => anyhow::bail!("service returned an invalid cancel response"),
+        }
+    }
+
+    pub async fn lock_queue(&self) -> anyhow::Result<()> {
+        match self.request(IpcRequest::LockQueue).await? {
+            IpcResponse::Ack => Ok(()),
+            IpcResponse::Error { message } => anyhow::bail!("{message}"),
+            _ => anyhow::bail!("service returned an invalid lock queue response"),
+        }
+    }
+
+    pub async fn unlock_queue(&self) -> anyhow::Result<()> {
+        match self.request(IpcRequest::UnlockQueue).await? {
+            IpcResponse::Ack => Ok(()),
+            IpcResponse::Error { message } => anyhow::bail!("{message}"),
+            _ => anyhow::bail!("service returned an invalid unlock queue response"),
+        }
+    }
+
+    pub async fn move_queued(&self, id: Uuid, target_order: usize) -> anyhow::Result<Vec<Job>> {
+        match self
+            .request(IpcRequest::MoveQueued { id, target_order })
+            .await?
+        {
+            IpcResponse::QueuedJobs { jobs } => Ok(jobs),
+            IpcResponse::Error { message } => anyhow::bail!("{message}"),
+            _ => anyhow::bail!("service returned an invalid move queued response"),
         }
     }
 
@@ -349,19 +383,54 @@ async fn connect_with_retry(paths: &StokerPaths) -> std::io::Result<IpcStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{Job, JobState};
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     #[test]
     fn frames_include_protocol_version_and_round_trip() {
-        let encoded = encode_request(&IpcRequest::Status).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
-        assert_eq!(value["version"], IPC_VERSION);
-        assert_eq!(decode_request(&encoded).unwrap(), IpcRequest::Status);
+        let id = Uuid::nil();
+        for request in [
+            IpcRequest::Status,
+            IpcRequest::LockQueue,
+            IpcRequest::UnlockQueue,
+            IpcRequest::MoveQueued {
+                id,
+                target_order: 2,
+            },
+        ] {
+            let encoded = encode_request(&request).unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+            assert_eq!(value["version"], IPC_VERSION);
+            assert_eq!(decode_request(&encoded).unwrap(), request);
+        }
+
+        let job = Job {
+            id,
+            name: "queued-job".to_owned(),
+            user: "alice".to_owned(),
+            cwd: PathBuf::from("/tmp/workspace"),
+            command: vec!["echo".to_owned(), "hello".to_owned()],
+            command_line: Some("echo hello".to_owned()),
+            state: JobState::Queued,
+            queue_order: Some(1),
+            created_at: chrono::Utc::now(),
+            committed_at: Some(chrono::Utc::now()),
+            started_at: None,
+            finished_at: None,
+            exit_code: None,
+            pid: None,
+            failure_detail: None,
+        };
+        let queued_jobs = IpcResponse::QueuedJobs { jobs: vec![job] };
+        let encoded = encode_response(&queued_jobs).unwrap();
+        assert_eq!(decode_response(&encoded).unwrap(), queued_jobs);
 
         let response = IpcResponse::Status(ServiceStatus {
             pid: 42,
             active_job: None,
             queued_jobs: 3,
+            queue_locked: true,
         });
         let encoded = encode_response(&response).unwrap();
         assert_eq!(decode_response(&encoded).unwrap(), response);
@@ -370,7 +439,7 @@ mod tests {
     #[test]
     fn unsupported_protocol_version_is_rejected() {
         let frame = serde_json::json!({
-            "version": IPC_VERSION + 1,
+            "version": 1,
             "request": "Status"
         });
         let error = decode_request(&serde_json::to_vec(&frame).unwrap()).unwrap_err();

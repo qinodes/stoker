@@ -10,7 +10,7 @@ pub mod store;
 pub use config::StokerPaths;
 pub use domain::{Job, JobState, NewJob};
 pub use ipc::{
-    IpcRequest, IpcResponse, ServiceClient, ServiceStatus, ServiceUnavailable,
+    IPC_VERSION, IpcRequest, IpcResponse, ServiceClient, ServiceStatus, ServiceUnavailable,
     is_service_unavailable,
 };
 pub use store::{Store, StoreError};
