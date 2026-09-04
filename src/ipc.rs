@@ -36,6 +36,7 @@ pub enum IpcResponse {
     Ack,
     JobCount { count: usize },
     QueuedJobs { jobs: Vec<Job> },
+    StaleQueueMove { message: String },
     Status(ServiceStatus),
     LogChunk { stream: LogStream, bytes: Vec<u8> },
     LogEnd,
@@ -59,6 +60,18 @@ pub struct ServiceStatus {
 #[derive(Debug, thiserror::Error)]
 #[error("scheduler service unavailable: {0}")]
 pub struct ServiceUnavailable(#[source] std::io::Error);
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct StaleQueueMoveError {
+    message: String,
+}
+
+impl StaleQueueMoveError {
+    fn new(message: String) -> Self {
+        Self { message }
+    }
+}
 
 pub fn is_service_unavailable(error: &anyhow::Error) -> bool {
     error.downcast_ref::<ServiceUnavailable>().is_some()
@@ -128,7 +141,10 @@ impl ServiceClient {
     pub async fn status(&self) -> anyhow::Result<ServiceStatus> {
         match self.request(IpcRequest::Status).await? {
             IpcResponse::Status(status) => Ok(status),
-            IpcResponse::Ack | IpcResponse::JobCount { .. } | IpcResponse::QueuedJobs { .. } => {
+            IpcResponse::Ack
+            | IpcResponse::JobCount { .. }
+            | IpcResponse::QueuedJobs { .. }
+            | IpcResponse::StaleQueueMove { .. } => {
                 anyhow::bail!("service returned an invalid status response")
             }
             IpcResponse::LogChunk { .. } | IpcResponse::LogEnd => {
@@ -161,7 +177,8 @@ impl ServiceClient {
             }
             IpcResponse::Status(_)
             | IpcResponse::JobCount { .. }
-            | IpcResponse::QueuedJobs { .. } => {
+            | IpcResponse::QueuedJobs { .. }
+            | IpcResponse::StaleQueueMove { .. } => {
                 anyhow::bail!("service returned an invalid stop response")
             }
             IpcResponse::LogChunk { .. } | IpcResponse::LogEnd => {
@@ -233,6 +250,9 @@ impl ServiceClient {
             .await?
         {
             IpcResponse::QueuedJobs { jobs } => Ok(jobs),
+            IpcResponse::StaleQueueMove { message } => {
+                Err(StaleQueueMoveError::new(message).into())
+            }
             IpcResponse::Error { message } => anyhow::bail!("{message}"),
             _ => anyhow::bail!("service returned an invalid move queued response"),
         }
@@ -425,6 +445,12 @@ mod tests {
         let queued_jobs = IpcResponse::QueuedJobs { jobs: vec![job] };
         let encoded = encode_response(&queued_jobs).unwrap();
         assert_eq!(decode_response(&encoded).unwrap(), queued_jobs);
+
+        let stale_move = IpcResponse::StaleQueueMove {
+            message: "selected job was removed".to_owned(),
+        };
+        let encoded = encode_response(&stale_move).unwrap();
+        assert_eq!(decode_response(&encoded).unwrap(), stale_move);
 
         let response = IpcResponse::Status(ServiceStatus {
             pid: 42,

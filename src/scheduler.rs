@@ -110,7 +110,7 @@ impl Scheduler {
     pub fn handle_move_queued(&self, id: Uuid, target_order: usize) -> anyhow::Result<Vec<Job>> {
         self.store
             .move_queued_job(id, target_order)
-            .context("move queued job")
+            .map_err(anyhow::Error::from)
     }
 
     /// Cancel a job, waiting for the active process and runtime cleanup before

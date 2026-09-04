@@ -83,6 +83,25 @@ impl EditorState {
         self.mode = EditorMode::Browse;
     }
 
+    pub(crate) fn replace_jobs_after_move(
+        &mut self,
+        mut jobs: Vec<Job>,
+        id: Uuid,
+        original_order: usize,
+    ) {
+        jobs.sort_by_key(|job| job.queue_order.unwrap_or(i64::MAX));
+        self.jobs = jobs;
+        self.selected = self
+            .jobs
+            .iter()
+            .position(|job| job.id == id)
+            .unwrap_or_else(|| self.selected.min(self.jobs.len().saturating_sub(1)));
+        if self.jobs.is_empty() {
+            self.selected = 0;
+        }
+        self.mode = EditorMode::Move { id, original_order };
+    }
+
     pub(crate) fn reduce(&mut self, key: KeyEvent) -> EditorIntent {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return EditorIntent::Exit;
@@ -336,10 +355,16 @@ where
             EditorIntent::None => {}
             EditorIntent::Exit => return Ok(()),
             EditorIntent::Move { id, target_order } => {
+                let mode_after_reduce = state.mode;
                 let result: Result<Vec<Job>, EditorMoveError> =
                     move_job(id, target_order).map_err(Into::into);
                 match result {
-                    Ok(jobs) => state.replace_jobs(jobs),
+                    Ok(jobs) => match mode_after_reduce {
+                        EditorMode::Move { id, original_order } => {
+                            state.replace_jobs_after_move(jobs, id, original_order);
+                        }
+                        EditorMode::Browse => state.replace_jobs(jobs),
+                    },
                     Err(EditorMoveError::Stale) => {
                         notice = Some("Selected job was removed; reloading queued jobs.");
                         state.replace_jobs(reload_jobs()?);
@@ -497,6 +522,40 @@ mod tests {
         assert_eq!(state.reduce(key(KeyCode::Enter)), EditorIntent::None);
         assert_eq!(state.mode(), EditorMode::Browse);
         assert_eq!(state.jobs()[0].id, second_id);
+    }
+
+    #[test]
+    fn successful_move_keeps_move_mode_for_continued_editing() {
+        let first = job("first", 1);
+        let second = job("second", 2);
+        let second_id = second.id;
+        let mut state = EditorState::new(vec![first.clone(), second.clone()]);
+        state.reduce(key(KeyCode::Down));
+        state.reduce(key(KeyCode::Enter));
+        assert_eq!(
+            state.reduce(key(KeyCode::Up)),
+            EditorIntent::Move {
+                id: second_id,
+                target_order: 1,
+            }
+        );
+
+        state.replace_jobs_after_move(vec![second, first], second_id, 2);
+
+        assert_eq!(
+            state.mode(),
+            EditorMode::Move {
+                id: second_id,
+                original_order: 2,
+            }
+        );
+        assert_eq!(
+            state.reduce(key(KeyCode::Down)),
+            EditorIntent::Move {
+                id: second_id,
+                target_order: 2,
+            }
+        );
     }
 
     #[test]
@@ -721,6 +780,60 @@ mod tests {
 
         assert_eq!(reload_count, 1);
         assert!(terminal.output.contains("removed"));
+        terminal.assert_cleaned_up();
+    }
+
+    #[test]
+    fn non_empty_editor_can_move_keep_undo_and_exit_without_unlocking() {
+        let first = job("first", 1);
+        let second = job("second", 2);
+        let third = job("third", 3);
+        let second_id = second.id;
+        let third_id = third.id;
+        let initial_ids = vec![first.id, second_id, third_id];
+        let mut persisted = vec![first, second, third];
+        let mut moves = Vec::new();
+        let mut terminal = RecordingTerminal::with_events([
+            key(KeyCode::Down),
+            key(KeyCode::Enter),
+            key(KeyCode::Up),
+            key(KeyCode::Down),
+            key(KeyCode::Enter),
+            key(KeyCode::Down),
+            key(KeyCode::Enter),
+            key(KeyCode::Up),
+            key(KeyCode::Char('q')),
+            key(KeyCode::Char('q')),
+        ]);
+
+        run_queue_editor_with_input(
+            &mut terminal,
+            persisted.clone(),
+            |id, target_order| {
+                moves.push((id, target_order));
+                let selected = persisted
+                    .iter()
+                    .position(|job| job.id == id)
+                    .expect("selected job remains queued");
+                let job = persisted.remove(selected);
+                persisted.insert(target_order - 1, job);
+                for (index, job) in persisted.iter_mut().enumerate() {
+                    job.queue_order = Some((index + 1) as i64);
+                }
+                Ok::<_, anyhow::Error>(persisted.clone())
+            },
+            || Ok::<_, anyhow::Error>(persisted.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            moves,
+            vec![(second_id, 1), (second_id, 2), (third_id, 2), (third_id, 3),]
+        );
+        assert_eq!(
+            persisted.iter().map(|job| job.id).collect::<Vec<_>>(),
+            initial_ids
+        );
         terminal.assert_cleaned_up();
     }
 

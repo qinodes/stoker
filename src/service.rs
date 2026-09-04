@@ -13,7 +13,7 @@ use crate::ipc::{
     IpcRequest, IpcResponse, LogStream, ServiceStatus, decode_request, send_response,
 };
 use crate::scheduler::{LogMessage, Scheduler};
-use crate::{StokerPaths, Store};
+use crate::{StokerPaths, Store, StoreError};
 
 pub struct Service {
     paths: StokerPaths,
@@ -421,6 +421,9 @@ async fn handle_client<S>(
             IpcRequest::MoveQueued { id, target_order } => {
                 match scheduler.handle_move_queued(id, target_order) {
                     Ok(jobs) => IpcResponse::QueuedJobs { jobs },
+                    Err(error) if is_stale_move_error(&error) => IpcResponse::StaleQueueMove {
+                        message: error.to_string(),
+                    },
                     Err(error) => IpcResponse::Error {
                         message: error.to_string(),
                     },
@@ -436,6 +439,18 @@ async fn handle_client<S>(
             return;
         }
     }
+}
+
+fn is_stale_move_error(error: &anyhow::Error) -> bool {
+    if let Some(error) = error.downcast_ref::<StoreError>() {
+        return matches!(
+            error,
+            StoreError::NotFound { .. }
+                | StoreError::InvalidQueueOrder { .. }
+                | StoreError::InvalidTransition { action: "move", .. }
+        );
+    }
+    false
 }
 
 async fn stream_logs<S>(

@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::config::normalize_path;
 use crate::domain::{Job, JobState, NewJob};
+use crate::ipc::StaleQueueMoveError;
 use crate::queue_editor::{self, EditorMoveError};
 use crate::service::Service;
 use crate::{ServiceClient, StokerPaths, Store, StoreError, is_service_unavailable};
@@ -415,6 +416,9 @@ fn is_stale_move_error(error: &anyhow::Error) -> bool {
                 | StoreError::InvalidQueueOrder { .. }
                 | StoreError::InvalidTransition { action: "move", .. }
         );
+    }
+    if error.downcast_ref::<StaleQueueMoveError>().is_some() {
+        return true;
     }
     let message = error.to_string();
     message.contains("cannot move job") || message.contains("does not exist")
