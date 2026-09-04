@@ -29,6 +29,13 @@ CREATE TABLE IF NOT EXISTS jobs (
     pid INTEGER,
     failure_detail TEXT
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    queue_locked INTEGER NOT NULL DEFAULT 0 CHECK (queue_locked IN (0, 1))
+);
+
+INSERT OR IGNORE INTO settings (id, queue_locked) VALUES (1, 0);
 "#;
 
 const INDEXES: &str = r#"
@@ -49,6 +56,16 @@ pub enum StoreError {
         id: Uuid,
         state: JobState,
         action: &'static str,
+    },
+    #[error("queue is locked; run 'stoker unlock-queue'")]
+    QueueLocked,
+    #[error("queue is unlocked; run 'stoker lock-queue' first")]
+    QueueUnlocked,
+    #[error("cannot move job {id} to queue position {target_order}; queue has {queued_count} jobs")]
+    InvalidQueueOrder {
+        id: Uuid,
+        target_order: usize,
+        queued_count: usize,
     },
     #[error("store lock is poisoned")]
     Poisoned,
@@ -123,6 +140,27 @@ impl Store {
     pub fn get_job(&self, id: Uuid) -> Result<Job, StoreError> {
         let conn = self.lock()?;
         get_job_with(&conn, id)
+    }
+
+    pub fn queue_locked(&self) -> Result<bool, StoreError> {
+        let conn = self.lock()?;
+        queue_locked_with(&conn)
+    }
+
+    pub fn lock_queue(&self) -> Result<(), StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("UPDATE settings SET queue_locked = 1 WHERE id = 1", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn unlock_queue(&self) -> Result<(), StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("UPDATE settings SET queue_locked = 0 WHERE id = 1", [])?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn list_jobs(&self, owner: Option<&str>) -> Result<Vec<Job>, StoreError> {
@@ -216,6 +254,7 @@ impl Store {
     pub fn commit_job(&self, id: Uuid) -> Result<Job, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_queue_unlocked(&tx)?;
         let state = self.current_state(&tx, id)?;
         if state != JobState::Draft {
             return Err(StoreError::InvalidTransition {
@@ -246,6 +285,7 @@ impl Store {
     pub fn commit_all_drafts(&self) -> Result<Vec<Job>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_queue_unlocked(&tx)?;
         let ids = tx
             .prepare(
                 "SELECT id FROM jobs WHERE state = 'DRAFT'
@@ -280,6 +320,7 @@ impl Store {
     pub fn pause_queued_jobs(&self) -> Result<Vec<Job>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_queue_unlocked(&tx)?;
         let ids = tx
             .prepare(
                 "SELECT id FROM jobs WHERE state = 'QUEUED'
@@ -305,6 +346,7 @@ impl Store {
     pub fn resume_paused_jobs(&self) -> Result<Vec<Job>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_queue_unlocked(&tx)?;
         let ids = tx
             .prepare(
                 "SELECT id FROM jobs WHERE state = 'PAUSED'
@@ -365,6 +407,63 @@ impl Store {
         Ok(job)
     }
 
+    pub fn move_queued_job(&self, id: Uuid, target_order: usize) -> Result<Vec<Job>, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !queue_locked_with(&tx)? {
+            return Err(StoreError::QueueUnlocked);
+        }
+
+        let mut queued_ids = tx
+            .prepare(
+                "SELECT id FROM jobs WHERE state = 'QUEUED'
+                 ORDER BY queue_order, id",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|id_text| parse_uuid(&id_text))
+            .collect::<Result<Vec<_>, _>>()?;
+        let queued_count = queued_ids.len();
+        if !queued_ids.contains(&id) {
+            let state = self.current_state(&tx, id)?;
+            return Err(StoreError::InvalidTransition {
+                id,
+                state,
+                action: "move",
+            });
+        }
+        if !(1..=queued_count).contains(&target_order) {
+            return Err(StoreError::InvalidQueueOrder {
+                id,
+                target_order,
+                queued_count,
+            });
+        }
+
+        let selected_index = queued_ids
+            .iter()
+            .position(|queued_id| *queued_id == id)
+            .expect("selected queued job was checked above");
+        let selected = queued_ids.remove(selected_index);
+        queued_ids.insert(target_order - 1, selected);
+        for (index, queued_id) in queued_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE jobs SET queue_order = ?2 WHERE id = ?1 AND state = 'QUEUED'",
+                params![
+                    queued_id.to_string(),
+                    i64::try_from(index + 1).expect("queue length fits i64")
+                ],
+            )?;
+        }
+        let jobs = queued_ids
+            .into_iter()
+            .map(|queued_id| get_job_with(&tx, queued_id))
+            .collect::<Result<Vec<_>, _>>()?;
+        tx.commit()?;
+        Ok(jobs)
+    }
+
     /// Transition an active execution into the cancellation phase. The
     /// scheduler owns terminating the process and completing the terminal
     /// transition; this durable marker prevents normal completion from
@@ -391,6 +490,10 @@ impl Store {
     pub fn claim_next(&self) -> Result<Option<Job>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if queue_locked_with(&tx)? {
+            tx.commit()?;
+            return Ok(None);
+        }
         let selected: Option<String> = tx
             .query_row(
                 "SELECT id FROM jobs WHERE state = 'QUEUED'
@@ -734,6 +837,22 @@ fn migrate_command_line(connection: &Connection) -> Result<(), StoreError> {
         connection.execute("ALTER TABLE jobs ADD COLUMN command_line TEXT", [])?;
     }
     Ok(())
+}
+
+fn queue_locked_with(conn: &Connection) -> Result<bool, StoreError> {
+    Ok(conn.query_row(
+        "SELECT queue_locked FROM settings WHERE id = 1",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? != 0)
+}
+
+fn ensure_queue_unlocked(conn: &Connection) -> Result<(), StoreError> {
+    if queue_locked_with(conn)? {
+        Err(StoreError::QueueLocked)
+    } else {
+        Ok(())
+    }
 }
 
 fn next_queue_order(conn: &Connection) -> Result<i64, StoreError> {

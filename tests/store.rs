@@ -31,6 +31,175 @@ fn new_job_named(name: &str) -> NewJob {
 }
 
 #[test]
+fn queue_lock_is_durable_idempotent_and_blocks_claims() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("stoker.db");
+    let store = Store::open(&db_path).unwrap();
+    assert!(!store.queue_locked().unwrap());
+
+    let id = store.create_job(new_job()).unwrap();
+    store.commit_job(id).unwrap();
+    let queued_before_lock = store.get_job(id).unwrap();
+
+    store.lock_queue().unwrap();
+    store.lock_queue().unwrap();
+    assert!(store.queue_locked().unwrap());
+    drop(store);
+
+    let store = Store::open(&db_path).unwrap();
+    assert!(store.queue_locked().unwrap());
+    assert!(store.claim_next().unwrap().is_none());
+    assert_eq!(store.get_job(id).unwrap(), queued_before_lock);
+
+    store.unlock_queue().unwrap();
+    store.unlock_queue().unwrap();
+    assert!(!store.queue_locked().unwrap());
+    assert_eq!(store.claim_next().unwrap().unwrap().id, id);
+}
+
+#[test]
+fn queue_lock_rejects_queue_mutations_but_allows_cancellation() {
+    let store = test_store();
+    let draft = store.create_job(new_job_named("draft")).unwrap();
+    let queued = store.create_job(new_job_named("queued")).unwrap();
+    store.commit_job(queued).unwrap();
+    let paused = store.create_job(new_job_named("paused")).unwrap();
+    store.commit_job(paused).unwrap();
+    store.pause_queued_jobs().unwrap();
+    store.lock_queue().unwrap();
+
+    let commit_error = store.commit_job(draft).unwrap_err();
+    assert!(matches!(&commit_error, StoreError::QueueLocked));
+    assert!(commit_error.to_string().contains("stoker unlock-queue"));
+    assert!(matches!(
+        store.commit_all_drafts(),
+        Err(StoreError::QueueLocked)
+    ));
+    assert!(matches!(
+        store.pause_queued_jobs(),
+        Err(StoreError::QueueLocked)
+    ));
+    assert!(matches!(
+        store.resume_paused_jobs(),
+        Err(StoreError::QueueLocked)
+    ));
+
+    assert_eq!(
+        store.cancel_not_started(queued).unwrap().state,
+        JobState::Cancelled
+    );
+}
+
+#[test]
+fn moving_a_queued_job_rewrites_contiguous_order_and_validates_destination() {
+    let store = test_store();
+    let first = store.create_job(new_job_named("first")).unwrap();
+    let second = store.create_job(new_job_named("second")).unwrap();
+    let third = store.create_job(new_job_named("third")).unwrap();
+    for id in [first, second, third] {
+        store.commit_job(id).unwrap();
+    }
+    store.lock_queue().unwrap();
+
+    let moved = store.move_queued_job(third, 1).unwrap();
+    assert_eq!(
+        moved.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [third, first, second]
+    );
+    assert_eq!(
+        moved.iter().map(|job| job.queue_order).collect::<Vec<_>>(),
+        [Some(1), Some(2), Some(3)]
+    );
+
+    for target_order in [0, 4] {
+        let error = store.move_queued_job(first, target_order).unwrap_err();
+        assert!(matches!(error, StoreError::InvalidQueueOrder { .. }));
+        assert_eq!(
+            store
+                .list_jobs_with_state(None, Some(JobState::Queued))
+                .unwrap()
+                .iter()
+                .map(|job| job.id)
+                .collect::<Vec<_>>(),
+            [third, first, second]
+        );
+    }
+}
+
+#[test]
+fn moving_a_queued_job_races_with_cancellation_without_restoring_it() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("stoker.db");
+    let move_store = Arc::new(Store::open(&db_path).unwrap());
+    let cancel_store = Arc::new(Store::open(&db_path).unwrap());
+    let first = move_store.create_job(new_job_named("first")).unwrap();
+    let second = move_store.create_job(new_job_named("second")).unwrap();
+    let selected = move_store.create_job(new_job_named("selected")).unwrap();
+    for id in [first, second, selected] {
+        move_store.commit_job(id).unwrap();
+    }
+    move_store.lock_queue().unwrap();
+    let barrier = Arc::new(Barrier::new(3));
+
+    let move_barrier = Arc::clone(&barrier);
+    let move_handle = std::thread::spawn(move || {
+        move_barrier.wait();
+        move_store.move_queued_job(selected, 1)
+    });
+    let cancel_barrier = Arc::clone(&barrier);
+    let cancel_handle = std::thread::spawn(move || {
+        cancel_barrier.wait();
+        cancel_store.cancel_not_started(selected)
+    });
+    barrier.wait();
+    let move_result = move_handle.join().unwrap();
+    let cancel_result = cancel_handle.join().unwrap();
+    assert!(matches!(
+        move_result,
+        Ok(_) | Err(StoreError::InvalidTransition { .. })
+    ));
+    assert_eq!(cancel_result.unwrap().state, JobState::Cancelled);
+
+    let store = Store::open(&db_path).unwrap();
+    assert_eq!(store.get_job(selected).unwrap().state, JobState::Cancelled);
+    assert_eq!(store.get_job(selected).unwrap().queue_order, None);
+    let queued = store
+        .list_jobs_with_state(None, Some(JobState::Queued))
+        .unwrap();
+    assert_eq!(
+        queued.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [first, second]
+    );
+    assert_eq!(
+        queued.iter().map(|job| job.queue_order).collect::<Vec<_>>(),
+        [Some(1), Some(2)]
+    );
+}
+
+#[test]
+fn moving_after_cancelling_a_different_job_uses_current_queue_order() {
+    let store = test_store();
+    let cancelled = store.create_job(new_job_named("cancelled")).unwrap();
+    let second = store.create_job(new_job_named("second")).unwrap();
+    let selected = store.create_job(new_job_named("selected")).unwrap();
+    for id in [cancelled, second, selected] {
+        store.commit_job(id).unwrap();
+    }
+    store.lock_queue().unwrap();
+    store.cancel_not_started(cancelled).unwrap();
+
+    let moved = store.move_queued_job(selected, 1).unwrap();
+    assert_eq!(
+        moved.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [selected, second]
+    );
+    assert_eq!(
+        moved.iter().map(|job| job.queue_order).collect::<Vec<_>>(),
+        [Some(1), Some(2)]
+    );
+}
+
+#[test]
 fn commit_moves_draft_to_queued_once() {
     let store = test_store();
     let id = store.create_job(new_job()).unwrap();
