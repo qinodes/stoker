@@ -288,3 +288,46 @@ impl WindowsManagedProcess {
         Ok(status)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{command_line, quote_arg, wide_path};
+    use std::ffi::OsStr;
+
+    fn utf16(value: Vec<u16>) -> String {
+        String::from_utf16(&value).expect("valid UTF-16")
+    }
+
+    #[test]
+    fn wide_path_is_null_terminated() {
+        assert_eq!(
+            wide_path(OsStr::new("C:\\work")),
+            vec![67, 58, 92, 119, 111, 114, 107, 0]
+        );
+    }
+
+    #[test]
+    fn command_line_quotes_arguments_with_spaces() {
+        let line = command_line(
+            OsStr::new("program name.exe"),
+            &["argument".into(), "two words".into()],
+        );
+        assert_eq!(
+            utf16(line[..line.len() - 1].to_vec()),
+            "\"program name.exe\" argument \"two words\""
+        );
+    }
+
+    #[test]
+    fn quote_arg_escapes_quotes_and_trailing_backslashes() {
+        assert_eq!(utf16(quote_arg(OsStr::new("plain"))), "plain");
+        let trailing_backslash = utf16(quote_arg(OsStr::new("ends \\")));
+        assert!(trailing_backslash.starts_with('"'));
+        assert!(trailing_backslash.ends_with('"'));
+        assert!(trailing_backslash.contains("ends "));
+        assert_eq!(
+            utf16(quote_arg(OsStr::new("say \"hello\""))),
+            "\"say \\\"hello\\\"\""
+        );
+    }
+}

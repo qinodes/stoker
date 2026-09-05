@@ -132,3 +132,79 @@ pub(crate) async fn finish_pipes(
     let stderr_result = finish_pipe_writer(stderr_task).await;
     stdout_result.and(stderr_result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DefaultProcessController, finish_pipe_writer, finish_pipes, spawn_pipe_writer};
+    use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn default_process_controller_can_be_constructed() {
+        let _ = DefaultProcessController::new();
+    }
+
+    #[tokio::test]
+    async fn pipe_writer_appends_output_and_flushes_before_finishing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("stdout.log");
+        let (mut writer, reader) = tokio::io::duplex(128);
+        let task = spawn_pipe_writer(reader, path.clone());
+
+        writer.write_all(b"first\n").await.unwrap();
+        writer.write_all(b"second\n").await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        finish_pipe_writer(task).await.unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "first\nsecond\n");
+    }
+
+    #[tokio::test]
+    async fn pipe_writer_drains_reader_when_destination_cannot_be_opened() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut writer, reader) = tokio::io::duplex(128);
+        let task = spawn_pipe_writer(reader, directory.path().to_path_buf());
+
+        writer
+            .write_all(b"output that must still be drained")
+            .await
+            .unwrap();
+        writer.shutdown().await.unwrap();
+
+        let error = finish_pipe_writer(task).await.unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::IsADirectory | std::io::ErrorKind::PermissionDenied
+        ));
+    }
+
+    #[tokio::test]
+    async fn finish_pipes_reports_the_first_stream_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut stdout_writer, stdout_reader) = tokio::io::duplex(64);
+        let (mut stderr_writer, stderr_reader) = tokio::io::duplex(64);
+        let stdout_task = spawn_pipe_writer(stdout_reader, directory.path().join("stdout.log"));
+        let stderr_task = spawn_pipe_writer(stderr_reader, directory.path().to_path_buf());
+
+        stdout_writer.shutdown().await.unwrap();
+        stderr_writer.shutdown().await.unwrap();
+        let error = finish_pipes(stdout_task, stderr_task).await.unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::IsADirectory
+                | std::io::ErrorKind::PermissionDenied
+                | std::io::ErrorKind::Other
+        ));
+    }
+
+    #[tokio::test]
+    async fn finish_pipe_writer_converts_join_failures_to_io_errors() {
+        let task = tokio::spawn(async {
+            panic!("intentional test task failure");
+            #[allow(unreachable_code)]
+            Ok::<(), std::io::Error>(())
+        });
+
+        let error = finish_pipe_writer(task).await.unwrap_err();
+        assert!(error.to_string().contains("process output task failed"));
+    }
+}

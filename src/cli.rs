@@ -2048,6 +2048,308 @@ mod snapshot_selector_tests {
 }
 
 #[cfg(test)]
+mod pure_logic_tests {
+    use super::*;
+    use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn paths(root: &std::path::Path) -> StokerPaths {
+        StokerPaths {
+            root: root.to_path_buf(),
+            database: root.join("stoker.db"),
+            runs: root.join("runs"),
+            lock: root.join("stoker.lock"),
+            endpoint: root.join("stoker.sock"),
+        }
+    }
+
+    fn timezone() -> ResolvedTimezone {
+        let directory = tempfile::tempdir().unwrap();
+        resolve_timezone(&paths(directory.path()), Some("UTC")).unwrap()
+    }
+
+    fn valid_entry() -> ConfigSnapshotEntry {
+        ConfigSnapshotEntry::Valid(ConfigSnapshotFile {
+            path: PathBuf::from("config-test.json"),
+            snapshot: ConfigSnapshot {
+                snapshot_version: 1,
+                created_at: Utc::now(),
+                reason: ConfigSnapshotReason::Manual,
+                config: StokerConfig {
+                    timezone: Some("Asia/Tokyo".to_owned()),
+                },
+            },
+        })
+    }
+
+    #[test]
+    fn command_parser_handles_shell_quotes_escapes_and_and_operator() {
+        assert_eq!(
+            parse_command_line(r#"echo "hello world" && printf 'x y'"#).unwrap(),
+            vec!["echo", "hello world", "&&", "printf", "x y"]
+        );
+        assert_eq!(
+            parse_command_line("echo escaped\\ space \"quote: \\\"ok\\\"\"").unwrap(),
+            vec!["echo", "escaped space", "quote: \"ok\""]
+        );
+        assert_eq!(
+            parse_command_line("  ").unwrap_err().to_string(),
+            "--cmd must not be empty"
+        );
+    }
+
+    #[test]
+    fn command_parser_reports_unterminated_quotes() {
+        for input in ["echo 'missing", "echo \"missing"] {
+            let error = parse_command_line(input).unwrap_err().to_string();
+            assert!(error.contains("--cmd contains an unterminated"));
+        }
+    }
+
+    #[test]
+    fn command_parser_preserves_backslashes_that_do_not_escape_special_chars() {
+        assert_eq!(
+            parse_command_line(r#"C:\temp\file"#).unwrap(),
+            vec![r#"C:\temp\file"#]
+        );
+        assert_eq!(parse_command_line(r#"'' """#).unwrap(), vec!["", ""]);
+        assert_eq!(
+            parse_command_line("echo foo&&bar").unwrap(),
+            vec!["echo", "foo", "&&", "bar"]
+        );
+    }
+
+    #[test]
+    fn selector_reducers_cover_navigation_cancel_and_empty_results() {
+        let mut timezone_state =
+            TimezoneSelectorState::new(vec!["UTC".into(), "Asia/Tokyo".into()], None);
+        assert_eq!(
+            timezone_state.reduce(key(KeyCode::Down)),
+            TimezoneSelectorAction::None
+        );
+        assert_eq!(timezone_state.selected, 1);
+        assert_eq!(
+            timezone_state.reduce(key(KeyCode::Up)),
+            TimezoneSelectorAction::None
+        );
+        assert_eq!(timezone_state.selected, 0);
+        assert_eq!(
+            timezone_state.reduce(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            TimezoneSelectorAction::Exit
+        );
+        assert_eq!(
+            timezone_state.reduce(key(KeyCode::F(1))),
+            TimezoneSelectorAction::None
+        );
+
+        timezone_state.query = "does-not-exist".into();
+        assert_eq!(
+            timezone_state.reduce(key(KeyCode::Down)),
+            TimezoneSelectorAction::None
+        );
+        assert_eq!(
+            timezone_state.reduce(key(KeyCode::Enter)),
+            TimezoneSelectorAction::None
+        );
+    }
+
+    #[test]
+    fn timezone_selector_renderer_shows_empty_and_scrolled_results() {
+        let timezones = (0..20).map(|index| format!("Etc/Zone{index:02}")).collect();
+        let mut state = TimezoneSelectorState::new(timezones, None);
+        state.selected = 19;
+        let mut output = Vec::new();
+        render_timezone_selector(&mut output, &state).unwrap();
+        let text = String::from_utf8_lossy(&output);
+        assert!(text.contains("Select timezone"));
+        assert!(text.contains("> Etc/Zone19"));
+
+        state.query = "missing".into();
+        output.clear();
+        render_timezone_selector(&mut output, &state).unwrap();
+        assert!(String::from_utf8_lossy(&output).contains("No matching IANA timezones."));
+    }
+
+    #[test]
+    fn snapshot_renderer_covers_list_detail_and_confirmation_views() {
+        let valid = valid_entry();
+        let invalid = ConfigSnapshotEntry::Invalid {
+            path: PathBuf::from("broken.json"),
+            error: "invalid JSON".into(),
+        };
+        let current = StokerConfig {
+            timezone: Some("UTC".into()),
+        };
+        let timezone = timezone();
+
+        let mut state = SnapshotSelectorState::new();
+        let entries = vec![valid.clone(), invalid.clone()];
+        let mut output = Vec::new();
+        render_snapshot_selector(&mut output, &state, &entries, &current, &timezone).unwrap();
+        let text = String::from_utf8_lossy(&output);
+        assert!(text.contains("Stoker configuration snapshots"));
+        assert!(text.contains("invalid snapshot"));
+        assert!(text.contains("1 changed: timezone"));
+
+        state.selected = 0;
+        state.view = SnapshotView::Detail;
+        output.clear();
+        render_snapshot_selector(&mut output, &state, &entries, &current, &timezone).unwrap();
+        assert!(String::from_utf8_lossy(&output).contains("Snapshot JSON:"));
+
+        state.selected = 1;
+        output.clear();
+        render_snapshot_selector(&mut output, &state, &entries, &current, &timezone).unwrap();
+        assert!(String::from_utf8_lossy(&output).contains("cannot be restored"));
+
+        state.selected = 0;
+        state.view = SnapshotView::Confirm;
+        output.clear();
+        render_snapshot_selector(&mut output, &state, &entries, &current, &timezone).unwrap();
+        assert!(String::from_utf8_lossy(&output).contains("Continue?"));
+
+        state.selected = 1;
+        output.clear();
+        render_snapshot_selector(&mut output, &state, &entries, &current, &timezone).unwrap();
+        assert!(output.is_empty() || String::from_utf8_lossy(&output).contains("\u{1b}"));
+    }
+
+    #[test]
+    fn snapshot_helpers_summarize_changes_and_long_key_lists() {
+        let same = StokerConfig {
+            timezone: Some("UTC".into()),
+        };
+        let changed = StokerConfig {
+            timezone: Some("Asia/Tokyo".into()),
+        };
+        let snapshot = ConfigSnapshot {
+            snapshot_version: 1,
+            created_at: Utc::now(),
+            reason: ConfigSnapshotReason::Manual,
+            config: changed,
+        };
+        assert_eq!(snapshot_summary(&same, &snapshot), "1 changed: timezone");
+        assert_eq!(detailed_snapshot_summary(&same, &snapshot), "  timezone");
+        assert_eq!(
+            snapshot_summary(
+                &same,
+                &ConfigSnapshot {
+                    config: same.clone(),
+                    ..snapshot.clone()
+                }
+            ),
+            "same as current"
+        );
+        assert_eq!(
+            detailed_snapshot_summary(
+                &same,
+                &ConfigSnapshot {
+                    config: same.clone(),
+                    ..snapshot
+                }
+            ),
+            "No differences."
+        );
+        assert_eq!(snapshot_reason_width(&[]), "Reason".len());
+
+        let keys = vec!["a-very-long-configuration-key".into(), "timezone".into()];
+        let summary = summarize_keys(&keys);
+        assert!(summary.ends_with("..."));
+        assert!(summary.chars().count() <= 32);
+    }
+
+    #[test]
+    fn stale_move_errors_are_classified_without_hiding_other_errors() {
+        let id = uuid::Uuid::nil();
+        for error in [
+            anyhow::Error::new(StoreError::NotFound { id }),
+            anyhow::Error::new(StoreError::InvalidQueueOrder {
+                id,
+                target_order: 2,
+                queued_count: 1,
+            }),
+            anyhow::Error::new(StoreError::InvalidTransition {
+                id,
+                state: JobState::Queued,
+                action: "move",
+            }),
+            anyhow::anyhow!("cannot move job {id} because it does not exist"),
+        ] {
+            assert!(is_stale_move_error(&error));
+            assert!(matches!(editor_move_error(error), EditorMoveError::Stale));
+        }
+        let error = anyhow::anyhow!("unrelated failure");
+        assert!(!is_stale_move_error(&error));
+        assert!(matches!(
+            editor_move_error(error),
+            EditorMoveError::Callback(_)
+        ));
+    }
+
+    #[test]
+    fn release_helpers_validate_versions_and_assets() {
+        let release = GithubRelease {
+            tag_name: "v1.2.3".into(),
+            assets: vec![GithubAsset {
+                name: "stoker.exe".into(),
+                browser_download_url: "https://example.test/stoker.exe".into(),
+            }],
+        };
+        assert_eq!(release.version().unwrap(), semver::Version::new(1, 2, 3));
+        assert_eq!(
+            release_asset(&release, "stoker.exe").unwrap().name,
+            "stoker.exe"
+        );
+        assert!(
+            release_asset(&release, "missing")
+                .unwrap_err()
+                .to_string()
+                .contains("missing")
+        );
+        assert!(
+            GithubRelease {
+                tag_name: "not-semver".into(),
+                assets: Vec::new(),
+            }
+            .version()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parser_and_formatting_helpers_cover_common_boundaries() {
+        assert_eq!(parse_job_state("running"), Ok(JobState::Running));
+        assert!(parse_job_state("unknown").is_err());
+        assert_eq!(
+            format_jobs_row(
+                ["id", "name", "state", "x", "y", "z", "w"],
+                &[2, 4, 5, 1, 1, 1, 1]
+            ),
+            "id  name  state  x  y  z  w"
+        );
+        assert_eq!(format_optional_time(None, &timezone()), "-");
+    }
+
+    #[test]
+    fn restore_without_snapshots_returns_without_entering_the_selector() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        restore_config(&paths, None).unwrap();
+    }
+
+    #[test]
+    fn terminal_guard_can_restore_terminal_state() {
+        let guard = InteractiveTerminalGuard;
+        drop(guard);
+    }
+}
+
+#[cfg(test)]
 mod windows_uninstall_tests {
     use super::{windows_uninstall_script, windows_update_script};
     use std::path::Path;

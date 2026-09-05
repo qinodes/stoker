@@ -555,6 +555,28 @@ async fn flush_log_events(stdout: &Path, stderr: &Path, sender: &broadcast::Send
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{NewJob, StokerPaths, Store};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn paths(root: &std::path::Path) -> StokerPaths {
+        StokerPaths {
+            root: root.to_path_buf(),
+            database: root.join("stoker.db"),
+            runs: root.join("runs"),
+            lock: root.join("stoker.lock"),
+            endpoint: root.join("stoker.sock"),
+        }
+    }
+
+    fn scheduler_fixture() -> (tempfile::TempDir, Arc<Store>, Scheduler) {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        paths.ensure().unwrap();
+        let store = Arc::new(Store::open(&paths.database).unwrap());
+        let scheduler = Scheduler::new(paths, Arc::clone(&store));
+        (directory, store, scheduler)
+    }
 
     #[tokio::test]
     async fn completion_watch_retains_signal_if_sent_before_wait() {
@@ -566,5 +588,196 @@ mod tests {
         // and cannot strand cancellation or stop waiting forever.
         assert!(receiver.changed().await.is_ok());
         assert!(*receiver.borrow());
+    }
+
+    #[tokio::test]
+    async fn scheduler_run_exits_immediately_when_shutdown_is_set() {
+        let (_directory, store, scheduler) = scheduler_fixture();
+        let (_wake_tx, wake_rx) = watch::channel(0_u64);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(true);
+        Arc::new(scheduler).run(wake_rx, shutdown_rx).await.unwrap();
+        assert!(store.list_jobs(None).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_setup_and_spawn_are_persisted_as_failed_jobs() {
+        let (directory, store, scheduler) = scheduler_fixture();
+        let missing_cwd = store
+            .create_job(NewJob {
+                name: "missing cwd".into(),
+                user: "test".into(),
+                cwd: directory.path().join("does-not-exist"),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        let empty_command = store
+            .create_job(NewJob {
+                name: "empty command".into(),
+                user: "test".into(),
+                cwd: directory.path().to_path_buf(),
+                command: Vec::new(),
+            })
+            .unwrap();
+        let spawn_failure = store
+            .create_job(NewJob {
+                name: "spawn failure".into(),
+                user: "test".into(),
+                cwd: directory.path().to_path_buf(),
+                command: vec!["program-that-does-not-exist".into()],
+            })
+            .unwrap();
+        for id in [missing_cwd, empty_command, spawn_failure] {
+            store.commit_job(id).unwrap();
+        }
+
+        let scheduler = Arc::new(scheduler);
+        let (wake_tx, wake_rx) = watch::channel(0_u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let scheduler_task = tokio::spawn(Arc::clone(&scheduler).run(wake_rx, shutdown_rx));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let states = store
+                    .list_jobs(None)
+                    .unwrap()
+                    .into_iter()
+                    .map(|job| job.state)
+                    .collect::<Vec<_>>();
+                if states.len() == 3 && states.iter().all(|state| matches!(state, JobState::Failed))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("scheduler should finish failed jobs");
+        shutdown_tx.send(true).unwrap();
+        drop(wake_tx);
+        scheduler_task.await.unwrap().unwrap();
+
+        for id in [missing_cwd, empty_command, spawn_failure] {
+            let job = store.get_job(id).unwrap();
+            assert_eq!(job.state, JobState::Failed);
+            assert!(job.failure_detail.is_some());
+            assert_eq!(job.pid, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn scheduler_status_tracks_queue_lock_and_active_fallback() {
+        let (_directory, store, scheduler) = scheduler_fixture();
+        let id = store
+            .create_job(NewJob {
+                name: "queued".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+
+        let status = scheduler.service_status().unwrap();
+        assert_eq!(status.active_job, None);
+        assert_eq!(status.queued_jobs, 1);
+        store.lock_queue().unwrap();
+        assert!(scheduler.service_status().unwrap().queue_locked);
+        store.unlock_queue().unwrap();
+        store.claim_next().unwrap();
+        assert_eq!(scheduler.service_status().unwrap().active_job, Some(id));
+    }
+
+    #[tokio::test]
+    async fn cancellation_handles_not_started_and_terminal_jobs() {
+        let (_directory, store, scheduler) = scheduler_fixture();
+        let draft = store
+            .create_job(NewJob {
+                name: "draft".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        assert_eq!(
+            scheduler.handle_cancel(draft).await.unwrap().state,
+            JobState::Cancelled
+        );
+
+        let queued = store
+            .create_job(NewJob {
+                name: "queued".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.commit_job(queued).unwrap();
+        assert_eq!(
+            scheduler.handle_cancel(queued).await.unwrap().state,
+            JobState::Cancelled
+        );
+
+        let error = scheduler.handle_cancel(draft).await.unwrap_err();
+        assert!(error.to_string().contains("cannot cancel job"));
+    }
+
+    #[tokio::test]
+    async fn log_watchers_publish_stdout_and_stderr_chunks() {
+        let directory = tempfile::tempdir().unwrap();
+        let stdout = directory.path().join("stdout.log");
+        let stderr = directory.path().join("stderr.log");
+        tokio::fs::write(&stdout, b"out").await.unwrap();
+        tokio::fs::write(&stderr, b"err").await.unwrap();
+        let (sender, mut receiver) = broadcast::channel(8);
+        let task = tokio::spawn(watch_logs(stdout, stderr, sender));
+
+        let first = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let second = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let events = [first, second];
+        assert!(events.iter().any(|message| matches!(
+            message,
+            LogMessage::Chunk(LogEvent { stream: LogStream::Stdout, offset: 0, bytes })
+                if bytes == b"out"
+        )));
+        assert!(events.iter().any(|message| matches!(
+            message,
+            LogMessage::Chunk(LogEvent { stream: LogStream::Stderr, offset: 0, bytes })
+                if bytes == b"err"
+        )));
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn flush_log_events_sends_existing_files_and_skips_missing_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let stdout = directory.path().join("stdout.log");
+        let stderr = directory.path().join("stderr.log");
+        tokio::fs::write(&stdout, b"already there").await.unwrap();
+        let (sender, mut receiver) = broadcast::channel(4);
+        flush_log_events(&stdout, &stderr, &sender).await;
+
+        let message = receiver.recv().await.unwrap();
+        assert!(matches!(
+            message,
+            LogMessage::Chunk(LogEvent { stream: LogStream::Stdout, offset: 0, bytes })
+                if bytes == b"already there"
+        ));
+    }
+
+    #[test]
+    fn scheduler_helpers_expose_log_paths_and_missing_log_receivers() {
+        let (_directory, _store, scheduler) = scheduler_fixture();
+        let id = Uuid::nil();
+        let (stdout, stderr) = scheduler.log_paths(id);
+        assert!(stdout.ends_with(format!("{id}\\stdout.log")));
+        assert!(stderr.ends_with(format!("{id}\\stderr.log")));
+        assert!(scheduler.log_receiver(id).is_none());
+        assert!(scheduler.job_exists(id).is_err());
     }
 }

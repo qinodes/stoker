@@ -624,8 +624,71 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipc::{decode_response, encode_request};
     use crate::{JobState, NewJob};
+    use futures_util::{SinkExt, StreamExt};
     use std::path::PathBuf;
+    use uuid::Uuid;
+
+    fn paths(root: &std::path::Path) -> StokerPaths {
+        StokerPaths {
+            root: root.to_path_buf(),
+            database: root.join("stoker.db"),
+            runs: root.join("runs"),
+            lock: root.join("stoker.lock"),
+            endpoint: root.join("stoker.sock"),
+        }
+    }
+
+    fn scheduler_fixture() -> (tempfile::TempDir, Arc<Store>, Arc<Scheduler>) {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        paths.ensure().unwrap();
+        let store = Arc::new(Store::open(&paths.database).unwrap());
+        let scheduler = Arc::new(Scheduler::new(paths, Arc::clone(&store)));
+        (directory, store, scheduler)
+    }
+
+    async fn request_response(scheduler: Arc<Scheduler>, request: IpcRequest) -> IpcResponse {
+        let (server_stream, client_stream) = tokio::io::duplex(8192);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (wake_tx, _) = watch::channel(0_u64);
+        let server_task = tokio::spawn(handle_client(
+            server_stream,
+            scheduler,
+            wake_tx,
+            shutdown_tx,
+            shutdown_rx,
+        ));
+        let mut framed = Framed::new(client_stream, LengthDelimitedCodec::new());
+        framed
+            .send(encode_request(&request).unwrap().into())
+            .await
+            .unwrap();
+        let response = decode_response(&framed.next().await.unwrap().unwrap()).unwrap();
+        drop(framed);
+        server_task.await.unwrap();
+        response
+    }
+
+    async fn raw_response(scheduler: Arc<Scheduler>, frame: &[u8]) -> IpcResponse {
+        let (server_stream, client_stream) = tokio::io::duplex(8192);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (wake_tx, _) = watch::channel(0_u64);
+        let server_task = tokio::spawn(handle_client(
+            server_stream,
+            scheduler,
+            wake_tx,
+            shutdown_tx,
+            shutdown_rx,
+        ));
+        let mut framed = Framed::new(client_stream, LengthDelimitedCodec::new());
+        framed.send(frame.to_vec().into()).await.unwrap();
+        let response = decode_response(&framed.next().await.unwrap().unwrap()).unwrap();
+        drop(framed);
+        server_task.await.unwrap();
+        response
+    }
 
     #[tokio::test]
     async fn queued_log_follow_exits_if_shutdown_is_already_set() {
@@ -661,5 +724,223 @@ mod tests {
         .unwrap_err();
         assert!(result.to_string().contains("shutting down"));
         assert_eq!(scheduler.job_exists(id).unwrap().state, JobState::Queued);
+    }
+
+    #[tokio::test]
+    async fn client_handler_dispatches_requests_and_reports_failures() {
+        let (_directory, store, scheduler) = scheduler_fixture();
+        let status = request_response(Arc::clone(&scheduler), IpcRequest::Status).await;
+        assert!(matches!(
+            status,
+            IpcResponse::Status(ServiceStatus {
+                queued_jobs: 0,
+                queue_locked: false,
+                active_job: None,
+                ..
+            })
+        ));
+
+        let missing = Uuid::nil();
+        let response =
+            request_response(Arc::clone(&scheduler), IpcRequest::Commit { id: missing }).await;
+        assert!(
+            matches!(response, IpcResponse::Error { message } if message.contains("does not exist"))
+        );
+
+        assert_eq!(
+            request_response(Arc::clone(&scheduler), IpcRequest::CommitAll).await,
+            IpcResponse::JobCount { count: 0 }
+        );
+        let response =
+            request_response(Arc::clone(&scheduler), IpcRequest::Cancel { id: missing }).await;
+        assert!(
+            matches!(response, IpcResponse::Error { message } if message.contains("does not exist"))
+        );
+
+        assert_eq!(
+            request_response(Arc::clone(&scheduler), IpcRequest::LockQueue).await,
+            IpcResponse::Ack
+        );
+        let response = request_response(
+            Arc::clone(&scheduler),
+            IpcRequest::MoveQueued {
+                id: missing,
+                target_order: 1,
+            },
+        )
+        .await;
+        assert!(
+            matches!(response, IpcResponse::StaleQueueMove { message } if message.contains("does not exist"))
+        );
+        assert_eq!(
+            request_response(Arc::clone(&scheduler), IpcRequest::UnlockQueue).await,
+            IpcResponse::Ack
+        );
+        assert_eq!(
+            request_response(Arc::clone(&scheduler), IpcRequest::Stop).await,
+            IpcResponse::Ack
+        );
+
+        let invalid = raw_response(Arc::clone(&scheduler), b"not-json").await;
+        assert!(matches!(invalid, IpcResponse::Error { message } if message.contains("expected")));
+
+        let id = store
+            .create_job(NewJob {
+                name: "draft".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        let response = request_response(scheduler, IpcRequest::FollowLogs { id }).await;
+        assert!(
+            matches!(response, IpcResponse::Error { message } if message.contains("still DRAFT"))
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_logs_sends_existing_stdout_stderr_and_log_end() {
+        let (directory, store, scheduler) = scheduler_fixture();
+        let id = store
+            .create_job(NewJob {
+                name: "finished".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.cancel_not_started(id).unwrap();
+        let run_dir = directory.path().join("runs").join(id.to_string());
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(run_dir.join("stdout.log"), b"out").unwrap();
+        std::fs::write(run_dir.join("stderr.log"), b"err").unwrap();
+
+        let (server_stream, client_stream) = tokio::io::duplex(8192);
+        let mut server_framed = Framed::new(server_stream, LengthDelimitedCodec::new());
+        let mut client_framed = Framed::new(client_stream, LengthDelimitedCodec::new());
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let server_task = tokio::spawn(async move {
+            stream_logs(&mut server_framed, &scheduler, id, &mut shutdown_rx).await
+        });
+
+        let mut responses = Vec::new();
+        loop {
+            let frame = client_framed.next().await.unwrap().unwrap();
+            let response = decode_response(&frame).unwrap();
+            let finished = response == IpcResponse::LogEnd;
+            responses.push(response);
+            if finished {
+                break;
+            }
+        }
+        server_task.await.unwrap().unwrap();
+        assert!(responses.contains(&IpcResponse::LogChunk {
+            stream: LogStream::Stdout,
+            bytes: b"out".to_vec(),
+        }));
+        assert!(responses.contains(&IpcResponse::LogChunk {
+            stream: LogStream::Stderr,
+            bytes: b"err".to_vec(),
+        }));
+    }
+
+    #[tokio::test]
+    async fn stream_logs_reports_missing_files_when_no_live_log_sender_exists() {
+        let (_directory, store, scheduler) = scheduler_fixture();
+        let id = store
+            .create_job(NewJob {
+                name: "finished".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.cancel_not_started(id).unwrap();
+        let (server_stream, _client_stream) = tokio::io::duplex(8192);
+        let mut framed = Framed::new(server_stream, LengthDelimitedCodec::new());
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let error = stream_logs(&mut framed, &scheduler, id, &mut shutdown_rx)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn queued_log_follow_can_be_cancelled_while_waiting_for_scheduler_start() {
+        let (_directory, store, scheduler) = scheduler_fixture();
+        let id = store
+            .create_job(NewJob {
+                name: "queued".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+        let (server_stream, _client_stream) = tokio::io::duplex(8192);
+        let mut framed = Framed::new(server_stream, LengthDelimitedCodec::new());
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(async move {
+            stream_logs(&mut framed, &scheduler, id, &mut shutdown_rx).await
+        });
+        tokio::task::yield_now().await;
+        shutdown_tx.send(true).unwrap();
+        let error = task.await.unwrap().unwrap_err();
+        assert!(error.to_string().contains("shutting down"));
+    }
+
+    #[test]
+    fn service_status_reports_queued_and_active_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let store = Store::open(&paths.database).unwrap();
+        let id = store
+            .create_job(NewJob {
+                name: "queued".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+        let service = Service::new(paths.clone()).unwrap();
+        assert_eq!(service.status().unwrap().queued_jobs, 1);
+        store.claim_next().unwrap();
+        assert_eq!(service.status().unwrap().active_job, Some(id));
+    }
+
+    #[test]
+    fn service_lock_rejects_a_second_service_instance() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let _first = Service::new(paths.clone()).unwrap();
+        let error = match Service::new(paths) {
+            Ok(_) => panic!("second service unexpectedly acquired the lock"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("already running"));
+    }
+
+    #[test]
+    fn stale_move_classifier_only_accepts_move_related_errors() {
+        let id = Uuid::nil();
+        assert!(is_stale_move_error(&anyhow::Error::new(
+            StoreError::NotFound { id }
+        )));
+        assert!(is_stale_move_error(&anyhow::Error::new(
+            StoreError::InvalidQueueOrder {
+                id,
+                target_order: 3,
+                queued_count: 1,
+            }
+        )));
+        assert!(is_stale_move_error(&anyhow::Error::new(
+            StoreError::InvalidTransition {
+                id,
+                state: JobState::Queued,
+                action: "move",
+            }
+        )));
+        assert!(!is_stale_move_error(&anyhow::anyhow!("other error")));
     }
 }

@@ -640,4 +640,114 @@ mod timezone_tests {
             2
         );
     }
+
+    #[test]
+    fn snapshot_reasons_have_stable_display_names() {
+        assert_eq!(ConfigSnapshotReason::Initial.to_string(), "initial");
+        assert_eq!(
+            ConfigSnapshotReason::BeforeConfigUpdate.to_string(),
+            "before config update"
+        );
+        assert_eq!(
+            ConfigSnapshotReason::BeforeRestore.to_string(),
+            "before restore"
+        );
+        assert_eq!(ConfigSnapshotReason::Manual.to_string(), "manual");
+    }
+
+    #[test]
+    fn missing_and_malformed_config_are_handled_distinctly() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        assert_eq!(paths.read_config().unwrap(), StokerConfig::default());
+
+        fs::write(paths.config_path(), "{not-json").unwrap();
+        let error = paths.read_config().unwrap_err();
+        assert!(error.to_string().contains("parse Stoker config"));
+    }
+
+    #[test]
+    fn invalid_timezone_is_rejected_by_config_and_resolution() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let invalid = StokerConfig {
+            timezone: Some("Not/AZone".into()),
+        };
+
+        let error = paths.write_config(&invalid).unwrap_err();
+        assert!(error.to_string().contains("unknown timezone"));
+
+        let error = resolve_timezone(&paths, Some("Not/AZone")).unwrap_err();
+        assert!(error.to_string().contains("unknown timezone"));
+    }
+
+    #[test]
+    fn system_timezone_is_used_when_config_has_no_timezone() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let resolved = resolve_timezone(&paths, None).unwrap();
+        assert_eq!(resolved.source, TimezoneSource::System);
+        assert!(!resolved.name.is_empty());
+    }
+
+    #[test]
+    fn snapshot_defaults_version_and_rejects_invalid_snapshot_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        fs::create_dir_all(paths.snapshot_dir()).unwrap();
+
+        let valid_path = paths.snapshot_dir().join("valid.json");
+        fs::write(
+            &valid_path,
+            serde_json::json!({
+                "created_at": "2026-01-01T00:00:00Z",
+                "reason": "manual",
+                "config": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let invalid_version_path = paths.snapshot_dir().join("version.json");
+        fs::write(
+            &invalid_version_path,
+            serde_json::json!({
+                "snapshot_version": 99,
+                "created_at": "2026-01-01T00:00:00Z",
+                "reason": "manual",
+                "config": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(paths.snapshot_dir().join("ignored.txt"), "not a snapshot").unwrap();
+
+        let entries = paths.list_config_snapshots().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|entry| matches!(
+            entry,
+            ConfigSnapshotEntry::Valid(snapshot) if snapshot.path == valid_path
+        )));
+        assert!(entries.iter().any(|entry| matches!(
+            entry,
+            ConfigSnapshotEntry::Invalid { path, error }
+                if path == &invalid_version_path && error.contains("unsupported snapshot version")
+        )));
+    }
+
+    #[test]
+    fn restoring_the_current_snapshot_is_a_noop() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let config = StokerConfig {
+            timezone: Some("UTC".into()),
+        };
+        paths.write_config(&config).unwrap();
+        let snapshot = match paths.list_config_snapshots().unwrap().remove(0) {
+            ConfigSnapshotEntry::Valid(snapshot) => snapshot.snapshot,
+            ConfigSnapshotEntry::Invalid { .. } => unreachable!(),
+        };
+
+        assert!(!paths.restore_config_snapshot(&snapshot).unwrap());
+        assert_eq!(paths.list_config_snapshots().unwrap().len(), 1);
+    }
 }

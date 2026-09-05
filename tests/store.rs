@@ -598,3 +598,87 @@ fn clean_terminal_jobs_removes_all_terminal_states_but_keeps_active_and_pending(
     assert_eq!(store.get_job(queued).unwrap().state, JobState::Queued);
     assert_eq!(store.get_job(running).unwrap().state, JobState::Running);
 }
+
+#[test]
+fn malformed_job_rows_are_reported_as_database_errors() {
+    fn assert_invalid_column(column: &str, value: &str) {
+        let directory = TempDir::new().unwrap();
+        let db_path = directory.path().join("stoker.db");
+        let store = Store::open(&db_path).unwrap();
+        let id = store.create_job(new_job()).unwrap();
+        drop(store);
+
+        let connection = Connection::open(&db_path).unwrap();
+        connection
+            .execute(
+                &format!("UPDATE jobs SET {column} = ?1 WHERE id = ?2"),
+                params![value, id.to_string()],
+            )
+            .unwrap();
+        drop(connection);
+
+        let store = Store::open(&db_path).unwrap();
+        assert!(matches!(
+            store.list_jobs(None),
+            Err(StoreError::Database(_))
+        ));
+    }
+
+    assert_invalid_column("id", "not-a-uuid");
+    assert_invalid_column("command", "not-json");
+    assert_invalid_column("state", "NOT-A-STATE");
+    assert_invalid_column("created_at", "not-a-time");
+    assert_invalid_column("committed_at", "not-a-time");
+    assert_invalid_column("started_at", "not-a-time");
+    assert_invalid_column("finished_at", "not-a-time");
+    assert_invalid_column("pid", "-1");
+}
+
+#[test]
+fn legacy_schema_with_queue_order_preserves_existing_orders() {
+    let directory = TempDir::new().unwrap();
+    let db_path = directory.path().join("stoker.db");
+    let id = Uuid::new_v4();
+    let connection = Connection::open(&db_path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE jobs (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                user TEXT NOT NULL,
+                repository TEXT NOT NULL,
+                git_commit TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                command TEXT NOT NULL,
+                state TEXT NOT NULL,
+                queue_order INTEGER,
+                created_at TEXT NOT NULL,
+                committed_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                exit_code INTEGER,
+                pid INTEGER,
+                execution_dir TEXT,
+                failure_detail TEXT
+            )",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO jobs
+             (id,name,user,repository,git_commit,cwd,command,state,queue_order,created_at,committed_at)
+             VALUES (?1,'legacy','alice',?2,'commit','relative','[\"echo\"]','QUEUED',7,?3,?3)",
+            params![
+                id.to_string(),
+                directory.path().to_string_lossy().to_string(),
+                "2026-01-01T00:00:00+00:00"
+            ],
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = Store::open(&db_path).unwrap();
+    let job = store.get_job(id).unwrap();
+    assert_eq!(job.queue_order, Some(7));
+    assert!(job.cwd.ends_with("relative"));
+}

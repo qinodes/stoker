@@ -87,3 +87,46 @@ pub struct Job {
     pub pid: Option<u32>,
     pub failure_detail: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::JobState;
+    use std::str::FromStr;
+
+    #[test]
+    fn job_states_round_trip_through_display_and_parser() {
+        let states = [
+            JobState::Draft,
+            JobState::Queued,
+            JobState::Starting,
+            JobState::Running,
+            JobState::Cancelling,
+            JobState::Succeeded,
+            JobState::Failed,
+            JobState::Cancelled,
+            JobState::Lost,
+        ];
+
+        for state in states {
+            assert_eq!(state.to_string().parse::<JobState>().unwrap(), state);
+        }
+    }
+
+    #[test]
+    fn unknown_job_state_reports_the_input() {
+        let error = JobState::from_str("paused").unwrap_err();
+        assert_eq!(error, "unknown job state \"paused\"");
+    }
+
+    #[test]
+    fn job_state_serialization_uses_uppercase_names() {
+        assert_eq!(
+            serde_json::to_string(&JobState::Cancelling).unwrap(),
+            "\"CANCELLING\""
+        );
+        assert_eq!(
+            serde_json::from_str::<JobState>("\"SUCCEEDED\"").unwrap(),
+            JobState::Succeeded
+        );
+    }
+}

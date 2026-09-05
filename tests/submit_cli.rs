@@ -180,6 +180,90 @@ fn timezone_config_and_cli_override_are_reflected_in_display_output() {
 }
 
 #[test]
+fn config_commands_show_get_unset_and_create_manual_snapshot() {
+    let repo = TestRepo::new();
+
+    stoker_in(repo.path())
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Stoker configuration"))
+        .stdout(predicate::str::contains("File:"))
+        .stdout(predicate::str::contains("timezone"));
+    stoker_in(repo.path())
+        .args(["config", "get", "timezone"])
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("timezone: "));
+
+    stoker_in(repo.path())
+        .args(["config", "set", "timezone", "UTC"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["config", "get", "timezone"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("timezone: UTC"));
+    stoker_in(repo.path())
+        .args(["config", "unset", "timezone"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Unset timezone"));
+    stoker_in(repo.path())
+        .args(["config", "get", "timezone"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "timezone: <using operating system timezone>",
+        ));
+    stoker_in(repo.path())
+        .args(["config", "snapshot"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Created configuration snapshot:"));
+}
+
+#[test]
+fn add_rejects_empty_user_and_name() {
+    let repo = TestRepo::new();
+    stoker_in(repo.path())
+        .args(["add", "--user", "", "--name", "job", "--cmd", "echo ok"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--user must not be empty"));
+    stoker_in(repo.path())
+        .args(["add", "--user", "alice", "--name", "", "--cmd", "echo ok"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--name must not be empty"));
+}
+
+#[test]
+fn logs_explain_when_queued_or_finished_jobs_have_no_run_directory() {
+    let repo = TestRepo::new();
+    let home = repo.path().parent().unwrap().join(format!(
+        ".{}-stoker-home",
+        repo.path().file_name().unwrap().to_string_lossy()
+    ));
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    let finished = finish_job(&store, "finished", "alice", Some(0));
+    let queued = store.create_job(job("queued", "alice")).unwrap();
+    store.commit_job(queued).unwrap();
+
+    stoker_in(repo.path())
+        .args(["logs", &queued.to_string()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is QUEUED"));
+    stoker_in(repo.path())
+        .args(["logs", &finished.to_string()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No logs are available"));
+}
+
+#[test]
 fn add_requires_user() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
