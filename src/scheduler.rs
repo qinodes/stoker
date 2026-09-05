@@ -81,21 +81,6 @@ impl Scheduler {
         Ok(jobs)
     }
 
-    pub fn handle_pause(&self) -> anyhow::Result<Vec<Job>> {
-        self.store.pause_queued_jobs().context("pause queued jobs")
-    }
-
-    pub fn handle_resume(&self, wake: &watch::Sender<u64>) -> anyhow::Result<Vec<Job>> {
-        let jobs = self
-            .store
-            .resume_paused_jobs()
-            .context("resume paused jobs")?;
-        if !jobs.is_empty() {
-            wake.send_modify(|value| *value = value.wrapping_add(1));
-        }
-        Ok(jobs)
-    }
-
     pub fn handle_lock_queue(&self) -> anyhow::Result<()> {
         self.store.lock_queue().context("lock queue")?;
         Ok(())
@@ -121,7 +106,7 @@ impl Scheduler {
             .get_job(id)
             .context("inspect job for cancellation")?;
         match job.state {
-            JobState::Draft | JobState::Queued | JobState::Paused => {
+            JobState::Draft | JobState::Queued => {
                 Ok(self.store.cancel_not_started(id).context("cancel job")?)
             }
             JobState::Starting | JobState::Running | JobState::Cancelling => {

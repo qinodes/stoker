@@ -63,9 +63,6 @@ fn queue_lock_rejects_queue_mutations_but_allows_cancellation() {
     let draft = store.create_job(new_job_named("draft")).unwrap();
     let queued = store.create_job(new_job_named("queued")).unwrap();
     store.commit_job(queued).unwrap();
-    let paused = store.create_job(new_job_named("paused")).unwrap();
-    store.commit_job(paused).unwrap();
-    store.pause_queued_jobs().unwrap();
     store.lock_queue().unwrap();
 
     let commit_error = store.commit_job(draft).unwrap_err();
@@ -75,15 +72,6 @@ fn queue_lock_rejects_queue_mutations_but_allows_cancellation() {
         store.commit_all_drafts(),
         Err(StoreError::QueueLocked)
     ));
-    assert!(matches!(
-        store.pause_queued_jobs(),
-        Err(StoreError::QueueLocked)
-    ));
-    assert!(matches!(
-        store.resume_paused_jobs(),
-        Err(StoreError::QueueLocked)
-    ));
-
     assert_eq!(
         store.cancel_not_started(queued).unwrap().state,
         JobState::Cancelled
@@ -268,45 +256,6 @@ fn queued_jobs_have_contiguous_orders_after_cancel_and_claim() {
 }
 
 #[test]
-fn pause_and_resume_restore_paused_jobs_before_newer_queue_entries() {
-    let store = test_store();
-    let first = store.create_job(new_job_named("first")).unwrap();
-    let second = store.create_job(new_job_named("second")).unwrap();
-    store.commit_job(first).unwrap();
-    store.commit_job(second).unwrap();
-
-    let paused = store.pause_queued_jobs().unwrap();
-    assert_eq!(
-        paused.iter().map(|job| job.id).collect::<Vec<_>>(),
-        [first, second]
-    );
-    assert_eq!(store.get_job(first).unwrap().state, JobState::Paused);
-    assert_eq!(store.get_job(first).unwrap().queue_order, Some(1));
-    assert_eq!(store.get_job(second).unwrap().queue_order, Some(2));
-
-    let newer = store.create_job(new_job_named("newer")).unwrap();
-    store.commit_job(newer).unwrap();
-    assert_eq!(store.get_job(newer).unwrap().queue_order, Some(1));
-
-    let resumed = store.resume_paused_jobs().unwrap();
-    assert_eq!(
-        resumed.iter().map(|job| job.id).collect::<Vec<_>>(),
-        [first, second]
-    );
-    let queued = store
-        .list_jobs_with_state(None, Some(JobState::Queued))
-        .unwrap();
-    assert_eq!(
-        queued.iter().map(|job| job.id).collect::<Vec<_>>(),
-        [first, second, newer]
-    );
-    assert_eq!(
-        queued.iter().map(|job| job.queue_order).collect::<Vec<_>>(),
-        [Some(1), Some(2), Some(3)]
-    );
-}
-
-#[test]
 fn commit_all_drafts_uses_creation_time_order() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("stoker.db");
@@ -340,18 +289,6 @@ fn commit_all_drafts_uses_creation_time_order() {
             .collect::<Vec<_>>(),
         [Some(1), Some(2), Some(3)]
     );
-}
-
-#[test]
-fn cancel_can_remove_a_paused_job_before_it_starts() {
-    let store = test_store();
-    let id = store.create_job(new_job()).unwrap();
-    store.commit_job(id).unwrap();
-    store.pause_queued_jobs().unwrap();
-
-    let cancelled = store.cancel_not_started(id).unwrap();
-    assert_eq!(cancelled.state, JobState::Cancelled);
-    assert_eq!(cancelled.queue_order, None);
 }
 
 #[test]

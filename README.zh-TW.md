@@ -68,10 +68,6 @@ stoker commit <JOB_ID>
 # 將所有 DRAFT Job 依建立時間加入 queue
 stoker commit --all
 
-# 暫時保留所有 queued Job，之後再恢復
-stoker pause
-stoker resume
-
 # 重新排序 queued Job 前先鎖定 queue，完成後明確解除鎖定
 stoker queue lock
 stoker queue edit
@@ -103,13 +99,13 @@ stoker logs <JOB_ID>
 # 持續顯示該 Job 新產生的 log，直到 Job 結束或你按 Ctrl+C
 stoker logs -f <JOB_ID>
 
-# 取消指定Job（DRAFT、QUEUED、PAUSED、STARTING、RUNNING、CANCELLING 都可以取消）
+# 取消指定Job（DRAFT、QUEUED、STARTING、RUNNING、CANCELLING 都可以取消）
 stoker cancel <JOB_ID>
 # 在腳本中可加上 --yes 略過確認提示。
 
 # 停止server(scheduler)
 # 若有正在執行的 Job，stoker 會先詢問是否強制取消
-# `QUEUED` 與 `PAUSED` Job 會保留，等下次啟動 scheduler 後再處理
+# `QUEUED` Job 會保留，等下次啟動 scheduler 後再處理
 stoker stop
 # 在腳本中可加上 --yes 略過確認提示。
 
@@ -206,7 +202,7 @@ stoker show <JOB_ID> --timezone UTC
 
 編輯 queue 前先執行 `stoker queue lock`，準備讓 scheduler 繼續接收工作時再執行 `stoker queue unlock`。鎖定狀態會持久保存：CLI 結束、scheduler 停止或重新啟動後仍然有效。鎖定時 scheduler 不會再 claim 其他 `QUEUED` Job。已經處於 `STARTING`、`RUNNING` 或 `CANCELLING` 的 Job 不會被停止，仍可正常完成。
 
-`stoker status` 一律顯示 `Queue: locked` 或 `Queue: unlocked`。鎖定時也會提示 scheduler 不會再啟動下一個 queued Job。Queue 鎖定時，`stoker commit`、`stoker commit --all`、`stoker pause` 與 `stoker resume` 都會被拒絕；`stoker cancel` 仍可使用，`stoker add` 也仍可使用，因為它建立的是 `DRAFT` Job。
+`stoker status` 一律顯示 `Queue: locked` 或 `Queue: unlocked`。鎖定時也會提示 scheduler 不會再啟動下一個 queued Job。Queue 鎖定時，`stoker commit` 與 `stoker commit --all` 都會被拒絕；`stoker cancel` 仍可使用，`stoker add` 也仍可使用，因為它建立的是 `DRAFT` Job。
 
 `stoker queue edit` 必須在 queue 已鎖定時使用。空 queue 仍可成功鎖定，並顯示 `Queue locked. No queued jobs to reorder.`；編輯空 queue 會成功顯示 `No queued jobs to reorder.`，不會開啟空白的終端機編輯器。離開編輯器不會解除 queue 鎖定。
 
@@ -229,7 +225,6 @@ stoker show <JOB_ID> --timezone UTC
 | --- | --- |
 | `DRAFT` | 已 add，但尚未 commit 到 queue。 |
 | `QUEUED` | 已 commit，正在等待執行。 |
-| `PAUSED` | 暫時保留；以 `stoker resume` 放回 queue。 |
 | `STARTING` | scheduler 已取出 Job，正在準備來源目錄與程序。 |
 | `RUNNING` | Job 的程序正在執行。 |
 | `CANCELLING` | 已要求取消，stoker 正在停止程序並清理。 |

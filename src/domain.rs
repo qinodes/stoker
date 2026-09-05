@@ -9,7 +9,6 @@ use uuid::Uuid;
 pub enum JobState {
     Draft,
     Queued,
-    Paused,
     Starting,
     Running,
     Cancelling,
@@ -24,7 +23,6 @@ impl JobState {
         match self {
             Self::Draft => "DRAFT",
             Self::Queued => "QUEUED",
-            Self::Paused => "PAUSED",
             Self::Starting => "STARTING",
             Self::Running => "RUNNING",
             Self::Cancelling => "CANCELLING",
@@ -49,7 +47,6 @@ impl std::str::FromStr for JobState {
         match value {
             "DRAFT" => Ok(Self::Draft),
             "QUEUED" => Ok(Self::Queued),
-            "PAUSED" => Ok(Self::Paused),
             "STARTING" => Ok(Self::Starting),
             "RUNNING" => Ok(Self::Running),
             "CANCELLING" => Ok(Self::Cancelling),

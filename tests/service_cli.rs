@@ -261,22 +261,6 @@ fn online_locked_queue_blocks_queue_mutations_but_allows_cancel() {
                 .and(predicate::str::contains("stoker queue unlock")),
         );
     stoker_with_home(&home)
-        .args(["pause"])
-        .assert()
-        .failure()
-        .stderr(
-            predicate::str::contains("queue is locked")
-                .and(predicate::str::contains("stoker queue unlock")),
-        );
-    stoker_with_home(&home)
-        .args(["resume"])
-        .assert()
-        .failure()
-        .stderr(
-            predicate::str::contains("queue is locked")
-                .and(predicate::str::contains("stoker queue unlock")),
-        );
-    stoker_with_home(&home)
         .args(["cancel", &queued.to_string(), "--yes"])
         .assert()
         .success();
@@ -497,52 +481,6 @@ fn duplicate_service_does_not_replace_running_endpoint() {
     stoker_with_home(&home).args(["stop"]).assert().success();
     start_service(&home);
     stoker_with_home(&home).args(["stop"]).assert().success();
-}
-
-#[test]
-fn pause_and_resume_change_only_queued_jobs() {
-    let home = TempStokerHome::new();
-    let cwd = tempfile::tempdir().unwrap();
-    let store = Store::open(home.path().join("stoker.db")).unwrap();
-    let active = store
-        .create_job(long_running_job("active", cwd.path().to_path_buf()))
-        .unwrap();
-    let first = store
-        .create_job(queued_job("first", cwd.path().to_path_buf()))
-        .unwrap();
-    let second = store
-        .create_job(queued_job("second", cwd.path().to_path_buf()))
-        .unwrap();
-    for id in [active, first, second] {
-        store.commit_job(id).unwrap();
-    }
-    start_service(&home);
-    wait_for_state(&store, active, JobState::Running);
-
-    stoker_with_home(&home)
-        .args(["pause"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Paused queued jobs."));
-    assert_eq!(store.get_job(active).unwrap().state, JobState::Running);
-    assert_eq!(store.get_job(first).unwrap().state, JobState::Paused);
-    assert_eq!(store.get_job(second).unwrap().state, JobState::Paused);
-
-    stoker_with_home(&home)
-        .args(["resume"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Resumed paused jobs."));
-    assert_eq!(store.get_job(first).unwrap().state, JobState::Queued);
-    assert_eq!(store.get_job(second).unwrap().state, JobState::Queued);
-    assert_eq!(store.get_job(first).unwrap().queue_order, Some(1));
-    assert_eq!(store.get_job(second).unwrap().queue_order, Some(2));
-
-    stoker_with_home(&home)
-        .args(["stop"])
-        .write_stdin("y\n")
-        .assert()
-        .success();
 }
 
 #[test]

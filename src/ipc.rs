@@ -22,8 +22,6 @@ pub enum IpcRequest {
     Stop,
     Commit { id: Uuid },
     CommitAll,
-    Pause,
-    Resume,
     Cancel { id: Uuid },
     FollowLogs { id: Uuid },
     LockQueue,
@@ -201,22 +199,6 @@ impl ServiceClient {
             IpcResponse::JobCount { count } => Ok(count),
             IpcResponse::Error { message } => anyhow::bail!("{message}"),
             _ => anyhow::bail!("service returned an invalid commit response"),
-        }
-    }
-
-    pub async fn pause(&self) -> anyhow::Result<()> {
-        match self.request(IpcRequest::Pause).await? {
-            IpcResponse::Ack => Ok(()),
-            IpcResponse::Error { message } => anyhow::bail!("{message}"),
-            _ => anyhow::bail!("service returned an invalid pause response"),
-        }
-    }
-
-    pub async fn resume(&self) -> anyhow::Result<()> {
-        match self.request(IpcRequest::Resume).await? {
-            IpcResponse::Ack => Ok(()),
-            IpcResponse::Error { message } => anyhow::bail!("{message}"),
-            _ => anyhow::bail!("service returned an invalid resume response"),
         }
     }
 

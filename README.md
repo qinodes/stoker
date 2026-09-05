@@ -67,10 +67,6 @@ stoker commit <JOB_ID>
 # Add every DRAFT job to the queue in creation order
 stoker commit --all
 
-# Temporarily hold all queued jobs, then restore them later
-stoker pause
-stoker resume
-
 # Lock the queue before reordering queued jobs, then unlock it explicitly
 stoker queue lock
 stoker queue edit
@@ -102,13 +98,13 @@ stoker logs <JOB_ID>
 # Follow new log output until the job ends or you press Ctrl+C
 stoker logs -f <JOB_ID>
 
-# Cancel a job (DRAFT, QUEUED, PAUSED, STARTING, RUNNING, or CANCELLING)
+# Cancel a job (DRAFT, QUEUED, STARTING, RUNNING, or CANCELLING)
 stoker cancel <JOB_ID>
 # Add --yes to skip the confirmation prompt in scripts.
 
 # Stop the scheduler
 # If a job is active, stoker asks before force-cancelling it.
-# QUEUED and PAUSED jobs remain for the next scheduler run.
+# QUEUED jobs remain for the next scheduler run.
 stoker stop
 # Add --yes to skip the confirmation prompt in scripts.
 
@@ -206,7 +202,7 @@ Resolution order is the CLI option, `config.json`, then the operating system tim
 
 Use `stoker queue lock` before editing the queue and `stoker queue unlock` when you are ready to let the scheduler continue. The lock is durable: it remains after the CLI exits, the scheduler stops, or the scheduler restarts. While locked, the scheduler does not claim another `QUEUED` job. A job already `STARTING`, `RUNNING`, or `CANCELLING` is not stopped and can finish normally.
 
-`stoker status` always shows `Queue: locked` or `Queue: unlocked`. When locked, it also reports that the scheduler will not start another queued job. A locked queue rejects `stoker commit`, `stoker commit --all`, `stoker pause`, and `stoker resume`; `stoker cancel` remains available, and `stoker add` remains available because it creates a `DRAFT` job.
+`stoker status` always shows `Queue: locked` or `Queue: unlocked`. When locked, it also reports that the scheduler will not start another queued job. A locked queue rejects `stoker commit` and `stoker commit --all`; `stoker cancel` remains available, and `stoker add` remains available because it creates a `DRAFT` job.
 
 `stoker queue edit` requires a locked queue. Locking an empty queue succeeds with `Queue locked. No queued jobs to reorder.` Editing an empty queue succeeds with `No queued jobs to reorder.` and does not open a blank editor. Leaving the editor never unlocks the queue.
 
@@ -229,7 +225,6 @@ If another terminal cancels the selected job while you are editing, the next mov
 | --- | --- |
 | `DRAFT` | Submitted, but not committed to the queue yet. |
 | `QUEUED` | Committed and waiting to run. |
-| `PAUSED` | Temporarily held; use `stoker resume` to return it to the queue. |
 | `STARTING` | Claimed by the scheduler; its source directory and process are being prepared. |
 | `RUNNING` | The job process is running. |
 | `CANCELLING` | A cancellation has been requested; stoker is stopping the process and cleaning up. |

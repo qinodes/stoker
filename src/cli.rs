@@ -95,10 +95,6 @@ pub enum CliCommand {
         #[arg(long, help = "Commit all DRAFT jobs in creation order")]
         all: bool,
     },
-    #[command(about = "Pause all queued jobs")]
-    Pause,
-    #[command(about = "Resume paused jobs")]
-    Resume,
     #[command(about = "Cancel a job")]
     Cancel(CancelArgs),
     #[command(about = "Show a job's logs")]
@@ -210,8 +206,6 @@ fn run_command_with_timezone(command: CliCommand, timezone: Option<String>) -> a
         },
         CliCommand::Stop(args) => stop(args.yes),
         CliCommand::Commit { id, all } => commit(id, all),
-        CliCommand::Pause => pause(),
-        CliCommand::Resume => resume(),
         CliCommand::Cancel(args) => cancel(args.id, args.confirmation.yes),
         CliCommand::Logs { id, follow } => logs(id, follow),
     }
@@ -1420,20 +1414,6 @@ fn commit(id: Option<Uuid>, all: bool) -> anyhow::Result<()> {
     runtime()?.block_on(ServiceClient::new(paths).commit(id.expect("clap requires a job ID")))
 }
 
-fn pause() -> anyhow::Result<()> {
-    let paths = open_paths()?;
-    runtime()?.block_on(ServiceClient::new(paths).pause())?;
-    println!("Paused queued jobs.");
-    Ok(())
-}
-
-fn resume() -> anyhow::Result<()> {
-    let paths = open_paths()?;
-    runtime()?.block_on(ServiceClient::new(paths).resume())?;
-    println!("Resumed paused jobs.");
-    Ok(())
-}
-
 fn cancel(id: Uuid, yes: bool) -> anyhow::Result<()> {
     let paths = open_paths()?;
     if !yes && !request_confirmation(&format!("Cancel job {id}"))? {
@@ -1657,7 +1637,7 @@ fn parse_job_state(value: &str) -> Result<JobState, String> {
 fn print_job(job: &Job, timezone: &ResolvedTimezone) {
     let execution_cwd = &job.cwd;
     let execution_cwd_status = match job.state {
-        JobState::Draft | JobState::Queued | JobState::Paused => "planned",
+        JobState::Draft | JobState::Queued => "planned",
         JobState::Starting | JobState::Running | JobState::Cancelling => "active",
         _ => "source directory retained",
     };
@@ -1769,6 +1749,14 @@ mod update_tests {
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
+    }
+
+    #[test]
+    fn pause_and_resume_commands_are_removed() {
+        assert!(Cli::try_parse_from(["stoker", "pause"]).is_err());
+        assert!(Cli::try_parse_from(["stoker", "resume"]).is_err());
+        assert!(Cli::try_parse_from(["stoker", "queue", "pause"]).is_err());
+        assert!(Cli::try_parse_from(["stoker", "queue", "resume"]).is_err());
     }
 
     #[test]
