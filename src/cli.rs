@@ -412,8 +412,9 @@ fn render_timezone_selector(
         state.query,
         matches.len()
     ));
-    output
-        .push_str("↑/↓ select · type to search · Backspace delete · Enter save · Esc/q cancel\n\n");
+    output.push_str(
+        "↑/↓ select || type to search || Backspace delete || Enter save || Esc/q cancel\n\n",
+    );
 
     if matches.is_empty() {
         output.push_str("No matching IANA timezones.\n");
@@ -604,7 +605,7 @@ fn render_snapshot_selector(
     match state.view {
         SnapshotView::List => {
             output.push_str("Stoker configuration snapshots\n");
-            output.push_str("↑/↓ select · Enter details · q/Esc quit\n\n");
+            output.push_str("↑/↓ select || Enter details || q/Esc quit\n\n");
             let reason_width = snapshot_reason_width(entries);
             output.push_str(&snapshot_list_header(reason_width));
             for (index, entry) in entries.iter().enumerate() {
@@ -643,22 +644,14 @@ fn render_snapshot_selector(
             match entry {
                 ConfigSnapshotEntry::Valid(snapshot) => {
                     output.push_str(&format!("File: {}\n", snapshot.path.display()));
-                    output.push_str(&format!(
-                        "Created time: {}\n",
-                        timezone.format(snapshot.snapshot.created_at)
-                    ));
-                    output.push_str(&format!("Reason: {}\n\n", snapshot.snapshot.reason));
                     output.push_str("Changes from current configuration:\n");
                     output.push_str(&format!(
                         "{}\n\n",
                         detailed_snapshot_summary(current, &snapshot.snapshot)
                     ));
-                    output.push_str("Configuration:\n");
-                    output.push_str(
-                        &serde_json::to_string_pretty(&snapshot.snapshot.config)
-                            .context("format snapshot configuration")?,
-                    );
-                    output.push_str("\n\nEnter restore this snapshot · Esc/q back");
+                    output.push_str("Snapshot JSON:\n");
+                    output.push_str(&snapshot_json_for_display(&snapshot.snapshot, timezone)?);
+                    output.push_str("\n\nEnter restore this snapshot || Esc/q back");
                 }
                 ConfigSnapshotEntry::Invalid { path, error } => {
                     output.push_str(&format!("File: {}\n\n", path.display()));
@@ -748,6 +741,22 @@ fn detailed_snapshot_summary(current: &StokerConfig, snapshot: &ConfigSnapshot) 
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+fn snapshot_json_for_display(
+    snapshot: &ConfigSnapshot,
+    timezone: &ResolvedTimezone,
+) -> anyhow::Result<String> {
+    let created_at = snapshot.created_at;
+    let mut snapshot_json =
+        serde_json::to_value(snapshot).context("format snapshot configuration")?;
+    if let Some(object) = snapshot_json.as_object_mut() {
+        object.insert(
+            "created_at".to_owned(),
+            serde_json::Value::String(timezone.format(created_at)),
+        );
+    }
+    serde_json::to_string_pretty(&snapshot_json).context("format snapshot configuration")
 }
 
 fn changed_config_keys(current: &StokerConfig, snapshot: &StokerConfig) -> Vec<String> {
@@ -1928,6 +1937,33 @@ mod snapshot_selector_tests {
 
         assert_eq!(header.find("Reason"), row.find("manual"));
         assert_eq!(header.find("Summary"), row.find("same as current"));
+    }
+
+    #[test]
+    fn snapshot_json_includes_metadata_and_localizes_created_at() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let paths = StokerPaths {
+            root: directory.path().to_path_buf(),
+            database: directory.path().join("stoker.db"),
+            runs: directory.path().join("runs"),
+            lock: directory.path().join("stoker.lock"),
+            endpoint: directory.path().join("stoker.sock"),
+        };
+        paths.ensure().expect("initialize temporary paths");
+
+        let snapshot = match valid_entry() {
+            ConfigSnapshotEntry::Valid(snapshot) => snapshot.snapshot,
+            ConfigSnapshotEntry::Invalid { .. } => unreachable!(),
+        };
+        let timezone = resolve_timezone(&paths, Some("Asia/Tokyo")).expect("valid timezone");
+
+        let json = snapshot_json_for_display(&snapshot, &timezone).expect("valid snapshot JSON");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+        assert!(value.get("snapshot_version").is_some());
+        assert_eq!(value["reason"], "initial");
+        assert_eq!(value["config"]["timezone"], "Asia/Tokyo");
+        assert!(value["created_at"].as_str().unwrap().ends_with("+09:00"));
     }
 
     #[test]

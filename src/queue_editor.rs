@@ -390,10 +390,10 @@ fn render<T: TerminalBackend>(
     match state.mode {
         EditorMode::Browse => {
             output.push_str(&format!(
-                "Queue locked · {} jobs waiting\n",
+                "Queue locked || {} jobs waiting\n",
                 state.jobs.len()
             ));
-            output.push_str("↑/↓ select a job · Enter move selected job · q leave editor\n\n");
+            output.push_str("↑/↓ select a job || Enter move selected job || q leave editor\n\n");
         }
         EditorMode::Move { id, .. } => {
             let name = state
@@ -403,7 +403,7 @@ fn render<T: TerminalBackend>(
                 .map(|job| job.name.as_str())
                 .unwrap_or("(removed)");
             output.push_str(&format!("Moving: {name}\n"));
-            output.push_str("↑/↓ adjust position · Enter keep move · q undo this move\n\n");
+            output.push_str("↑/↓ adjust position || Enter keep move || q undo this move\n\n");
         }
     }
     for (index, job) in state.jobs.iter().enumerate() {
