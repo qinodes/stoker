@@ -1,6 +1,6 @@
 [package]
 name = "stoker-engine"
-version = "1.2.1"
+version = "1.2.2"
 edition = "2024"
 description = "A lightweight, cross-platform CLI for scheduling multiple time-consuming jobs to run sequentially and reliably"
 license = "Apache-2.0"

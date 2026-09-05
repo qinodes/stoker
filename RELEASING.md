@@ -6,7 +6,7 @@ release.
 The release flow is:
 
 ```text
-check -> push main -> CI -> versioning -> release -> Release workflow -> publish
+check -> push main -> CI -> tag -> release -> Release workflow -> publish
 ```
 
 ## Prerequisites
@@ -50,7 +50,7 @@ release tag together with `main`.
 ## 3. Create the release tag
 
 ```bash
-make versioning VERSION=1.2.1
+make tag VERSION=1.2.1
 ```
 
 This creates an annotated Git tag named `v1.2.1` on the current commit. The
@@ -92,7 +92,7 @@ cannot be published again with different contents.
 make check
 git push origin main
 # Wait for CI to pass on GitHub.
-make versioning VERSION=1.2.1
+make tag VERSION=1.2.1
 make release VERSION=1.2.1
 # Wait for the Release workflow to pass on GitHub.
 make publish

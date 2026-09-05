@@ -1,12 +1,12 @@
-.PHONY: format format-check lint test cargo-check build stop-test-process check versioning release publish
+.PHONY: format format-check lint test cargo-check build stop-test-process check version tag release publish
 
 VERSION ?=
 TAG = v$(VERSION)
 MESSAGE = Release $(TAG)
 
-ifneq ($(filter versioning release,$(MAKECMDGOALS)),)
+ifneq ($(filter version tag release,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VERSION)),)
-$(error VERSION is required, for example: make versioning VERSION=1.2.1)
+$(error VERSION is required, for example: make version VERSION=1.2.2 or make tag VERSION=1.2.2)
 endif
 endif
 
@@ -43,7 +43,14 @@ check:
 	$(MAKE) test
 	$(MAKE) build
 
-versioning:
+version:
+ifeq ($(OS),Windows_NT)
+	powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "scripts/set-version.ps1" -Version "$(VERSION)"
+else
+	sh scripts/set-version.sh "$(VERSION)"
+endif
+
+tag:
 	git tag -a "$(TAG)" -m "$(MESSAGE)"
 	@echo "Tag $(TAG) created at the current commit. Verify CI before running 'make release VERSION=$(VERSION)'."
 
