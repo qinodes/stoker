@@ -135,6 +135,48 @@ fn stop_when_service_is_not_running_is_successful() {
 }
 
 #[test]
+fn commit_when_service_is_not_running_reports_how_to_start_it() {
+    let home = TempStokerHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let store = Store::open(home.path().join("stoker.db")).unwrap();
+    let id = store
+        .create_job(queued_job("offline-commit", cwd.path().to_path_buf()))
+        .unwrap();
+
+    stoker_with_home(&home)
+        .args(["commit", &id.to_string()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Scheduler is not running. Run `stoker start` first.",
+        ));
+}
+
+#[test]
+fn single_commit_reports_the_queued_state() {
+    let home = TempStokerHome::new();
+    let cwd = tempfile::tempdir().unwrap();
+    let store = Store::open(home.path().join("stoker.db")).unwrap();
+    let id = store
+        .create_job(queued_job("commit-feedback", cwd.path().to_path_buf()))
+        .unwrap();
+    start_service(&home);
+
+    stoker_with_home(&home)
+        .args(["commit", &id.to_string()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Committed job {id} (QUEUED)."
+        )));
+
+    stoker_with_home(&home)
+        .args(["stop", "--yes"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn queue_lock_stopped_service_is_idempotent_and_status_reports_state() {
     let home = TempStokerHome::new();
 

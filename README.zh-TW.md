@@ -9,8 +9,8 @@
 
 [English](README.md) | [日本語](README.ja.md) | 繁體中文
 
-**stoker 是一個輕量、跨平台、本機 command(CLI) 的任務排程器。**
-每個 Job 都會自動在建立時所在的資料夾執行。
+**stoker 是一個輕量、跨平台、用來執行本機工作的 CLI。**
+每個 Job 都會從你提交指令時所在的資料夾執行。
 
 ## 安裝
 

@@ -9,8 +9,8 @@
 
 [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | English
 
-**stoker is a lightweight, cross-platform local command-line (CLI) job scheduler.**
-Each job runs in the directory where it was submitted.
+**stoker is a lightweight, cross-platform CLI for running local jobs.**
+Jobs run from the directory where you submit them.
 
 ## Installation
 

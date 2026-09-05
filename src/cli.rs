@@ -29,7 +29,7 @@ use crate::{ServiceClient, StokerPaths, Store, StoreError, is_service_unavailabl
 #[derive(Debug, Parser)]
 #[command(
     name = "stoker",
-    about = "A local job scheduler",
+    about = "Jobs run from the directory where you submit them.",
     version = env!("CARGO_PKG_VERSION")
 )]
 pub struct Cli {
@@ -1420,7 +1420,17 @@ fn commit(id: Option<Uuid>, all: bool) -> anyhow::Result<()> {
         println!("Committed {count} DRAFT job(s).");
         return Ok(());
     }
-    runtime()?.block_on(ServiceClient::new(paths).commit(id.expect("clap requires a job ID")))
+    let id = id.expect("clap requires a job ID");
+    match runtime()?.block_on(ServiceClient::new(paths).commit(id)) {
+        Ok(()) => {
+            println!("Committed job {id} (QUEUED).");
+            Ok(())
+        }
+        Err(error) if is_service_unavailable(&error) => {
+            anyhow::bail!("Scheduler is not running. Run `stoker start` first.")
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn cancel(id: Uuid, yes: bool) -> anyhow::Result<()> {
@@ -1469,12 +1479,16 @@ fn add(args: AddArgs) -> anyhow::Result<()> {
         NewJob {
             name: args.name,
             user: args.user,
-            cwd,
+            cwd: cwd.clone(),
             command,
         },
         args.command,
     )?;
     println!("Created job {id} (DRAFT)");
+    println!("Working directory: {}", cwd.display());
+    println!();
+    println!("Next: stoker show {id}");
+    println!("      stoker commit {id}");
     Ok(())
 }
 

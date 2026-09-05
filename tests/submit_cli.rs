@@ -45,6 +45,10 @@ fn add_records_absolute_cwd_as_draft() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Working directory:"));
+    assert!(stdout.contains("Next: stoker show "));
+    assert!(stdout.contains("stoker commit "));
 
     let home = repo.join("experiments").join(".llama-stoker-home");
     let db = Connection::open(home.join("stoker.db")).unwrap();

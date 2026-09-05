@@ -2,7 +2,7 @@
 name = "stoker-engine"
 version = "1.1.1"
 edition = "2024"
-description = "A lightweight, cross-platform local job scheduler and command-line task runner"
+description = "A lightweight, cross-platform CLI for running local jobs from the directory where they are submitted"
 license = "Apache-2.0"
 repository = "https://github.com/qinodes/stoker"
 readme = "README.md"
