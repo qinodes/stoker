@@ -1,12 +1,19 @@
-.PHONY: format format-check lint test cargo-check build stop-test-process check versioning release publish
+.PHONY: format format-check lint test cargo-check build stop-test-process check versioning release publish auto-publish
 
 VERSION ?=
 TAG = v$(VERSION)
 MESSAGE = Release $(TAG)
 
-ifneq ($(filter versioning,$(MAKECMDGOALS)),)
+ifneq ($(filter versioning auto-publish,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VERSION)),)
-$(error VERSION is required, for example: make release VERSION=0.5.0)
+$(error VERSION is required, for example: make versioning VERSION=0.5.0)
+endif
+endif
+
+ifneq ($(filter auto-publish,$(MAKECMDGOALS)),)
+CURRENT_BRANCH := $(shell git branch --show-current)
+ifneq ($(CURRENT_BRANCH),main)
+$(error auto-publish must run from the main branch; current branch is "$(CURRENT_BRANCH)")
 endif
 endif
 
@@ -53,3 +60,10 @@ release:
 
 publish:
 	cargo publish
+
+auto-publish:
+	cargo install --path .
+	$(MAKE) check
+	$(MAKE) versioning VERSION="$(VERSION)"
+	$(MAKE) release
+	$(MAKE) publish
