@@ -66,7 +66,7 @@ pub struct StaleQueueMoveError {
 }
 
 impl StaleQueueMoveError {
-    fn new(message: String) -> Self {
+    pub(crate) fn new(message: String) -> Self {
         Self { message }
     }
 }
@@ -489,5 +489,243 @@ mod tests {
             "missing service took {:?} to report unavailable",
             started.elapsed()
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod unix_client_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use std::future::Future;
+    use std::path::Path;
+    use tokio::net::UnixListener;
+    use tokio::task::JoinHandle;
+    use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+    fn paths(root: &Path) -> StokerPaths {
+        StokerPaths {
+            root: root.to_path_buf(),
+            database: root.join("stoker.db"),
+            runs: root.join("runs"),
+            lock: root.join("stoker.lock"),
+            endpoint: root.join("stoker.sock"),
+        }
+    }
+
+    async fn client_with_responses(
+        responses: Vec<IpcResponse>,
+    ) -> (tempfile::TempDir, ServiceClient, JoinHandle<()>) {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let listener = UnixListener::bind(&paths.endpoint).unwrap();
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut framed = Framed::new(stream, LengthDelimitedCodec::new());
+            let _request = framed.next().await.unwrap().unwrap();
+            for response in responses {
+                framed
+                    .send(encode_response(&response).unwrap().into())
+                    .await
+                    .unwrap();
+            }
+        });
+        (directory, ServiceClient::new(paths), task)
+    }
+
+    async fn assert_response_error<T, F, Fut>(response: IpcResponse, operation: F, expected: &str)
+    where
+        F: FnOnce(&ServiceClient) -> Fut,
+        Fut: Future<Output = anyhow::Result<T>>,
+    {
+        let (_directory, client, task) = client_with_responses(vec![response]).await;
+        let error = operation(&client).await.unwrap_err();
+        assert!(error.to_string().contains(expected), "{error:#}");
+        task.await.unwrap();
+    }
+
+    fn sample_status() -> ServiceStatus {
+        ServiceStatus {
+            pid: 42,
+            active_job: None,
+            queued_jobs: 0,
+            queue_locked: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn client_methods_validate_response_variants() {
+        let (_directory, client, task) =
+            client_with_responses(vec![IpcResponse::Status(sample_status())]).await;
+        assert_eq!(client.status().await.unwrap(), sample_status());
+        task.await.unwrap();
+
+        for response in [
+            IpcResponse::Ack,
+            IpcResponse::JobCount { count: 1 },
+            IpcResponse::QueuedJobs { jobs: Vec::new() },
+            IpcResponse::StaleQueueMove {
+                message: "stale".into(),
+            },
+        ] {
+            assert_response_error(response, |client| client.status(), "invalid status").await;
+        }
+        for response in [
+            IpcResponse::LogChunk {
+                stream: LogStream::Stdout,
+                bytes: Vec::new(),
+            },
+            IpcResponse::LogEnd,
+        ] {
+            assert_response_error(response, |client| client.status(), "invalid status").await;
+        }
+        assert_response_error(
+            IpcResponse::Error {
+                message: "status failed".into(),
+            },
+            |client| client.status(),
+            "status failed",
+        )
+        .await;
+
+        let id = Uuid::nil();
+        for (operation, expected) in [
+            ("commit", "invalid commit"),
+            ("cancel", "invalid cancel"),
+            ("lock queue", "invalid lock queue"),
+            ("unlock queue", "invalid unlock queue"),
+        ] {
+            let response = IpcResponse::Status(sample_status());
+            match operation {
+                "commit" => {
+                    assert_response_error(response, |client| client.commit(id), expected).await
+                }
+                "cancel" => {
+                    assert_response_error(response, |client| client.cancel(id), expected).await
+                }
+                "lock queue" => {
+                    assert_response_error(response, |client| client.lock_queue(), expected).await
+                }
+                "unlock queue" => {
+                    assert_response_error(response, |client| client.unlock_queue(), expected).await
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        assert_response_error(
+            IpcResponse::Error {
+                message: "commit failed".into(),
+            },
+            |client| client.commit(id),
+            "commit failed",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Status(sample_status()),
+            |client| client.commit_all(),
+            "invalid commit",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Error {
+                message: "cancel failed".into(),
+            },
+            |client| client.cancel(id),
+            "cancel failed",
+        )
+        .await;
+
+        let (_directory, client, task) =
+            client_with_responses(vec![IpcResponse::JobCount { count: 3 }]).await;
+        assert_eq!(client.commit_all().await.unwrap(), 3);
+        task.await.unwrap();
+
+        let (_directory, client, task) = client_with_responses(vec![IpcResponse::Ack]).await;
+        client.commit(id).await.unwrap();
+        task.await.unwrap();
+
+        let (_directory, client, task) =
+            client_with_responses(vec![IpcResponse::QueuedJobs { jobs: Vec::new() }]).await;
+        assert!(client.move_queued(id, 1).await.unwrap().is_empty());
+        task.await.unwrap();
+        assert_response_error(
+            IpcResponse::StaleQueueMove {
+                message: "job disappeared".into(),
+            },
+            |client| client.move_queued(id, 1),
+            "job disappeared",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Error {
+                message: "move failed".into(),
+            },
+            |client| client.move_queued(id, 1),
+            "move failed",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Status(sample_status()),
+            |client| client.move_queued(id, 1),
+            "invalid move queued",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn stop_and_follow_logs_handle_success_errors_and_closed_streams() {
+        let (_directory, client, task) = client_with_responses(vec![IpcResponse::Ack]).await;
+        client.stop().await.unwrap();
+        task.await.unwrap();
+
+        assert_response_error(
+            IpcResponse::Status(sample_status()),
+            |client| client.stop(),
+            "invalid stop",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Error {
+                message: "stop failed".into(),
+            },
+            |client| client.stop(),
+            "stop failed",
+        )
+        .await;
+
+        let (_directory, client, task) = client_with_responses(vec![
+            IpcResponse::LogChunk {
+                stream: LogStream::Stdout,
+                bytes: Vec::new(),
+            },
+            IpcResponse::LogChunk {
+                stream: LogStream::Stderr,
+                bytes: Vec::new(),
+            },
+            IpcResponse::LogEnd,
+        ])
+        .await;
+        client.follow_logs(Uuid::nil()).await.unwrap();
+        task.await.unwrap();
+
+        assert_response_error(
+            IpcResponse::Error {
+                message: "log follow failed".into(),
+            },
+            |client| client.follow_logs(Uuid::nil()),
+            "log follow failed",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Ack,
+            |client| client.follow_logs(Uuid::nil()),
+            "invalid log response",
+        )
+        .await;
+
+        let (_directory, client, task) = client_with_responses(Vec::new()).await;
+        let error = client.follow_logs(Uuid::nil()).await.unwrap_err();
+        assert!(error.to_string().contains("closed the log stream"));
+        task.await.unwrap();
     }
 }

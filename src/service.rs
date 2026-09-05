@@ -625,9 +625,13 @@ where
 mod tests {
     use super::*;
     use crate::ipc::{decode_response, encode_request};
+    use crate::process::{ManagedProcess, ProcessController, ProcessSpec};
     use crate::{JobState, NewJob};
+    use async_trait::async_trait;
     use futures_util::{SinkExt, StreamExt};
+    use std::io;
     use std::path::PathBuf;
+    use std::process::Command;
     use uuid::Uuid;
 
     fn paths(root: &std::path::Path) -> StokerPaths {
@@ -647,6 +651,52 @@ mod tests {
         let store = Arc::new(Store::open(&paths.database).unwrap());
         let scheduler = Arc::new(Scheduler::new(paths, Arc::clone(&store)));
         (directory, store, scheduler)
+    }
+
+    struct StreamingProcessController;
+
+    struct StreamingProcess {
+        stdout: PathBuf,
+        stderr: PathBuf,
+    }
+
+    #[async_trait]
+    impl ProcessController for StreamingProcessController {
+        async fn spawn(&self, spec: ProcessSpec) -> io::Result<Box<dyn ManagedProcess>> {
+            Ok(Box::new(StreamingProcess {
+                stdout: spec.stdout_log,
+                stderr: spec.stderr_log,
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl ManagedProcess for StreamingProcess {
+        fn pid(&self) -> u32 {
+            5252
+        }
+
+        async fn wait(self: Box<Self>) -> io::Result<std::process::ExitStatus> {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            tokio::fs::write(&self.stdout, b"out").await?;
+            tokio::fs::write(&self.stderr, b"err").await?;
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::fs::write(&self.stdout, b"out-tail").await?;
+            tokio::fs::write(&self.stderr, b"err-tail").await?;
+            let mut command = if cfg!(windows) {
+                Command::new("cmd.exe")
+            } else {
+                Command::new("true")
+            };
+            if cfg!(windows) {
+                command.args(["/C", "exit", "0"]);
+            }
+            command.status()
+        }
+
+        async fn terminate_tree(&mut self) -> io::Result<()> {
+            Ok(())
+        }
     }
 
     async fn request_response(scheduler: Arc<Scheduler>, request: IpcRequest) -> IpcResponse {
@@ -761,6 +811,10 @@ mod tests {
             request_response(Arc::clone(&scheduler), IpcRequest::LockQueue).await,
             IpcResponse::Ack
         );
+        let response = request_response(Arc::clone(&scheduler), IpcRequest::CommitAll).await;
+        assert!(
+            matches!(response, IpcResponse::Error { message } if message.contains("queue is locked"))
+        );
         let response = request_response(
             Arc::clone(&scheduler),
             IpcRequest::MoveQueued {
@@ -775,6 +829,17 @@ mod tests {
         assert_eq!(
             request_response(Arc::clone(&scheduler), IpcRequest::UnlockQueue).await,
             IpcResponse::Ack
+        );
+        let response = request_response(
+            Arc::clone(&scheduler),
+            IpcRequest::MoveQueued {
+                id: missing,
+                target_order: 1,
+            },
+        )
+        .await;
+        assert!(
+            matches!(response, IpcResponse::Error { message } if message.contains("queue is unlocked"))
         );
         assert_eq!(
             request_response(Arc::clone(&scheduler), IpcRequest::Stop).await,
@@ -845,6 +910,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stream_logs_forwards_live_chunks_and_flushes_trailing_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        paths.ensure().unwrap();
+        let store = Arc::new(Store::open(&paths.database).unwrap());
+        let id = store
+            .create_job(NewJob {
+                name: "running".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+        let scheduler = Arc::new(Scheduler::with_controller(
+            paths,
+            Arc::clone(&store),
+            Arc::new(StreamingProcessController),
+        ));
+        let mut process = StreamingProcess {
+            stdout: PathBuf::new(),
+            stderr: PathBuf::new(),
+        };
+        process.terminate_tree().await.unwrap();
+        let (_wake_tx, wake_rx) = watch::channel(0_u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let scheduler_task = tokio::spawn(Arc::clone(&scheduler).run(wake_rx, shutdown_rx));
+        for _ in 0..20 {
+            if scheduler.log_receiver(id).is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(scheduler.log_receiver(id).is_some());
+        let (server_stream, client_stream) = tokio::io::duplex(8192);
+        let mut server_framed = Framed::new(server_stream, LengthDelimitedCodec::new());
+        let mut client_framed = Framed::new(client_stream, LengthDelimitedCodec::new());
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let stream_scheduler = Arc::clone(&scheduler);
+        let task = tokio::spawn(async move {
+            stream_logs(&mut server_framed, &stream_scheduler, id, &mut shutdown_rx).await
+        });
+
+        let mut responses = Vec::new();
+        loop {
+            let frame = client_framed.next().await.unwrap().unwrap();
+            let response = decode_response(&frame).unwrap();
+            let finished = response == IpcResponse::LogEnd;
+            responses.push(response);
+            if finished {
+                break;
+            }
+        }
+        task.await.unwrap().unwrap();
+        shutdown_tx.send(true).unwrap();
+        scheduler_task.await.unwrap().unwrap();
+        assert!(responses.contains(&IpcResponse::LogChunk {
+            stream: LogStream::Stdout,
+            bytes: b"out".to_vec(),
+        }));
+        assert!(responses.contains(&IpcResponse::LogChunk {
+            stream: LogStream::Stderr,
+            bytes: b"err".to_vec(),
+        }));
+        assert!(responses.contains(&IpcResponse::LogChunk {
+            stream: LogStream::Stdout,
+            bytes: b"-tail".to_vec(),
+        }));
+        assert!(responses.contains(&IpcResponse::LogChunk {
+            stream: LogStream::Stderr,
+            bytes: b"-tail".to_vec(),
+        }));
+    }
+
+    #[tokio::test]
     async fn stream_logs_reports_missing_files_when_no_live_log_sender_exists() {
         let (_directory, store, scheduler) = scheduler_fixture();
         let id = store
@@ -887,6 +1027,62 @@ mod tests {
         shutdown_tx.send(true).unwrap();
         let error = task.await.unwrap().unwrap_err();
         assert!(error.to_string().contains("shutting down"));
+    }
+
+    #[tokio::test]
+    async fn queued_log_follow_reports_missing_logs_after_job_becomes_terminal() {
+        let (_directory, store, scheduler) = scheduler_fixture();
+        let id = store
+            .create_job(NewJob {
+                name: "queued".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+
+        let (server_stream, _client_stream) = tokio::io::duplex(8192);
+        let mut framed = Framed::new(server_stream, LengthDelimitedCodec::new());
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let task = tokio::spawn(async move {
+            stream_logs(&mut framed, &scheduler, id, &mut shutdown_rx).await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        store.cancel_not_started(id).unwrap();
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("terminal queued follower should finish")
+            .unwrap()
+            .unwrap_err();
+        assert!(error.to_string().contains("does not exist"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn service_run_accepts_status_and_stop_requests_then_cleans_up_endpoint() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        paths.ensure().unwrap();
+        let service = Service::new(paths.clone()).unwrap();
+        let service_task = tokio::spawn(service.run());
+        let client = crate::ServiceClient::new(paths.clone());
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if client.status().await.is_ok() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("service should accept status requests");
+
+        client.stop().await.unwrap();
+        service_task.await.unwrap().unwrap();
+        assert!(!paths.endpoint.exists());
     }
 
     #[test]

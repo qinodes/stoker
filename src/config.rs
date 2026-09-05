@@ -447,7 +447,7 @@ fn windows_home_from_vars(
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::windows_home_from_vars;
+    use super::{normalize_path, windows_home_from_vars};
     use std::ffi::OsStr;
     use std::path::Path;
 
@@ -461,6 +461,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, Path::new(r"C:\Users\name"));
+    }
+
+    #[test]
+    fn windows_home_uses_home_fallback_and_reports_missing_home() {
+        assert_eq!(
+            windows_home_from_vars(None, None, None, Some(OsStr::new(r"D:\Users\fallback")))
+                .unwrap(),
+            Path::new(r"D:\Users\fallback")
+        );
+        assert!(windows_home_from_vars(None, None, None, None).is_err());
+    }
+
+    #[test]
+    fn normalizes_extended_windows_paths_for_command_interpreters() {
+        assert_eq!(
+            normalize_path(Path::new(r"\\?\UNC\server\share\job").into()),
+            Path::new(r"\\server\share\job")
+        );
+        assert_eq!(
+            normalize_path(Path::new(r"\\?\C:\work\job").into()),
+            Path::new(r"C:\work\job")
+        );
     }
 }
 
@@ -611,6 +633,34 @@ mod timezone_tests {
     }
 
     #[test]
+    fn snapshot_sorting_puts_valid_entries_before_invalid_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let config = StokerConfig {
+            timezone: Some("UTC".into()),
+        };
+        let valid_path = paths
+            .create_config_snapshot(&config, ConfigSnapshotReason::Manual)
+            .unwrap();
+        fs::write(paths.snapshot_dir().join("broken-a.json"), "not-json").unwrap();
+        fs::write(paths.snapshot_dir().join("broken-b.json"), "not-json").unwrap();
+
+        let entries = paths.list_config_snapshots().unwrap();
+        assert!(matches!(
+            entries.first(),
+            Some(ConfigSnapshotEntry::Valid(snapshot)) if snapshot.path == valid_path
+        ));
+        assert!(matches!(
+            entries.get(1),
+            Some(ConfigSnapshotEntry::Invalid { path, .. }) if path.ends_with("broken-b.json")
+        ));
+        assert!(matches!(
+            entries.get(2),
+            Some(ConfigSnapshotEntry::Invalid { path, .. }) if path.ends_with("broken-a.json")
+        ));
+    }
+
+    #[test]
     fn manual_snapshots_are_created_even_when_the_config_is_unchanged() {
         let directory = tempfile::tempdir().unwrap();
         let paths = paths(directory.path());
@@ -664,6 +714,24 @@ mod timezone_tests {
         fs::write(paths.config_path(), "{not-json").unwrap();
         let error = paths.read_config().unwrap_err();
         assert!(error.to_string().contains("parse Stoker config"));
+    }
+
+    #[test]
+    fn config_write_and_initialization_report_unusable_root_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("root-file");
+        fs::write(&root, "not a directory").unwrap();
+        let paths = paths(&root);
+
+        let write_error = paths.write_config(&StokerConfig::default()).unwrap_err();
+        assert!(write_error.to_string().contains("write Stoker config"));
+
+        let initialize_error = paths.initialize_config().unwrap_err();
+        assert!(
+            initialize_error
+                .to_string()
+                .contains("create Stoker config")
+        );
     }
 
     #[test]

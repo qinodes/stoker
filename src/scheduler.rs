@@ -555,9 +555,38 @@ async fn flush_log_events(stdout: &Path, stderr: &Path, sender: &broadcast::Send
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::ManagedProcess;
     use crate::{NewJob, StokerPaths, Store};
+    use async_trait::async_trait;
+    use std::io;
     use std::path::PathBuf;
     use std::sync::Arc;
+
+    struct FailingWaitController;
+
+    struct FailingWaitProcess;
+
+    #[async_trait]
+    impl ProcessController for FailingWaitController {
+        async fn spawn(&self, _spec: ProcessSpec) -> io::Result<Box<dyn ManagedProcess>> {
+            Ok(Box::new(FailingWaitProcess))
+        }
+    }
+
+    #[async_trait]
+    impl ManagedProcess for FailingWaitProcess {
+        fn pid(&self) -> u32 {
+            4242
+        }
+
+        async fn wait(self: Box<Self>) -> io::Result<std::process::ExitStatus> {
+            Err(io::Error::other("mock process wait failed"))
+        }
+
+        async fn terminate_tree(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     fn paths(root: &std::path::Path) -> StokerPaths {
         StokerPaths {
@@ -575,6 +604,17 @@ mod tests {
         paths.ensure().unwrap();
         let store = Arc::new(Store::open(&paths.database).unwrap());
         let scheduler = Scheduler::new(paths, Arc::clone(&store));
+        (directory, store, scheduler)
+    }
+
+    fn scheduler_fixture_with_controller(
+        controller: Arc<dyn ProcessController>,
+    ) -> (tempfile::TempDir, Arc<Store>, Scheduler) {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        paths.ensure().unwrap();
+        let store = Arc::new(Store::open(&paths.database).unwrap());
+        let scheduler = Scheduler::with_controller(paths, Arc::clone(&store), controller);
         (directory, store, scheduler)
     }
 
@@ -664,6 +704,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mocked_process_wait_failure_is_persisted_as_a_failed_job() {
+        let (directory, store, scheduler) =
+            scheduler_fixture_with_controller(Arc::new(FailingWaitController));
+        let id = store
+            .create_job(NewJob {
+                name: "wait failure".into(),
+                user: "test".into(),
+                cwd: directory.path().to_path_buf(),
+                command: vec!["echo".into(), "mocked".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+
+        let scheduler = Arc::new(scheduler);
+        let (wake_tx, wake_rx) = watch::channel(0_u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let scheduler_task = tokio::spawn(Arc::clone(&scheduler).run(wake_rx, shutdown_rx));
+        wake_tx.send_modify(|value| *value += 1);
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if store.get_job(id).unwrap().state == JobState::Failed {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("mock process wait failure should finish the job");
+
+        let job = store.get_job(id).unwrap();
+        assert_eq!(job.state, JobState::Failed);
+        assert_eq!(job.pid, None);
+        assert!(
+            job.failure_detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("mock process wait failed"))
+        );
+
+        shutdown_tx.send(true).unwrap();
+        drop(wake_tx);
+        scheduler_task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn scheduler_status_tracks_queue_lock_and_active_fallback() {
         let (_directory, store, scheduler) = scheduler_fixture();
         let id = store
@@ -718,6 +803,79 @@ mod tests {
 
         let error = scheduler.handle_cancel(draft).await.unwrap_err();
         assert!(error.to_string().contains("cannot cancel job"));
+    }
+
+    #[tokio::test]
+    async fn active_cancellation_waits_for_cleanup_and_clears_runtime_fields() {
+        let (directory, store, scheduler) = scheduler_fixture();
+        let id = store
+            .create_job(NewJob {
+                name: "active".into(),
+                user: "test".into(),
+                cwd: directory.path().to_path_buf(),
+                command: if cfg!(windows) {
+                    vec![
+                        "cmd".into(),
+                        "/C".into(),
+                        "ping 127.0.0.1 -n 31 > NUL".into(),
+                    ]
+                } else {
+                    vec!["sh".into(), "-c".into(), "sleep 30".into()]
+                },
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+
+        let scheduler = Arc::new(scheduler);
+        let (wake_tx, wake_rx) = watch::channel(0_u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let scheduler_task = tokio::spawn(Arc::clone(&scheduler).run(wake_rx, shutdown_rx));
+        wake_tx.send_modify(|value| *value += 1);
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if store.get_job(id).unwrap().state == JobState::Running {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("job should reach RUNNING");
+
+        // Exercise the already-requested cancellation path. The scheduler
+        // still owns the active process and must perform the actual cleanup.
+        store.request_cancelling(id).unwrap();
+        let cancelled = scheduler.handle_cancel(id).await.unwrap();
+        assert_eq!(cancelled.state, JobState::Cancelled);
+        assert_eq!(cancelled.pid, None);
+
+        shutdown_tx.send(true).unwrap();
+        scheduler_task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancellation_of_an_active_slot_with_terminal_state_returns_persisted_job() {
+        let (_directory, store, scheduler) = scheduler_fixture();
+        let id = store
+            .create_job(NewJob {
+                name: "cancelled".into(),
+                user: "test".into(),
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        let expected = store.cancel_not_started(id).unwrap();
+        let (cancel, _) = watch::channel(false);
+        let (completed, _) = watch::channel(true);
+        *scheduler.active.lock().unwrap() = Some(ActiveExecution {
+            id,
+            cancel,
+            completed,
+        });
+
+        let actual = scheduler.cancel_active(id).await.unwrap();
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]

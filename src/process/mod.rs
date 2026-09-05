@@ -135,12 +135,49 @@ pub(crate) async fn finish_pipes(
 
 #[cfg(test)]
 mod tests {
-    use super::{DefaultProcessController, finish_pipe_writer, finish_pipes, spawn_pipe_writer};
+    use super::{
+        DefaultProcessController, ManagedProcess, finish_pipe_writer, finish_pipes,
+        spawn_pipe_writer,
+    };
+    use async_trait::async_trait;
+    use std::process::ExitStatus;
     use tokio::io::AsyncWriteExt;
+
+    struct DefaultWaitProcess;
+
+    #[async_trait]
+    impl ManagedProcess for DefaultWaitProcess {
+        fn pid(&self) -> u32 {
+            1
+        }
+
+        async fn wait(self: Box<Self>) -> std::io::Result<ExitStatus> {
+            #[cfg(unix)]
+            use std::os::unix::process::ExitStatusExt;
+            #[cfg(windows)]
+            use std::os::windows::process::ExitStatusExt;
+
+            Ok(ExitStatus::from_raw(0))
+        }
+
+        async fn terminate_tree(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn default_process_controller_can_be_constructed() {
         let _ = DefaultProcessController::new();
+    }
+
+    #[tokio::test]
+    async fn managed_process_default_wait_with_cancel_delegates_to_wait() {
+        let (_cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+        let mut process = Box::new(DefaultWaitProcess);
+        assert_eq!(process.pid(), 1);
+        process.terminate_tree().await.unwrap();
+        let status = process.wait_with_cancel(cancel_rx).await.unwrap();
+        assert_eq!(status.code(), Some(0));
     }
 
     #[tokio::test]

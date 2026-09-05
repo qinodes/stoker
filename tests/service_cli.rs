@@ -513,6 +513,19 @@ fn cancel_requires_confirmation() {
 }
 
 #[test]
+fn uninstall_requires_confirmation_before_touching_the_binary() {
+    stoker_with_home(TempStokerHome::new())
+        .args(["uninstall"])
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("Stoker will be uninstalled.")
+                .and(predicate::str::contains("Uninstall cancelled.")),
+        );
+}
+
+#[test]
 fn serve_command_is_no_longer_available() {
     stoker_with_home(TempStokerHome::new())
         .args(["serve"])

@@ -79,6 +79,87 @@ fn queue_lock_rejects_queue_mutations_but_allows_cancellation() {
 }
 
 #[test]
+fn invalid_state_transitions_are_rejected_without_changing_the_job() {
+    let store = test_store();
+    let draft = store.create_job(new_job_named("draft")).unwrap();
+
+    let running_error = store.set_running(draft, 1234).unwrap_err();
+    assert!(matches!(
+        running_error,
+        StoreError::InvalidTransition {
+            action: "start",
+            state: JobState::Draft,
+            ..
+        }
+    ));
+
+    let cancelling_error = store.request_cancelling(draft).unwrap_err();
+    assert!(matches!(
+        cancelling_error,
+        StoreError::InvalidTransition {
+            action: "cancel",
+            state: JobState::Draft,
+            ..
+        }
+    ));
+
+    let finish_error = store.finish(draft, Some(0), None).unwrap_err();
+    assert!(matches!(
+        finish_error,
+        StoreError::InvalidTransition {
+            action: "finish",
+            state: JobState::Draft,
+            ..
+        }
+    ));
+
+    let clear_error = store.clear_runtime(draft).unwrap_err();
+    assert!(matches!(
+        clear_error,
+        StoreError::InvalidTransition {
+            action: "clear runtime fields",
+            state: JobState::Draft,
+            ..
+        }
+    ));
+
+    assert_eq!(store.get_job(draft).unwrap().state, JobState::Draft);
+}
+
+#[test]
+fn invalid_queue_and_active_operations_report_the_current_state() {
+    let store = test_store();
+    let draft = store.create_job(new_job_named("draft")).unwrap();
+
+    assert!(matches!(
+        store.move_queued_job(draft, 1),
+        Err(StoreError::QueueUnlocked)
+    ));
+
+    store.commit_job(draft).unwrap();
+    let commit_again = store.commit_job(draft).unwrap_err();
+    assert!(matches!(
+        commit_again,
+        StoreError::InvalidTransition {
+            action: "commit",
+            state: JobState::Queued,
+            ..
+        }
+    ));
+
+    let active = store.claim_next().unwrap().unwrap();
+    let cancel_active = store.cancel_not_started(active.id).unwrap_err();
+    assert!(matches!(
+        cancel_active,
+        StoreError::InvalidTransition {
+            action: "cancel",
+            state: JobState::Starting,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn moving_a_queued_job_rewrites_contiguous_order_and_validates_destination() {
     let store = test_store();
     let first = store.create_job(new_job_named("first")).unwrap();

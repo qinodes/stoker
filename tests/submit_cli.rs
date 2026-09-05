@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use predicates::prelude::*;
 use rusqlite::Connection;
 use stoker::{JobState, NewJob, Store};
-use support::{TestRepo, stoker_in};
+use support::{TestRepo, stoker_in, stoker_with_home};
 
 fn job(name: &str, user: &str) -> NewJob {
     NewJob {
@@ -64,6 +64,19 @@ fn add_records_absolute_cwd_as_draft() {
     assert!(cwd.ends_with("experiments/llama"));
     assert_eq!(command, r#"["python","train.py","--lr","0.0001"]"#);
     assert_eq!(command_line, "python train.py --lr 0.0001");
+}
+
+#[test]
+fn binary_reports_initialization_errors_through_main_exit_path() {
+    let directory = tempfile::tempdir().unwrap();
+    let unusable_home = directory.path().join("home-file");
+    std::fs::write(&unusable_home, "not a directory").unwrap();
+
+    stoker_with_home(&unusable_home)
+        .args(["status"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("error:"));
 }
 
 #[test]

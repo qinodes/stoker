@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -1098,9 +1098,50 @@ fn stop(yes: bool) -> anyhow::Result<()> {
 }
 
 fn update(yes: bool) -> anyhow::Result<()> {
+    update_with_gateway(yes, &SystemUpdateGateway)
+}
+
+trait UpdateGateway {
+    fn latest_release(&self) -> anyhow::Result<GithubRelease>;
+    fn download_bytes(&self, url: &str) -> anyhow::Result<Vec<u8>>;
+    fn ensure_scheduler_stopped(&self) -> anyhow::Result<()>;
+    fn current_executable(&self) -> anyhow::Result<PathBuf>;
+    fn install_updated_binary(&self, current_exe: &Path, binary: &[u8]) -> anyhow::Result<()>;
+    fn request_confirmation(&self, action: &str) -> anyhow::Result<bool>;
+}
+
+struct SystemUpdateGateway;
+
+impl UpdateGateway for SystemUpdateGateway {
+    fn latest_release(&self) -> anyhow::Result<GithubRelease> {
+        latest_release()
+    }
+
+    fn download_bytes(&self, url: &str) -> anyhow::Result<Vec<u8>> {
+        download_bytes(url)
+    }
+
+    fn ensure_scheduler_stopped(&self) -> anyhow::Result<()> {
+        ensure_scheduler_stopped()
+    }
+
+    fn current_executable(&self) -> anyhow::Result<PathBuf> {
+        std::env::current_exe().context("locate current Stoker executable")
+    }
+
+    fn install_updated_binary(&self, current_exe: &Path, binary: &[u8]) -> anyhow::Result<()> {
+        install_updated_binary(current_exe, binary)
+    }
+
+    fn request_confirmation(&self, action: &str) -> anyhow::Result<bool> {
+        request_confirmation(action)
+    }
+}
+
+fn update_with_gateway<G: UpdateGateway>(yes: bool, gateway: &G) -> anyhow::Result<()> {
     let current =
         Version::parse(env!("CARGO_PKG_VERSION")).context("parse current Stoker version")?;
-    let release = latest_release()?;
+    let release = gateway.latest_release()?;
     let latest = release.version()?;
     match latest.cmp(&current) {
         std::cmp::Ordering::Less => {
@@ -1116,15 +1157,15 @@ fn update(yes: bool) -> anyhow::Result<()> {
     }
 
     println!("Stoker will update from {current} to {latest}.");
-    if !yes && !request_confirmation("Continue with update")? {
+    if !yes && !gateway.request_confirmation("Continue with update")? {
         println!("Update cancelled.");
         return Ok(());
     }
 
-    ensure_scheduler_stopped()?;
-    let current_exe = std::env::current_exe().context("locate current Stoker executable")?;
-    let binary = download_release_binary(&release)?;
-    install_updated_binary(&current_exe, &binary)?;
+    gateway.ensure_scheduler_stopped()?;
+    let current_exe = gateway.current_executable()?;
+    let binary = download_release_binary_with_gateway(&release, gateway)?;
+    gateway.install_updated_binary(&current_exe, &binary)?;
     #[cfg(unix)]
     println!("Stoker was updated to {latest}.");
     #[cfg(windows)]
@@ -1265,13 +1306,17 @@ fn checksum_for(checksums: &str, asset_name: &str) -> Option<String> {
     })
 }
 
-fn download_release_binary(release: &GithubRelease) -> anyhow::Result<Vec<u8>> {
+fn download_release_binary_with_gateway<G: UpdateGateway>(
+    release: &GithubRelease,
+    gateway: &G,
+) -> anyhow::Result<Vec<u8>> {
     let binary_name = platform_binary_name()?;
     let binary_asset = release_asset(release, binary_name)?;
     let checksum_asset = release_asset(release, "SHA256SUMS")?;
-    let binary = download_bytes(&binary_asset.browser_download_url)?;
-    let checksums = String::from_utf8(download_bytes(&checksum_asset.browser_download_url)?)
-        .context("decode SHA256SUMS")?;
+    let binary = gateway.download_bytes(&binary_asset.browser_download_url)?;
+    let checksums =
+        String::from_utf8(gateway.download_bytes(&checksum_asset.browser_download_url)?)
+            .context("decode SHA256SUMS")?;
     let expected = checksum_for(&checksums, binary_name)
         .ok_or_else(|| anyhow::anyhow!("SHA256SUMS does not contain {binary_name}"))?;
     let actual = Sha256::digest(&binary)
@@ -1745,8 +1790,174 @@ mod tests {
 
 #[cfg(test)]
 mod update_tests {
-    use super::{Cli, checksum_for, is_confirmation, platform_binary_name};
+    use super::{
+        Cli, GithubAsset, GithubRelease, Sha256, SystemUpdateGateway, UpdateGateway, checksum_for,
+        download_bytes, download_release_binary_with_gateway, is_confirmation,
+        platform_binary_name, update_with_gateway,
+    };
     use clap::{CommandFactory, Parser};
+    use sha2::Digest;
+    use std::cell::RefCell;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::path::{Path, PathBuf};
+    use std::thread::JoinHandle;
+
+    struct FakeUpdateGateway {
+        tag_name: String,
+        binary: Vec<u8>,
+        checksums: Vec<u8>,
+        latest_error: Option<String>,
+        download_error: Option<String>,
+        ensure_error: Option<String>,
+        current_executable_error: Option<String>,
+        install_error: Option<String>,
+        confirmation: bool,
+        calls: RefCell<Vec<String>>,
+        installed: RefCell<Option<(PathBuf, Vec<u8>)>>,
+    }
+
+    impl FakeUpdateGateway {
+        fn new(tag_name: &str) -> Self {
+            let binary = b"fake release binary".to_vec();
+            let digest = Sha256::digest(&binary)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            Self {
+                tag_name: tag_name.into(),
+                checksums: format!("{digest}  {}\n", platform_binary_name().unwrap()).into_bytes(),
+                binary,
+                latest_error: None,
+                download_error: None,
+                ensure_error: None,
+                current_executable_error: None,
+                install_error: None,
+                confirmation: false,
+                calls: RefCell::new(Vec::new()),
+                installed: RefCell::new(None),
+            }
+        }
+
+        fn record(&self, operation: impl Into<String>) {
+            self.calls.borrow_mut().push(operation.into());
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl UpdateGateway for FakeUpdateGateway {
+        fn latest_release(&self) -> anyhow::Result<GithubRelease> {
+            self.record("latest_release");
+            if let Some(error) = &self.latest_error {
+                anyhow::bail!("{error}");
+            }
+            Ok(GithubRelease {
+                tag_name: self.tag_name.clone(),
+                assets: vec![
+                    GithubAsset {
+                        name: platform_binary_name()?.into(),
+                        browser_download_url: "mock://binary".into(),
+                    },
+                    GithubAsset {
+                        name: "SHA256SUMS".into(),
+                        browser_download_url: "mock://checksums".into(),
+                    },
+                ],
+            })
+        }
+
+        fn download_bytes(&self, url: &str) -> anyhow::Result<Vec<u8>> {
+            self.record(format!("download {url}"));
+            if let Some(error) = &self.download_error {
+                anyhow::bail!("{error}");
+            }
+            match url {
+                "mock://binary" => Ok(self.binary.clone()),
+                "mock://checksums" => Ok(self.checksums.clone()),
+                _ => anyhow::bail!("unexpected mock URL {url}"),
+            }
+        }
+
+        fn ensure_scheduler_stopped(&self) -> anyhow::Result<()> {
+            self.record("ensure_scheduler_stopped");
+            if let Some(error) = &self.ensure_error {
+                anyhow::bail!("{error}");
+            }
+            Ok(())
+        }
+
+        fn current_executable(&self) -> anyhow::Result<PathBuf> {
+            self.record("current_executable");
+            if let Some(error) = &self.current_executable_error {
+                anyhow::bail!("{error}");
+            }
+            Ok(PathBuf::from("mock-current-executable"))
+        }
+
+        fn install_updated_binary(&self, current_exe: &Path, binary: &[u8]) -> anyhow::Result<()> {
+            self.record("install_updated_binary");
+            if let Some(error) = &self.install_error {
+                anyhow::bail!("{error}");
+            }
+            *self.installed.borrow_mut() = Some((current_exe.to_path_buf(), binary.to_vec()));
+            Ok(())
+        }
+
+        fn request_confirmation(&self, action: &str) -> anyhow::Result<bool> {
+            self.record(format!("confirm {action}"));
+            Ok(self.confirmation)
+        }
+    }
+
+    fn serve_release_assets(
+        binary: Vec<u8>,
+        checksums: Vec<u8>,
+    ) -> (String, String, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 1024];
+                let length = stream.read(&mut request).unwrap();
+                let body = if String::from_utf8_lossy(&request[..length]).contains("/binary ") {
+                    &binary
+                } else {
+                    &checksums
+                };
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(header.as_bytes()).unwrap();
+                stream.write_all(body).unwrap();
+            }
+        });
+        (
+            format!("http://{address}/binary"),
+            format!("http://{address}/checksums"),
+            task,
+        )
+    }
+
+    fn release_with_urls(binary_url: String, checksums_url: String) -> GithubRelease {
+        GithubRelease {
+            tag_name: "v1.2.3".into(),
+            assets: vec![
+                GithubAsset {
+                    name: platform_binary_name().unwrap().into(),
+                    browser_download_url: binary_url,
+                },
+                GithubAsset {
+                    name: "SHA256SUMS".into(),
+                    browser_download_url: checksums_url,
+                },
+            ],
+        }
+    }
 
     #[test]
     fn platform_binary_name_matches_release_assets() {
@@ -1776,6 +1987,171 @@ mod update_tests {
         assert!(!is_confirmation(""));
         assert!(!is_confirmation("n"));
         assert!(!is_confirmation("anything else"));
+    }
+
+    #[test]
+    fn release_binary_download_verifies_checksum_from_local_http_fixture() {
+        let binary = b"test release binary".to_vec();
+        let digest = Sha256::digest(&binary)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let checksums = format!("{digest}  {}\n", platform_binary_name().unwrap()).into_bytes();
+        let (binary_url, checksums_url, server) = serve_release_assets(binary.clone(), checksums);
+        let release = release_with_urls(binary_url, checksums_url);
+
+        assert_eq!(
+            download_release_binary_with_gateway(&release, &SystemUpdateGateway).unwrap(),
+            binary
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn release_binary_download_rejects_bad_or_invalid_checksum_data() {
+        let binary = b"test release binary".to_vec();
+        let (binary_url, checksums_url, server) = serve_release_assets(
+            binary.clone(),
+            format!("0000  {}\n", platform_binary_name().unwrap()).into_bytes(),
+        );
+        let error = download_release_binary_with_gateway(
+            &release_with_urls(binary_url, checksums_url),
+            &SystemUpdateGateway,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("SHA-256 mismatch"));
+        server.join().unwrap();
+
+        let (binary_url, checksums_url, server) = serve_release_assets(binary, vec![0xff, 0xfe]);
+        let error = download_release_binary_with_gateway(
+            &release_with_urls(binary_url, checksums_url),
+            &SystemUpdateGateway,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("decode SHA256SUMS"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn mock_update_gateway_covers_release_decisions_without_external_side_effects() {
+        let mut gateway = FakeUpdateGateway::new("v1.2.1");
+        let error = update_with_gateway(true, &gateway).unwrap_err();
+        assert!(error.to_string().contains("older than the installed"));
+        assert_eq!(gateway.calls(), ["latest_release"]);
+
+        gateway = FakeUpdateGateway::new("v1.2.2");
+        update_with_gateway(true, &gateway).unwrap();
+        assert_eq!(gateway.calls(), ["latest_release"]);
+
+        gateway = FakeUpdateGateway::new("not-semver");
+        let error = update_with_gateway(true, &gateway).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("parse latest GitHub release version")
+        );
+
+        gateway = FakeUpdateGateway::new("v1.2.3");
+        gateway.confirmation = false;
+        update_with_gateway(false, &gateway).unwrap();
+        assert_eq!(
+            gateway.calls(),
+            ["latest_release", "confirm Continue with update"]
+        );
+    }
+
+    #[test]
+    fn mock_update_gateway_covers_update_side_effects_and_failures() {
+        let gateway = FakeUpdateGateway::new("v1.2.3");
+        update_with_gateway(true, &gateway).unwrap();
+        assert_eq!(
+            gateway.calls(),
+            [
+                "latest_release",
+                "ensure_scheduler_stopped",
+                "current_executable",
+                "download mock://binary",
+                "download mock://checksums",
+                "install_updated_binary",
+            ]
+        );
+        assert_eq!(
+            gateway.installed.borrow().as_ref().unwrap().1,
+            gateway.binary
+        );
+
+        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        gateway.ensure_error = Some("scheduler is still running".into());
+        let error = update_with_gateway(true, &gateway).unwrap_err();
+        assert!(error.to_string().contains("scheduler is still running"));
+
+        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        gateway.current_executable_error = Some("executable unavailable".into());
+        let error = update_with_gateway(true, &gateway).unwrap_err();
+        assert!(error.to_string().contains("executable unavailable"));
+
+        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        gateway.download_error = Some("download failed".into());
+        let error = update_with_gateway(true, &gateway).unwrap_err();
+        assert!(error.to_string().contains("download failed"));
+
+        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        gateway.install_error = Some("replacement failed".into());
+        let error = update_with_gateway(true, &gateway).unwrap_err();
+        assert!(error.to_string().contains("replacement failed"));
+
+        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        gateway.latest_error = Some("GitHub unavailable".into());
+        let error = update_with_gateway(true, &gateway).unwrap_err();
+        assert!(error.to_string().contains("GitHub unavailable"));
+
+        let gateway = FakeUpdateGateway::new("v1.2.3");
+        assert!(gateway.download_bytes("mock://unexpected").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_binary_install_reports_replace_failure_and_cleans_up() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let error = super::install_updated_binary(directory.path(), b"new binary").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("replace current Stoker executable")
+        );
+        assert!(directory.path().exists());
+    }
+
+    #[test]
+    fn download_bytes_reports_http_failures() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 128];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+
+        let error = download_bytes(&format!("http://{address}/missing")).unwrap_err();
+        assert!(error.to_string().contains("download http://"));
+        server.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_uninstall_removes_only_the_requested_binary() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("stoker");
+        std::fs::write(&executable, b"binary").unwrap();
+
+        super::remove_unix_binary(&executable).unwrap();
+        assert!(!executable.exists());
     }
 
     #[test]
@@ -1907,6 +2283,10 @@ mod snapshot_selector_tests {
         let mut state = SnapshotSelectorState::new();
 
         assert_eq!(
+            state.reduce(key(KeyCode::Down), &entries),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(
             state.reduce(key(KeyCode::Enter), &entries),
             SnapshotSelectorAction::None
         );
@@ -1926,6 +2306,10 @@ mod snapshot_selector_tests {
         state.reduce(key(KeyCode::Enter), &entries);
 
         assert_eq!(state.view, SnapshotView::Confirm);
+        assert_eq!(
+            state.reduce(key(KeyCode::Char('x')), &entries),
+            SnapshotSelectorAction::None
+        );
         assert_eq!(
             state.reduce(key(KeyCode::Char('n')), &entries),
             SnapshotSelectorAction::None
@@ -2159,6 +2543,64 @@ mod pure_logic_tests {
     }
 
     #[test]
+    fn selector_reducers_cover_snapshot_navigation_and_confirmation_edges() {
+        let entries = vec![valid_entry()];
+        let mut state = SnapshotSelectorState::new();
+
+        assert_eq!(
+            state.reduce(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &entries
+            ),
+            SnapshotSelectorAction::Exit
+        );
+        assert_eq!(
+            state.reduce(key(KeyCode::Up), &[]),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(
+            state.reduce(key(KeyCode::Down), &[]),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(
+            state.reduce(key(KeyCode::F(1)), &entries),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(
+            state.reduce(key(KeyCode::Char('q')), &entries),
+            SnapshotSelectorAction::Exit
+        );
+
+        state.reduce(key(KeyCode::Enter), &entries);
+        assert_eq!(
+            state.reduce(key(KeyCode::F(1)), &entries),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(
+            state.reduce(key(KeyCode::Char('q')), &entries),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(state.view, SnapshotView::List);
+
+        state.reduce(key(KeyCode::Enter), &entries);
+        state.reduce(key(KeyCode::Enter), &entries);
+        assert_eq!(
+            state.reduce(key(KeyCode::Char('Y')), &entries),
+            SnapshotSelectorAction::Restore(0)
+        );
+
+        state.view = SnapshotView::Confirm;
+        for code in [KeyCode::Char('N'), KeyCode::Esc, KeyCode::Char('q')] {
+            assert_eq!(
+                state.reduce(key(code), &entries),
+                SnapshotSelectorAction::None
+            );
+            assert_eq!(state.view, SnapshotView::List);
+            state.view = SnapshotView::Confirm;
+        }
+    }
+
+    #[test]
     fn timezone_selector_renderer_shows_empty_and_scrolled_results() {
         let timezones = (0..20).map(|index| format!("Etc/Zone{index:02}")).collect();
         let mut state = TimezoneSelectorState::new(timezones, None);
@@ -2278,6 +2720,7 @@ mod pure_logic_tests {
                 state: JobState::Queued,
                 action: "move",
             }),
+            anyhow::Error::new(StaleQueueMoveError::new("stale queue snapshot".into())),
             anyhow::anyhow!("cannot move job {id} because it does not exist"),
         ] {
             assert!(is_stale_move_error(&error));
@@ -2346,6 +2789,250 @@ mod pure_logic_tests {
     fn terminal_guard_can_restore_terminal_state() {
         let guard = InteractiveTerminalGuard;
         drop(guard);
+    }
+}
+
+#[cfg(test)]
+mod cli_runtime_tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct StokerHomeGuard {
+        previous: Option<OsString>,
+    }
+
+    impl Drop for StokerHomeGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match self.previous.take() {
+                    Some(value) => std::env::set_var("STOKER_HOME", value),
+                    None => std::env::remove_var("STOKER_HOME"),
+                }
+            }
+        }
+    }
+
+    fn use_home(path: &std::path::Path) -> StokerHomeGuard {
+        let previous = std::env::var_os("STOKER_HOME");
+        unsafe { std::env::set_var("STOKER_HOME", path) };
+        StokerHomeGuard { previous }
+    }
+
+    #[test]
+    fn command_dispatch_reaches_local_config_queue_and_job_flows() {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let _home = use_home(directory.path());
+
+        let paths = StokerPaths::from_env().unwrap();
+        paths.ensure().unwrap();
+        std::fs::remove_dir_all(paths.snapshot_dir()).unwrap();
+
+        run_command(CliCommand::Config {
+            command: ConfigCommand::Restore,
+        })
+        .unwrap();
+        run_command(CliCommand::Config {
+            command: ConfigCommand::Set {
+                key: ConfigKey::Timezone,
+                value: Some("UTC".into()),
+            },
+        })
+        .unwrap();
+        run_command(CliCommand::Config {
+            command: ConfigCommand::Show,
+        })
+        .unwrap();
+        run_command(CliCommand::Config {
+            command: ConfigCommand::Get {
+                key: ConfigKey::Timezone,
+            },
+        })
+        .unwrap();
+        run_command(CliCommand::Config {
+            command: ConfigCommand::Snapshot,
+        })
+        .unwrap();
+        run_command(CliCommand::Config {
+            command: ConfigCommand::Unset {
+                key: ConfigKey::Timezone,
+            },
+        })
+        .unwrap();
+
+        run_command(CliCommand::Status).unwrap();
+        ensure_scheduler_stopped().unwrap();
+        assert!(
+            run_command(CliCommand::Queue {
+                command: QueueCommand::Edit,
+            })
+            .is_err()
+        );
+        run_command(CliCommand::Queue {
+            command: QueueCommand::Lock,
+        })
+        .unwrap();
+        run_command(CliCommand::Queue {
+            command: QueueCommand::Edit,
+        })
+        .unwrap();
+        run_command(CliCommand::Queue {
+            command: QueueCommand::Unlock,
+        })
+        .unwrap();
+
+        run_command(CliCommand::Add(AddArgs {
+            user: "alice".into(),
+            name: "local-flow".into(),
+            command: "echo hello".into(),
+        }))
+        .unwrap();
+        assert!(
+            run_command(CliCommand::Add(AddArgs {
+                user: " ".into(),
+                name: "invalid-user".into(),
+                command: "echo hello".into(),
+            }))
+            .is_err()
+        );
+        assert!(
+            run_command(CliCommand::Add(AddArgs {
+                user: "alice".into(),
+                name: " ".into(),
+                command: "echo hello".into(),
+            }))
+            .is_err()
+        );
+        let store = Store::open(&paths.database).unwrap();
+        let draft = store.list_jobs(None).unwrap().into_iter().next().unwrap();
+        run_command(CliCommand::Show { id: draft.id }).unwrap();
+        run_command(CliCommand::Jobs {
+            user: Some("alice".into()),
+            state: Some(JobState::Draft),
+        })
+        .unwrap();
+        let log_error = run_command(CliCommand::Logs {
+            id: draft.id,
+            follow: false,
+        })
+        .unwrap_err();
+        assert!(log_error.to_string().contains("still DRAFT"));
+
+        let commit_error = run_command(CliCommand::Commit {
+            id: Some(draft.id),
+            all: false,
+        })
+        .unwrap_err();
+        assert!(
+            commit_error
+                .to_string()
+                .contains("Scheduler is not running")
+        );
+
+        let queued = store
+            .create_job(NewJob {
+                name: "queued".into(),
+                user: "alice".into(),
+                cwd: directory.path().to_path_buf(),
+                command: vec!["echo".into(), "queued".into()],
+            })
+            .unwrap();
+        store.commit_job(queued).unwrap();
+        let queued_log_error = run_command(CliCommand::Logs {
+            id: queued,
+            follow: false,
+        })
+        .unwrap_err();
+        assert!(queued_log_error.to_string().contains("QUEUED"));
+        let active = store.claim_next().unwrap().unwrap();
+        run_command(CliCommand::Show { id: active.id }).unwrap();
+        let active_log_error = run_command(CliCommand::Logs {
+            id: active.id,
+            follow: false,
+        })
+        .unwrap_err();
+        assert!(
+            active_log_error
+                .to_string()
+                .contains("No logs are available")
+        );
+
+        let finished = store
+            .create_job(NewJob {
+                name: "finished".into(),
+                user: "alice".into(),
+                cwd: directory.path().to_path_buf(),
+                command: vec!["echo".into(), "finished".into()],
+            })
+            .unwrap();
+        store.commit_job(finished).unwrap();
+        store.claim_next().unwrap();
+        store.set_running(finished, 1).unwrap();
+        store.finish(finished, Some(0), None).unwrap();
+        let run_dir = paths.runs.join(finished.to_string());
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(run_dir.join("stdout.log"), b"out").unwrap();
+        std::fs::write(run_dir.join("stderr.log"), b"err").unwrap();
+
+        run_command(CliCommand::Show { id: finished }).unwrap();
+        run_command(CliCommand::Logs {
+            id: finished,
+            follow: false,
+        })
+        .unwrap();
+        run_command(CliCommand::Clean).unwrap();
+        assert!(!run_dir.exists());
+    }
+
+    #[test]
+    fn system_timezone_status_and_cross_platform_child_cleanup_are_reachable() {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _home = StokerHomeGuard {
+            previous: std::env::var_os("STOKER_HOME"),
+        };
+        unsafe { std::env::remove_var("STOKER_HOME") };
+        let fallback_paths = StokerPaths::from_env().unwrap();
+        assert!(fallback_paths.root.ends_with(".stoker"));
+
+        let directory = tempfile::tempdir().unwrap();
+        let paths = StokerPaths {
+            root: directory.path().to_path_buf(),
+            database: directory.path().join("stoker.db"),
+            runs: directory.path().join("runs"),
+            lock: directory.path().join("stoker.lock"),
+            endpoint: directory.path().join("stoker.sock"),
+        };
+        let timezone = resolve_timezone(&paths, None).unwrap();
+        assert_eq!(timezone.source, TimezoneSource::System);
+        print_timezone_status(&paths, &timezone);
+
+        #[cfg(unix)]
+        let mut child = Command::new("sh").args(["-c", "sleep 30"]).spawn().unwrap();
+        #[cfg(windows)]
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping 127.0.0.1 -n 31 > NUL"])
+            .spawn()
+            .unwrap();
+        terminate_child(&mut child);
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn home_guard_restores_a_previously_set_home() {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let previous = std::env::var_os("STOKER_HOME");
+        unsafe { std::env::set_var("STOKER_HOME", "previous-home") };
+        {
+            let _guard = use_home(std::path::Path::new("replacement-home"));
+        }
+        assert_eq!(
+            std::env::var_os("STOKER_HOME"),
+            Some(OsString::from("previous-home"))
+        );
+        drop(StokerHomeGuard { previous });
     }
 }
 
