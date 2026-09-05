@@ -413,7 +413,7 @@ fn render_timezone_selector(
         matches.len()
     ));
     output.push_str(
-        "↑/↓ select || type to search || Backspace delete || Enter save || Esc/q cancel\n\n",
+        "↑/↓ select || type to search || Backspace delete || Enter save || q/Esc cancel\n\n",
     );
 
     if matches.is_empty() {
@@ -640,7 +640,7 @@ fn render_snapshot_selector(
         SnapshotView::Detail => {
             let entry = &entries[state.selected];
             output.push_str("Snapshot details (read-only)\n");
-            output.push_str("Esc/q back to snapshot list\n\n");
+            output.push_str("q/Esc back to snapshot list\n\n");
             match entry {
                 ConfigSnapshotEntry::Valid(snapshot) => {
                     output.push_str(&format!("File: {}\n", snapshot.path.display()));
@@ -651,12 +651,12 @@ fn render_snapshot_selector(
                     ));
                     output.push_str("Snapshot JSON:\n");
                     output.push_str(&snapshot_json_for_display(&snapshot.snapshot, timezone)?);
-                    output.push_str("\n\nEnter restore this snapshot || Esc/q back");
+                    output.push_str("\n\nEnter restore this snapshot || q/Esc back");
                 }
                 ConfigSnapshotEntry::Invalid { path, error } => {
                     output.push_str(&format!("File: {}\n\n", path.display()));
                     output.push_str("This snapshot is unavailable and cannot be restored.\n");
-                    output.push_str(&format!("Reason: {error}\n\nEsc/q back"));
+                    output.push_str(&format!("Reason: {error}\n\nq/Esc back"));
                 }
             }
         }
@@ -674,7 +674,7 @@ fn render_snapshot_selector(
                 timezone.format(snapshot.snapshot.created_at)
             ));
             output.push_str("\nThe current configuration will be saved as a new snapshot first.\n");
-            output.push_str("Continue? [y/N]");
+            output.push_str("Continue? [y/N, q/Esc cancel]");
         }
     }
     stdout
@@ -1999,6 +1999,15 @@ mod snapshot_selector_tests {
         assert_eq!(state.query, "");
         assert_eq!(
             state.reduce(key(KeyCode::Char('q'))),
+            TimezoneSelectorAction::Exit
+        );
+
+        let mut state = TimezoneSelectorState::new(
+            vec!["Asia/Taipei".to_owned(), "Asia/Tokyo".to_owned()],
+            None,
+        );
+        assert_eq!(
+            state.reduce(key(KeyCode::Esc)),
             TimezoneSelectorAction::Exit
         );
     }

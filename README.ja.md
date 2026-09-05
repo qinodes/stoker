@@ -212,10 +212,10 @@ stoker show <JOB_ID> --timezone UTC
 | --- | --- | --- |
 | Browse | `↑` / `↓` | Job を選択します。 |
 | Browse | `Enter` | 選択した Job の移動モードに入ります。 |
-| Browse | `q` | queue をロックしたままエディターを終了します。 |
+| Browse | `q` / `Esc` | queue をロックしたままエディターを終了します。 |
 | Move | `↑` / `↓` | 選択した Job の位置を調整します。 |
 | Move | `Enter` | 移動を確定して Browse モードに戻ります。 |
-| Move | `q` | 現在の移動だけを元に戻して Browse モードに戻ります。 |
+| Move | `q` / `Esc` | 現在の移動だけを元に戻して Browse モードに戻ります。 |
 
 ## Job の状態とキャンセル
 

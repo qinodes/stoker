@@ -128,7 +128,7 @@ impl EditorState {
                 };
                 EditorIntent::None
             }
-            KeyCode::Char('q') => EditorIntent::Exit,
+            KeyCode::Char('q') | KeyCode::Esc => EditorIntent::Exit,
             _ => EditorIntent::None,
         }
     }
@@ -162,7 +162,7 @@ impl EditorState {
                 self.mode = EditorMode::Browse;
                 EditorIntent::None
             }
-            KeyCode::Char('q') => {
+            KeyCode::Char('q') | KeyCode::Esc => {
                 let target = original_order
                     .saturating_sub(1)
                     .min(self.jobs.len().saturating_sub(1));
@@ -393,7 +393,8 @@ fn render<T: TerminalBackend>(
                 "Queue locked || {} jobs waiting\n",
                 state.jobs.len()
             ));
-            output.push_str("↑/↓ select a job || Enter move selected job || q leave editor\n\n");
+            output
+                .push_str("↑/↓ select a job || Enter move selected job || q/Esc leave editor\n\n");
         }
         EditorMode::Move { id, .. } => {
             let name = state
@@ -403,7 +404,7 @@ fn render<T: TerminalBackend>(
                 .map(|job| job.name.as_str())
                 .unwrap_or("(removed)");
             output.push_str(&format!("Moving: {name}\n"));
-            output.push_str("↑/↓ adjust position || Enter keep move || q undo this move\n\n");
+            output.push_str("↑/↓ adjust position || Enter keep move || q/Esc undo this move\n\n");
         }
     }
     for (index, job) in state.jobs.iter().enumerate() {
@@ -621,6 +622,36 @@ mod tests {
         let mut state = EditorState::new(vec![job("first", 1)]);
 
         assert_eq!(state.reduce(key(KeyCode::Char('q'))), EditorIntent::Exit);
+    }
+
+    #[test]
+    fn escape_in_browse_mode_exits() {
+        let mut state = EditorState::new(vec![job("first", 1)]);
+
+        assert_eq!(state.reduce(key(KeyCode::Esc)), EditorIntent::Exit);
+    }
+
+    #[test]
+    fn escape_in_move_mode_undoes_the_current_move() {
+        let first = job("first", 1);
+        let second = job("second", 2);
+        let first_id = first.id;
+        let second_id = second.id;
+        let mut state = EditorState::new(vec![first, second]);
+        state.reduce(key(KeyCode::Down));
+        state.reduce(key(KeyCode::Enter));
+        state.reduce(key(KeyCode::Up));
+
+        assert_eq!(
+            state.reduce(key(KeyCode::Esc)),
+            EditorIntent::Move {
+                id: second_id,
+                target_order: 2,
+            }
+        );
+        assert_eq!(state.mode(), EditorMode::Browse);
+        assert_eq!(state.jobs()[0].id, first_id);
+        assert_eq!(state.jobs()[1].id, second_id);
     }
 
     #[test]

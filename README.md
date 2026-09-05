@@ -212,10 +212,10 @@ The editor shows only `QUEUED` jobs in execution order:
 | --- | --- | --- |
 | Browse | `↑` / `↓` | Select a job. |
 | Browse | `Enter` | Enter move mode for the selected job. |
-| Browse | `q` | Leave the editor and keep the queue locked. |
+| Browse | `q` / `Esc` | Leave the editor and keep the queue locked. |
 | Move | `↑` / `↓` | Adjust the selected job's position. |
 | Move | `Enter` | Keep the move and return to browse mode. |
-| Move | `q` | Undo only the current move and return to browse mode. |
+| Move | `q` / `Esc` | Undo only the current move and return to browse mode. |
 
 ## Job states and cancellation
 
