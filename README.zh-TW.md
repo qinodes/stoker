@@ -155,10 +155,43 @@ SQLite 內的時間一律以 UTC 保存；`stoker jobs` 與 `stoker show` 顯示
 設定或查詢時區：
 
 ```bash
+stoker config show
 stoker config set timezone Asia/Taipei
 stoker config get timezone
 stoker config unset timezone
 ```
+
+`stoker config show` 會顯示 config 檔案位置與完整的已儲存設定。若要查看實際生效的時區與來源，請使用 `stoker status`。
+
+省略時區值時，Stoker 會開啟互動式選擇器：
+
+```bash
+stoker config set timezone
+```
+
+輸入關鍵字篩選 IANA 時區清單，使用 `↑`/`↓` 選擇，按 `Enter` 儲存。搜尋不分大小寫，會比對時區名稱的任一部分。按 `Backspace` 修改搜尋內容，或按 `Esc`/`q` 取消且不變更設定。直接輸入時區值的方式仍然支援。
+
+當 Stoker 建立或更新 `config.json` 時，會在下列位置保留帶有時間戳的 snapshot：
+
+```text
+~/.stoker/snapshot/
+```
+
+如果要在進行高風險變更前主動建立 snapshot，可以執行：
+
+```bash
+stoker config snapshot
+```
+
+即使設定內容沒有變更，這個指令仍然會建立一份新的 snapshot。
+
+使用互動式還原畫面選擇 snapshot。最新的 snapshot 會排在最上方；使用方向鍵選擇、按 `Enter` 查看唯讀詳細內容、按 `Esc` 或 `q` 回到清單，最後按 `Enter` 再按 `y` 確認還原：
+
+```bash
+stoker config restore
+```
+
+還原前會先把目前的設定保存成新的 snapshot。snapshot 的時間會使用和其他顯示時間相同的顯示時區。
 
 單次指令可以用 `--timezone` 或較短的 `--tz` 覆寫設定：
 
@@ -167,7 +200,7 @@ stoker jobs --tz Asia/Tokyo
 stoker show <JOB_ID> --timezone UTC
 ```
 
-解析優先順序為 CLI 參數、`config.json`、作業系統時區。`stoker status` 會顯示目前採用的時區與 config 檔案位置。沒有顯示時間的指令會忽略 timezone 參數。
+解析優先順序為 CLI 參數、`config.json`、作業系統時區。`stoker status` 會顯示目前採用的時區與 config 檔案位置。沒有顯示時間的指令會忽略 timezone 參數；`stoker config restore` 會使用它來顯示 snapshot 時間。
 
 ## Queue 鎖定與編輯器
 

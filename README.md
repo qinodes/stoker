@@ -155,10 +155,43 @@ For example:
 Set, inspect, or clear the configured timezone with:
 
 ```bash
+stoker config show
 stoker config set timezone Asia/Taipei
 stoker config get timezone
 stoker config unset timezone
 ```
+
+`stoker config show` displays the config file location and the complete stored configuration. Use `stoker status` to see the effective timezone and its source.
+
+If the timezone value is omitted, Stoker opens an interactive selector:
+
+```bash
+stoker config set timezone
+```
+
+Type a keyword to filter the IANA timezone list, use `↑`/`↓` to select, and press `Enter` to save. Search is case-insensitive and matches any part of the timezone name. Press `Backspace` to edit the search, or `Esc`/`q` to cancel without changing the configuration. Directly providing a timezone value remains supported.
+
+When Stoker creates or updates `config.json`, it keeps a timestamped snapshot under:
+
+```text
+~/.stoker/snapshot/
+```
+
+To create a snapshot manually before a risky change, run:
+
+```bash
+stoker config snapshot
+```
+
+This always creates a new snapshot, even when the configuration is unchanged.
+
+Use the interactive restore screen to choose a snapshot. The newest snapshot is shown first; use the arrow keys to select it, `Enter` to view its read-only details, `Esc` or `q` to return to the list, and `Enter` followed by `y` to confirm a restore:
+
+```bash
+stoker config restore
+```
+
+The current configuration is saved as a new snapshot before a restore. Snapshot times use the same display timezone as other displayed timestamps.
 
 Use `--timezone` or the shorter `--tz` to override the setting for one display command:
 
@@ -167,7 +200,7 @@ stoker jobs --tz Asia/Tokyo
 stoker show <JOB_ID> --timezone UTC
 ```
 
-Resolution order is the CLI option, `config.json`, then the operating system timezone. `stoker status` shows the effective timezone and the config file path. Commands that do not display timestamps ignore timezone options.
+Resolution order is the CLI option, `config.json`, then the operating system timezone. `stoker status` shows the effective timezone and the config file path. Commands that do not display timestamps ignore timezone options; `stoker config restore` uses the option for snapshot timestamps.
 
 ## Queue lock and editor
 

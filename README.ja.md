@@ -155,10 +155,43 @@ Stoker のデータフォルダーを初めて初期化すると、OS の IANA �
 タイムゾーンの設定、確認、解除：
 
 ```bash
+stoker config show
 stoker config set timezone Asia/Taipei
 stoker config get timezone
 stoker config unset timezone
 ```
+
+`stoker config show` は config ファイルの場所と保存されている設定全体を表示します。実際に有効なタイムゾーンとその取得元を確認するには `stoker status` を使用します。
+
+タイムゾーンの値を省略すると、対話型の選択画面が開きます。
+
+```bash
+stoker config set timezone
+```
+
+キーワードを入力して IANA タイムゾーン一覧を絞り込み、`↑`/`↓` で選択し、`Enter` で保存します。検索は大文字と小文字を区別せず、タイムゾーン名の一部にも一致します。`Backspace` で検索内容を編集し、`Esc`/`q` で設定を変更せずにキャンセルできます。タイムゾーンを直接指定する方法も引き続き利用できます。
+
+Stoker が `config.json` を作成または更新すると、タイムスタンプ付きの snapshot を次の場所に保存します。
+
+```text
+~/.stoker/snapshot/
+```
+
+リスクのある変更を行う前に手動で snapshot を作成するには、次を実行します。
+
+```bash
+stoker config snapshot
+```
+
+設定内容が変わっていない場合でも、このコマンドは新しい snapshot を作成します。
+
+対話型の復元画面で snapshot を選択できます。最新の snapshot が一番上に表示されます。矢印キーで選択し、`Enter` で読み取り専用の詳細を表示し、`Esc` または `q` で一覧に戻ります。復元するときは `Enter` の後に `y` を押して確認します。
+
+```bash
+stoker config restore
+```
+
+復元前に現在の設定が新しい snapshot として保存されます。snapshot の時刻は、他の表示時刻と同じ表示タイムゾーンを使用します。
 
 1 回の表示コマンドだけ設定を上書きする場合は、`--timezone` または短い `--tz` を使用します。
 
@@ -167,7 +200,7 @@ stoker jobs --tz Asia/Tokyo
 stoker show <JOB_ID> --timezone UTC
 ```
 
-適用順序は CLI オプション、`config.json`、OS のタイムゾーンです。`stoker status` では現在有効なタイムゾーンと config ファイルの場所を確認できます。時刻を表示しないコマンドでは timezone オプションは無視されます。
+適用順序は CLI オプション、`config.json`、OS のタイムゾーンです。`stoker status` では現在有効なタイムゾーンと config ファイルの場所を確認できます。時刻を表示しないコマンドでは timezone オプションは無視されます。`stoker config restore` は snapshot の時刻表示にこのオプションを使用します。
 
 ## Queue のロックとエディター
 

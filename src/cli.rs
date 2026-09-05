@@ -6,13 +6,20 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::execute;
+use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use crate::config::{ResolvedTimezone, TimezoneSource, normalize_path, resolve_timezone};
+use crate::config::{
+    ConfigSnapshot, ConfigSnapshotEntry, ConfigSnapshotFile, ConfigSnapshotReason,
+    ResolvedTimezone, StokerConfig, TimezoneSource, normalize_path, resolve_timezone,
+};
 use crate::domain::{Job, JobState, NewJob};
 use crate::ipc::StaleQueueMoveError;
 use crate::queue_editor::{self, EditorMoveError};
@@ -109,8 +116,11 @@ pub enum ConfigCommand {
     Set {
         #[arg(value_enum)]
         key: ConfigKey,
-        value: String,
+        #[arg(help = "IANA timezone identifier; omit it to choose interactively")]
+        value: Option<String>,
     },
+    #[command(about = "Show the current configuration")]
+    Show,
     #[command(about = "Get a configuration value")]
     Get {
         #[arg(value_enum)]
@@ -121,6 +131,10 @@ pub enum ConfigCommand {
         #[arg(value_enum)]
         key: ConfigKey,
     },
+    #[command(about = "Interactively restore a previous configuration snapshot")]
+    Restore,
+    #[command(about = "Create a manual configuration snapshot")]
+    Snapshot,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -182,7 +196,7 @@ fn run_command_with_timezone(command: CliCommand, timezone: Option<String>) -> a
         CliCommand::Add(args) => add(args),
         CliCommand::Show { id } => show(id, timezone.as_deref()),
         CliCommand::Jobs { user, state } => jobs(user.as_deref(), state, timezone.as_deref()),
-        CliCommand::Config { command } => config(command),
+        CliCommand::Config { command } => config(command, timezone.as_deref()),
         CliCommand::Clean => clean(),
         CliCommand::Update(args) => update(args.yes),
         CliCommand::Uninstall(args) => uninstall(args.yes),
@@ -215,34 +229,556 @@ fn open_paths() -> anyhow::Result<StokerPaths> {
     Ok(paths)
 }
 
-fn config(command: ConfigCommand) -> anyhow::Result<()> {
+fn config(command: ConfigCommand, cli_timezone: Option<&str>) -> anyhow::Result<()> {
     let paths = open_paths()?;
-    let mut current = paths.read_config()?;
     match command {
         ConfigCommand::Set {
             key: ConfigKey::Timezone,
             value,
         } => {
+            let mut current = paths.read_config()?;
+            let value = match value {
+                Some(value) => value,
+                None => {
+                    let Some(value) = select_timezone(current.timezone.as_deref())? else {
+                        return Ok(());
+                    };
+                    value
+                }
+            };
             resolve_timezone(&paths, Some(&value))?;
             current.timezone = Some(value.clone());
             paths.write_config(&current)?;
             println!("Set timezone to {value}.");
         }
+        ConfigCommand::Show => {
+            let current = paths.read_config()?;
+            println!("Stoker configuration");
+            println!("File: {}", paths.config_path().display());
+            println!();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&current).context("format Stoker configuration")?
+            );
+        }
         ConfigCommand::Get {
             key: ConfigKey::Timezone,
-        } => match current.timezone {
+        } => match paths.read_config()?.timezone {
             Some(value) => println!("timezone: {value}"),
             None => println!("timezone: <using operating system timezone>"),
         },
         ConfigCommand::Unset {
             key: ConfigKey::Timezone,
         } => {
+            let mut current = paths.read_config()?;
             current.timezone = None;
             paths.write_config(&current)?;
             println!("Unset timezone; using operating system timezone.");
         }
+        ConfigCommand::Restore => restore_config(&paths, cli_timezone)?,
+        ConfigCommand::Snapshot => {
+            let current = paths.read_config()?;
+            let path = paths.create_config_snapshot(&current, ConfigSnapshotReason::Manual)?;
+            println!("Created configuration snapshot: {}.", path.display());
+        }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct TimezoneSelectorState {
+    timezones: Vec<String>,
+    query: String,
+    selected: usize,
+}
+
+impl TimezoneSelectorState {
+    fn new(mut timezones: Vec<String>, current: Option<&str>) -> Self {
+        timezones.sort();
+        timezones.dedup();
+        let selected = current
+            .and_then(|value| timezones.iter().position(|timezone| timezone == value))
+            .unwrap_or(0);
+        Self {
+            timezones,
+            query: String::new(),
+            selected,
+        }
+    }
+
+    fn matches(&self) -> Vec<usize> {
+        let query = self.query.to_ascii_lowercase();
+        self.timezones
+            .iter()
+            .enumerate()
+            .filter_map(|(index, timezone)| {
+                if timezone.to_ascii_lowercase().contains(&query) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn selected_timezone(&self) -> Option<&str> {
+        self.matches()
+            .get(self.selected)
+            .and_then(|index| self.timezones.get(*index))
+            .map(String::as_str)
+    }
+
+    fn reduce(&mut self, key: KeyEvent) -> TimezoneSelectorAction {
+        if key.code == KeyCode::Char('c')
+            && key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            return TimezoneSelectorAction::Exit;
+        }
+
+        let matches = self.matches();
+        match key.code {
+            KeyCode::Up => {
+                self.selected = self.selected.saturating_sub(1);
+                TimezoneSelectorAction::None
+            }
+            KeyCode::Down => {
+                if !matches.is_empty() {
+                    self.selected = (self.selected + 1).min(matches.len() - 1);
+                }
+                TimezoneSelectorAction::None
+            }
+            KeyCode::Enter => self
+                .selected_timezone()
+                .map(|timezone| TimezoneSelectorAction::Select(timezone.to_owned()))
+                .unwrap_or(TimezoneSelectorAction::None),
+            KeyCode::Esc => TimezoneSelectorAction::Exit,
+            KeyCode::Char('q') => TimezoneSelectorAction::Exit,
+            KeyCode::Char(character) => {
+                self.query.push(character);
+                self.selected = 0;
+                TimezoneSelectorAction::None
+            }
+            KeyCode::Backspace => {
+                self.query.pop();
+                self.selected = 0;
+                TimezoneSelectorAction::None
+            }
+            _ => TimezoneSelectorAction::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TimezoneSelectorAction {
+    None,
+    Exit,
+    Select(String),
+}
+
+fn select_timezone(current: Option<&str>) -> anyhow::Result<Option<String>> {
+    let timezones = chrono_tz::TZ_VARIANTS
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    terminal::enable_raw_mode().context("enable terminal raw mode")?;
+    let _guard = InteractiveTerminalGuard;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, Hide).context("enter timezone selector")?;
+    let mut state = TimezoneSelectorState::new(timezones, current);
+
+    loop {
+        render_timezone_selector(&mut stdout, &state)?;
+        let key = loop {
+            if let Event::Key(key) = event::read().context("read timezone selector input")?
+                && key.kind != KeyEventKind::Release
+            {
+                break key;
+            }
+        };
+        match state.reduce(key) {
+            TimezoneSelectorAction::None => {}
+            TimezoneSelectorAction::Exit => return Ok(None),
+            TimezoneSelectorAction::Select(timezone) => return Ok(Some(timezone)),
+        }
+    }
+}
+
+fn render_timezone_selector(
+    stdout: &mut impl Write,
+    state: &TimezoneSelectorState,
+) -> anyhow::Result<()> {
+    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0)).context("clear timezone selector")?;
+    let matches = state.matches();
+    let mut output = String::new();
+    output.push_str("Select timezone\n");
+    output.push_str(&format!(
+        "Search: {}  ({} matches)\n",
+        state.query,
+        matches.len()
+    ));
+    output
+        .push_str("↑/↓ select · type to search · Backspace delete · Enter save · Esc/q cancel\n\n");
+
+    if matches.is_empty() {
+        output.push_str("No matching IANA timezones.\n");
+    } else {
+        const VISIBLE_ROWS: usize = 12;
+        let start = state
+            .selected
+            .saturating_sub(VISIBLE_ROWS / 2)
+            .min(matches.len().saturating_sub(VISIBLE_ROWS));
+        let end = (start + VISIBLE_ROWS).min(matches.len());
+        for (visible_index, match_index) in matches[start..end].iter().enumerate() {
+            let index = start + visible_index;
+            let marker = if index == state.selected { '>' } else { ' ' };
+            output.push_str(&format!("{marker} {}\n", state.timezones[*match_index]));
+        }
+    }
+
+    stdout
+        .write_all(output.as_bytes())
+        .context("write timezone selector")?;
+    stdout.flush().context("flush timezone selector")?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotView {
+    List,
+    Detail,
+    Confirm,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SnapshotSelectorState {
+    selected: usize,
+    view: SnapshotView,
+}
+
+impl SnapshotSelectorState {
+    fn new() -> Self {
+        Self {
+            selected: 0,
+            view: SnapshotView::List,
+        }
+    }
+
+    fn reduce(&mut self, key: KeyEvent, entries: &[ConfigSnapshotEntry]) -> SnapshotSelectorAction {
+        if key.code == KeyCode::Char('c')
+            && key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            return SnapshotSelectorAction::Exit;
+        }
+
+        match self.view {
+            SnapshotView::List => match key.code {
+                KeyCode::Up => {
+                    self.selected = self.selected.saturating_sub(1);
+                    SnapshotSelectorAction::None
+                }
+                KeyCode::Down => {
+                    if !entries.is_empty() {
+                        self.selected = (self.selected + 1).min(entries.len() - 1);
+                    }
+                    SnapshotSelectorAction::None
+                }
+                KeyCode::Enter if !entries.is_empty() => {
+                    self.view = SnapshotView::Detail;
+                    SnapshotSelectorAction::None
+                }
+                KeyCode::Char('q') | KeyCode::Esc => SnapshotSelectorAction::Exit,
+                _ => SnapshotSelectorAction::None,
+            },
+            SnapshotView::Detail => match key.code {
+                KeyCode::Enter
+                    if matches!(
+                        entries.get(self.selected),
+                        Some(ConfigSnapshotEntry::Valid(_))
+                    ) =>
+                {
+                    self.view = SnapshotView::Confirm;
+                    SnapshotSelectorAction::None
+                }
+                KeyCode::Char('q') | KeyCode::Esc => {
+                    self.view = SnapshotView::List;
+                    SnapshotSelectorAction::None
+                }
+                _ => SnapshotSelectorAction::None,
+            },
+            SnapshotView::Confirm => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    SnapshotSelectorAction::Restore(self.selected)
+                }
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => {
+                    self.view = SnapshotView::List;
+                    SnapshotSelectorAction::None
+                }
+                _ => SnapshotSelectorAction::None,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotSelectorAction {
+    None,
+    Exit,
+    Restore(usize),
+}
+
+struct InteractiveTerminalGuard;
+
+impl Drop for InteractiveTerminalGuard {
+    fn drop(&mut self) {
+        let mut stdout = io::stdout();
+        let _ = execute!(stdout, Show, LeaveAlternateScreen);
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+fn restore_config(paths: &StokerPaths, cli_timezone: Option<&str>) -> anyhow::Result<()> {
+    let entries = paths.list_config_snapshots()?;
+    if entries.is_empty() {
+        println!(
+            "No configuration snapshots found in {}.",
+            paths.snapshot_dir().display()
+        );
+        return Ok(());
+    }
+
+    let timezone = resolve_timezone(paths, cli_timezone)?;
+    let current = paths.read_config()?;
+    let Some(selected) = select_config_snapshot(&entries, &current, &timezone)? else {
+        return Ok(());
+    };
+
+    let changed = paths.restore_config_snapshot(&selected.snapshot)?;
+    if changed {
+        println!("Restored configuration from {}.", selected.path.display());
+    } else {
+        println!("Configuration already matches that snapshot.");
+    }
+    Ok(())
+}
+
+fn select_config_snapshot(
+    entries: &[ConfigSnapshotEntry],
+    current: &StokerConfig,
+    timezone: &ResolvedTimezone,
+) -> anyhow::Result<Option<ConfigSnapshotFile>> {
+    terminal::enable_raw_mode().context("enable terminal raw mode")?;
+    let _guard = InteractiveTerminalGuard;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, Hide).context("enter snapshot selector")?;
+    let mut state = SnapshotSelectorState::new();
+
+    loop {
+        render_snapshot_selector(&mut stdout, &state, entries, current, timezone)?;
+        let key = loop {
+            if let Event::Key(key) = event::read().context("read snapshot selector input")?
+                && key.kind != KeyEventKind::Release
+            {
+                break key;
+            }
+        };
+        match state.reduce(key, entries) {
+            SnapshotSelectorAction::None => {}
+            SnapshotSelectorAction::Exit => return Ok(None),
+            SnapshotSelectorAction::Restore(index) => {
+                let Some(ConfigSnapshotEntry::Valid(snapshot)) = entries.get(index) else {
+                    continue;
+                };
+                return Ok(Some(snapshot.clone()));
+            }
+        }
+    }
+}
+
+fn render_snapshot_selector(
+    stdout: &mut impl Write,
+    state: &SnapshotSelectorState,
+    entries: &[ConfigSnapshotEntry],
+    current: &StokerConfig,
+    timezone: &ResolvedTimezone,
+) -> anyhow::Result<()> {
+    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0)).context("clear snapshot selector")?;
+    let mut output = String::new();
+    match state.view {
+        SnapshotView::List => {
+            output.push_str("Stoker configuration snapshots\n");
+            output.push_str("↑/↓ select · Enter details · q/Esc quit\n\n");
+            let reason_width = snapshot_reason_width(entries);
+            output.push_str(&snapshot_list_header(reason_width));
+            for (index, entry) in entries.iter().enumerate() {
+                let marker = if index == state.selected { '>' } else { ' ' };
+                match entry {
+                    ConfigSnapshotEntry::Valid(snapshot) => {
+                        output.push_str(&format_snapshot_list_row(
+                            marker,
+                            timezone.format(snapshot.snapshot.created_at),
+                            snapshot.snapshot.reason,
+                            snapshot_summary(current, &snapshot.snapshot),
+                            reason_width,
+                        ));
+                    }
+                    ConfigSnapshotEntry::Invalid { path, .. } => {
+                        output.push_str(&format_snapshot_list_row(
+                            marker,
+                            "-",
+                            "invalid snapshot",
+                            format!(
+                                "unavailable: {}",
+                                path.file_name()
+                                    .and_then(|name| name.to_str())
+                                    .unwrap_or("<unknown file>")
+                            ),
+                            reason_width,
+                        ));
+                    }
+                }
+            }
+        }
+        SnapshotView::Detail => {
+            let entry = &entries[state.selected];
+            output.push_str("Snapshot details (read-only)\n");
+            output.push_str("Esc/q back to snapshot list\n\n");
+            match entry {
+                ConfigSnapshotEntry::Valid(snapshot) => {
+                    output.push_str(&format!("File: {}\n", snapshot.path.display()));
+                    output.push_str(&format!(
+                        "Created time: {}\n",
+                        timezone.format(snapshot.snapshot.created_at)
+                    ));
+                    output.push_str(&format!("Reason: {}\n\n", snapshot.snapshot.reason));
+                    output.push_str("Changes from current configuration:\n");
+                    output.push_str(&format!(
+                        "{}\n\n",
+                        detailed_snapshot_summary(current, &snapshot.snapshot)
+                    ));
+                    output.push_str("Configuration:\n");
+                    output.push_str(
+                        &serde_json::to_string_pretty(&snapshot.snapshot.config)
+                            .context("format snapshot configuration")?,
+                    );
+                    output.push_str("\n\nEnter restore this snapshot · Esc/q back");
+                }
+                ConfigSnapshotEntry::Invalid { path, error } => {
+                    output.push_str(&format!("File: {}\n\n", path.display()));
+                    output.push_str("This snapshot is unavailable and cannot be restored.\n");
+                    output.push_str(&format!("Reason: {error}\n\nEsc/q back"));
+                }
+            }
+        }
+        SnapshotView::Confirm => {
+            let snapshot = match &entries[state.selected] {
+                ConfigSnapshotEntry::Valid(snapshot) => snapshot,
+                ConfigSnapshotEntry::Invalid { .. } => {
+                    return Ok(());
+                }
+            };
+            output.push_str("Restore configuration snapshot?\n\n");
+            output.push_str(&format!("File: {}\n", snapshot.path.display()));
+            output.push_str(&format!(
+                "Created time: {}\n",
+                timezone.format(snapshot.snapshot.created_at)
+            ));
+            output.push_str("\nThe current configuration will be saved as a new snapshot first.\n");
+            output.push_str("Continue? [y/N]");
+        }
+    }
+    stdout
+        .write_all(output.as_bytes())
+        .context("write snapshot selector")?;
+    stdout.flush().context("flush snapshot selector")?;
+    Ok(())
+}
+
+fn snapshot_reason_width(entries: &[ConfigSnapshotEntry]) -> usize {
+    entries
+        .iter()
+        .map(|entry| match entry {
+            ConfigSnapshotEntry::Valid(snapshot) => snapshot.snapshot.reason.to_string().len(),
+            ConfigSnapshotEntry::Invalid { .. } => "invalid snapshot".len(),
+        })
+        .max()
+        .unwrap_or(0)
+        .max("Reason".len())
+}
+
+fn snapshot_list_header(reason_width: usize) -> String {
+    format!(
+        "  {:<29}  {:<reason_width$} {}\n",
+        "Created time",
+        "Reason",
+        "Summary",
+        reason_width = reason_width
+    )
+}
+
+fn format_snapshot_list_row(
+    marker: char,
+    created_time: impl std::fmt::Display,
+    reason: impl std::fmt::Display,
+    summary: impl std::fmt::Display,
+    reason_width: usize,
+) -> String {
+    let created_time = created_time.to_string();
+    let reason = reason.to_string();
+    let summary = summary.to_string();
+    format!(
+        "{marker} {created_time:<29}  {reason:<reason_width$} {summary}\n",
+        reason_width = reason_width
+    )
+}
+
+fn snapshot_summary(current: &StokerConfig, snapshot: &ConfigSnapshot) -> String {
+    let keys = changed_config_keys(current, &snapshot.config);
+    if keys.is_empty() {
+        "same as current".to_owned()
+    } else {
+        format!("{} changed: {}", keys.len(), summarize_keys(&keys))
+    }
+}
+
+fn detailed_snapshot_summary(current: &StokerConfig, snapshot: &ConfigSnapshot) -> String {
+    let keys = changed_config_keys(current, &snapshot.config);
+    if keys.is_empty() {
+        "No differences.".to_owned()
+    } else {
+        keys.into_iter()
+            .map(|key| format!("  {key}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn changed_config_keys(current: &StokerConfig, snapshot: &StokerConfig) -> Vec<String> {
+    let current = serde_json::to_value(current).expect("StokerConfig serializes");
+    let snapshot = serde_json::to_value(snapshot).expect("StokerConfig serializes");
+    let (Some(current), Some(snapshot)) = (current.as_object(), snapshot.as_object()) else {
+        return Vec::new();
+    };
+    let mut keys = current
+        .keys()
+        .chain(snapshot.keys())
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    keys.retain(|key| current.get(key) != snapshot.get(key));
+    keys.into_iter().collect()
+}
+
+fn summarize_keys(keys: &[String]) -> String {
+    let value = keys.join(", ");
+    if value.chars().count() <= 32 {
+        value
+    } else {
+        let prefix = value.chars().take(29).collect::<String>();
+        format!("{prefix}...")
+    }
 }
 
 fn runtime() -> anyhow::Result<Runtime> {
@@ -1269,6 +1805,28 @@ mod update_tests {
     }
 
     #[test]
+    fn config_restore_is_a_valid_command() {
+        assert!(Cli::try_parse_from(["stoker", "config", "restore"]).is_ok());
+        assert!(Cli::try_parse_from(["stoker", "config", "restore", "--tz", "UTC"]).is_ok());
+    }
+
+    #[test]
+    fn config_snapshot_is_a_valid_command() {
+        assert!(Cli::try_parse_from(["stoker", "config", "snapshot"]).is_ok());
+    }
+
+    #[test]
+    fn config_show_is_a_valid_command() {
+        assert!(Cli::try_parse_from(["stoker", "config", "show"]).is_ok());
+    }
+
+    #[test]
+    fn timezone_set_accepts_an_omitted_or_explicit_value() {
+        assert!(Cli::try_parse_from(["stoker", "config", "set", "timezone"]).is_ok());
+        assert!(Cli::try_parse_from(["stoker", "config", "set", "timezone", "Asia/Tokyo"]).is_ok());
+    }
+
+    #[test]
     fn top_level_help_describes_commands_and_timezone_option() {
         let mut command = Cli::command();
         let help = command.render_help().to_string();
@@ -1284,6 +1842,141 @@ mod update_tests {
                 "missing help text: {description}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod snapshot_selector_tests {
+    use super::*;
+    use chrono::Utc;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn valid_entry() -> ConfigSnapshotEntry {
+        ConfigSnapshotEntry::Valid(ConfigSnapshotFile {
+            path: PathBuf::from("config-test.json"),
+            snapshot: ConfigSnapshot {
+                snapshot_version: 1,
+                created_at: Utc::now(),
+                reason: crate::config::ConfigSnapshotReason::Initial,
+                config: StokerConfig {
+                    timezone: Some("Asia/Tokyo".to_owned()),
+                },
+            },
+        })
+    }
+
+    #[test]
+    fn enter_opens_details_and_escape_returns_to_list() {
+        let entries = vec![valid_entry()];
+        let mut state = SnapshotSelectorState::new();
+
+        assert_eq!(
+            state.reduce(key(KeyCode::Enter), &entries),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(state.view, SnapshotView::Detail);
+        assert_eq!(
+            state.reduce(key(KeyCode::Esc), &entries),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(state.view, SnapshotView::List);
+    }
+
+    #[test]
+    fn enter_then_yes_requests_restore_and_no_returns_to_list() {
+        let entries = vec![valid_entry()];
+        let mut state = SnapshotSelectorState::new();
+        state.reduce(key(KeyCode::Enter), &entries);
+        state.reduce(key(KeyCode::Enter), &entries);
+
+        assert_eq!(state.view, SnapshotView::Confirm);
+        assert_eq!(
+            state.reduce(key(KeyCode::Char('n')), &entries),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(state.view, SnapshotView::List);
+
+        state.reduce(key(KeyCode::Enter), &entries);
+        state.reduce(key(KeyCode::Enter), &entries);
+        assert_eq!(
+            state.reduce(key(KeyCode::Char('y')), &entries),
+            SnapshotSelectorAction::Restore(0)
+        );
+    }
+
+    #[test]
+    fn invalid_snapshot_cannot_enter_confirmation() {
+        let entries = vec![ConfigSnapshotEntry::Invalid {
+            path: PathBuf::from("broken.json"),
+            error: "invalid JSON".to_owned(),
+        }];
+        let mut state = SnapshotSelectorState::new();
+        state.reduce(key(KeyCode::Enter), &entries);
+
+        assert_eq!(state.view, SnapshotView::Detail);
+        assert_eq!(
+            state.reduce(key(KeyCode::Enter), &entries),
+            SnapshotSelectorAction::None
+        );
+        assert_eq!(state.view, SnapshotView::Detail);
+    }
+
+    #[test]
+    fn snapshot_list_header_columns_align_with_rows() {
+        let reason_width = "manual".len();
+        let header = snapshot_list_header(reason_width);
+        let row = format_snapshot_list_row(
+            '>',
+            "2026-09-05T14:13:52.329+09:00",
+            crate::config::ConfigSnapshotReason::Manual,
+            "same as current",
+            reason_width,
+        );
+
+        assert_eq!(header.find("Reason"), row.find("manual"));
+        assert_eq!(header.find("Summary"), row.find("same as current"));
+    }
+
+    #[test]
+    fn timezone_selector_searches_and_selects_a_timezone() {
+        let mut state = TimezoneSelectorState::new(
+            vec![
+                "UTC".to_owned(),
+                "Asia/Taipei".to_owned(),
+                "Asia/Tokyo".to_owned(),
+            ],
+            Some("Asia/Taipei"),
+        );
+
+        assert_eq!(state.selected_timezone(), Some("Asia/Taipei"));
+        state.reduce(key(KeyCode::Char('t')));
+        state.reduce(key(KeyCode::Char('o')));
+        assert_eq!(state.selected_timezone(), Some("Asia/Tokyo"));
+        assert_eq!(
+            state.reduce(key(KeyCode::Enter)),
+            TimezoneSelectorAction::Select("Asia/Tokyo".to_owned())
+        );
+    }
+
+    #[test]
+    fn timezone_selector_can_cancel_and_clear_search() {
+        let mut state = TimezoneSelectorState::new(
+            vec!["Asia/Taipei".to_owned(), "Asia/Tokyo".to_owned()],
+            None,
+        );
+
+        state.reduce(key(KeyCode::Char('t')));
+        state.reduce(key(KeyCode::Backspace));
+        assert_eq!(state.query, "");
+        assert_eq!(
+            state.reduce(key(KeyCode::Char('q'))),
+            TimezoneSelectorAction::Exit
+        );
     }
 }
 
