@@ -3,10 +3,10 @@
 This document is for release maintainers publishing a new `stoker-engine`
 release.
 
-The release flow has four steps:
+The release flow is:
 
 ```text
-check -> versioning -> release -> publish
+check -> push main -> CI -> versioning -> release -> Release workflow -> publish
 ```
 
 ## Prerequisites
@@ -14,8 +14,8 @@ check -> versioning -> release -> publish
 - Work on the `main` branch.
 - Choose the next SemVer version and update it in `Cargo.toml`; verify that
   `Cargo.lock` and user-visible version references agree.
-- Review and stage the release changes before running `versioning`. The
-  `versioning` step does not run `git add`, but it commits staged changes.
+- Commit the release changes and push `main` before creating the release tag.
+- Wait for the CI workflow to pass before creating the release tag.
 - Configure your crates.io token once with `cargo login`.
 - Use a version that has not already been published to crates.io.
 
@@ -36,35 +36,42 @@ that concurrency and resource-competition issues can be detected. If you need
 to diagnose a test that is sensitive to shared resources, rerun it with
 `cargo test -- --test-threads=1`. Do not continue if any check fails.
 
-## 2. Create the release commit and tag
+## 2. Push `main` and wait for CI
+
+Commit the intended release changes, then push `main`:
 
 ```bash
-make versioning VERSION=0.5.0
+git push origin main
 ```
 
-This creates or updates:
+Wait for the CI workflow to pass on GitHub before continuing. Do not push the
+release tag together with `main`.
 
-- a release commit with message `Release v0.5.0`;
-- an annotated Git tag named `v0.5.0`.
-
-The command does not update `Cargo.toml` automatically. Replace `0.5.0` with
-the version already set in `Cargo.toml`, and stage the intended changes first.
-
-## 3. Push the release
+## 3. Create the release tag
 
 ```bash
-make release
+make versioning VERSION=1.2.1
 ```
 
-This pushes `main` and the annotated tags reachable from it to `origin`.
-The version does not need to be provided again.
+This creates an annotated Git tag named `v1.2.1` on the current commit. The
+current commit must be the one that passed CI. The command does not update
+`Cargo.toml` or create a release commit. Replace `1.2.1` with the version
+already set in `Cargo.toml`.
+
+## 4. Push the release tag
+
+```bash
+make release VERSION=1.2.1
+```
+
+This pushes only the annotated release tag to `origin`.
 
 After the tag is pushed, GitHub Actions runs
 `.github/workflows/release.yml`. It builds packages for Windows, Linux, macOS
 Apple Silicon. It attaches archives, platform binaries, and
 `SHA256SUMS` to a GitHub Release for the tag.
 
-## 4. Publish to crates.io
+## 5. Publish to crates.io
 
 ```bash
 make publish
@@ -83,7 +90,10 @@ cannot be published again with different contents.
 
 ```bash
 make check
-make versioning VERSION=0.5.0
-make release
+git push origin main
+# Wait for CI to pass on GitHub.
+make versioning VERSION=1.2.1
+make release VERSION=1.2.1
+# Wait for the Release workflow to pass on GitHub.
 make publish
 ```

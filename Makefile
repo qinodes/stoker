@@ -1,19 +1,12 @@
-.PHONY: format format-check lint test cargo-check build stop-test-process check versioning release publish auto-publish
+.PHONY: format format-check lint test cargo-check build stop-test-process check versioning release publish
 
 VERSION ?=
 TAG = v$(VERSION)
 MESSAGE = Release $(TAG)
 
-ifneq ($(filter versioning auto-publish,$(MAKECMDGOALS)),)
+ifneq ($(filter versioning release,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VERSION)),)
-$(error VERSION is required, for example: make versioning VERSION=0.5.0)
-endif
-endif
-
-ifneq ($(filter auto-publish,$(MAKECMDGOALS)),)
-CURRENT_BRANCH := $(shell git branch --show-current)
-ifneq ($(CURRENT_BRANCH),main)
-$(error auto-publish must run from the main branch; current branch is "$(CURRENT_BRANCH)")
+$(error VERSION is required, for example: make versioning VERSION=1.2.1)
 endif
 endif
 
@@ -51,19 +44,11 @@ check:
 	$(MAKE) build
 
 versioning:
-	git commit --allow-empty -m "$(MESSAGE)"
 	git tag -a "$(TAG)" -m "$(MESSAGE)"
-	@echo "Versioning completed. Run 'make release' to publish the release."
+	@echo "Tag $(TAG) created at the current commit. Verify CI before running 'make release VERSION=$(VERSION)'."
 
 release:
-	git push origin main --follow-tags
+	git push origin "$(TAG)"
 
 publish:
 	cargo publish
-
-auto-publish:
-	cargo install --path .
-	$(MAKE) check
-	$(MAKE) versioning VERSION="$(VERSION)"
-	$(MAKE) release
-	$(MAKE) publish
