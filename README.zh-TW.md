@@ -165,8 +165,6 @@ stoker config unset timezone
 stoker config set timezone
 ```
 
-輸入關鍵字篩選 IANA 時區清單，使用 `↑`/`↓` 選擇，按 `Enter` 儲存。搜尋不分大小寫，會比對時區名稱的任一部分。按 `Backspace` 修改搜尋內容，或按 `Esc`/`q` 取消且不變更設定。直接輸入時區值的方式仍然支援。
-
 當 Stoker 建立或更新 `config.json` 時，會在下列位置保留帶有時間戳的 snapshot：
 
 ```text
@@ -181,13 +179,13 @@ stoker config snapshot
 
 即使設定內容沒有變更，這個指令仍然會建立一份新的 snapshot。
 
-使用互動式還原畫面選擇 snapshot。最新的 snapshot 會排在最上方；使用方向鍵選擇、按 `Enter` 查看唯讀詳細內容、按 `Esc` 或 `q` 回到清單，最後按 `Enter` 再按 `y` 確認還原：
+使用互動式還原畫面選擇 snapshot：
 
 ```bash
+# 最新的 snapshot 會排在最上方；使用方向鍵選擇、按 `Enter` 查看唯讀詳細內容、按 `Esc` 或 `q` 回到清單，最後按 `Enter` 再按 `y` 確認還原
+# 還原前會先把目前的設定保存成新的 snapshot。
 stoker config restore
 ```
-
-還原前會先把目前的設定保存成新的 snapshot。snapshot 的時間會使用和其他顯示時間相同的顯示時區。
 
 單次指令可以用 `--timezone` 或較短的 `--tz` 覆寫設定：
 
@@ -196,15 +194,17 @@ stoker jobs --tz Asia/Tokyo
 stoker show <JOB_ID> --timezone UTC
 ```
 
-解析優先順序為 CLI 參數、`config.json`、作業系統時區。`stoker status` 會顯示目前採用的時區與 config 檔案位置。沒有顯示時間的指令會忽略 timezone 參數；`stoker config restore` 會使用它來顯示 snapshot 時間。
+解析優先順序為 CLI 參數、`config.json`、作業系統時區。
 
 ## Queue 鎖定與編輯器
 
-編輯 queue 前先執行 `stoker queue lock`，準備讓 scheduler 繼續接收工作時再執行 `stoker queue unlock`。鎖定狀態會持久保存：CLI 結束、scheduler 停止或重新啟動後仍然有效。鎖定時 scheduler 不會再 claim 其他 `QUEUED` Job。已經處於 `STARTING`、`RUNNING` 或 `CANCELLING` 的 Job 不會被停止，仍可正常完成。
+可以透過`stoker status` 確認Queue狀態。
 
-`stoker status` 一律顯示 `Queue: locked` 或 `Queue: unlocked`。鎖定時也會提示 scheduler 不會再啟動下一個 queued Job。Queue 鎖定時，`stoker commit` 與 `stoker commit --all` 都會被拒絕；`stoker cancel` 仍可使用，`stoker add` 也仍可使用，因為它建立的是 `DRAFT` Job。
+修改 queue 前先執行 `stoker queue lock`，完成修改後執行 `stoker queue unlock`。
 
-`stoker queue edit` 必須在 queue 已鎖定時使用。空 queue 仍可成功鎖定，並顯示 `Queue locked. No queued jobs to reorder.`；編輯空 queue 會成功顯示 `No queued jobs to reorder.`，不會開啟空白的終端機編輯器。離開編輯器不會解除 queue 鎖定。
+鎖定時不能執行 `stoker commit` 或 `stoker commit --all`，但仍可 `cancel` 或 `add`。
+
+`stoker queue edit` 必須在鎖定後使用。
 
 編輯器只顯示依執行順序排列的 `QUEUED` Job：
 
@@ -217,7 +217,6 @@ stoker show <JOB_ID> --timezone UTC
 | 移動 | `Enter` | 保留移動結果並返回瀏覽模式。 |
 | 移動 | `q` | 只復原目前這次移動，並返回瀏覽模式。 |
 
-如果另一個終端機在編輯期間取消了選取的 Job，下一次移動或復原不會把它恢復；編輯器會提示 Job 已移除並重新載入 queued 清單。如果被取消的是其他 queued Job，編輯器會在下一次移動時使用目前的順序，並保留該取消結果。
 
 ## Job 狀態與取消
 

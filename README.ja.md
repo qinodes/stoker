@@ -165,8 +165,6 @@ stoker config unset timezone
 stoker config set timezone
 ```
 
-キーワードを入力して IANA タイムゾーン一覧を絞り込み、`↑`/`↓` で選択し、`Enter` で保存します。検索は大文字と小文字を区別せず、タイムゾーン名の一部にも一致します。`Backspace` で検索内容を編集し、`Esc`/`q` で設定を変更せずにキャンセルできます。タイムゾーンを直接指定する方法も引き続き利用できます。
-
 Stoker が `config.json` を作成または更新すると、タイムスタンプ付きの snapshot を次の場所に保存します。
 
 ```text
@@ -181,13 +179,13 @@ stoker config snapshot
 
 設定内容が変わっていない場合でも、このコマンドは新しい snapshot を作成します。
 
-対話型の復元画面で snapshot を選択できます。最新の snapshot が一番上に表示されます。矢印キーで選択し、`Enter` で読み取り専用の詳細を表示し、`Esc` または `q` で一覧に戻ります。復元するときは `Enter` の後に `y` を押して確認します。
+対話型の復元画面で snapshot を選択できます。
 
 ```bash
+# 最新の snapshot が一番上に表示されます。矢印キーで選択し、`Enter` で読み取り専用の詳細を表示し、`Esc` または `q` で一覧に戻り、`Enter` の後に `y` を押して復元を確認します。
+# 復元前に現在の設定が新しい snapshot として保存されます。
 stoker config restore
 ```
-
-復元前に現在の設定が新しい snapshot として保存されます。snapshot の時刻は、他の表示時刻と同じ表示タイムゾーンを使用します。
 
 1 回の表示コマンドだけ設定を上書きする場合は、`--timezone` または短い `--tz` を使用します。
 
@@ -196,15 +194,17 @@ stoker jobs --tz Asia/Tokyo
 stoker show <JOB_ID> --timezone UTC
 ```
 
-適用順序は CLI オプション、`config.json`、OS のタイムゾーンです。`stoker status` では現在有効なタイムゾーンと config ファイルの場所を確認できます。時刻を表示しないコマンドでは timezone オプションは無視されます。`stoker config restore` は snapshot の時刻表示にこのオプションを使用します。
+適用順序は CLI オプション、`config.json`、OS のタイムゾーンです。
 
 ## Queue のロックとエディター
 
-queue を編集する前に `stoker queue lock` を実行し、scheduler に処理を再開させる準備ができたら `stoker queue unlock` を実行します。ロックは永続的です。CLI の終了、scheduler の停止、scheduler の再起動後も有効です。ロック中、scheduler は別の `QUEUED` Job を claim しません。すでに `STARTING`、`RUNNING`、または `CANCELLING` の Job は停止せず、通常どおり完了できます。
+`stoker status` で queue の状態を確認できます。
 
-`stoker status` は常に `Queue: locked` または `Queue: unlocked` を表示します。ロック中は、scheduler が次の queued Job を開始しないことも表示します。Queue がロックされている間は、`stoker commit` と `stoker commit --all` が拒否されます。`stoker cancel` は引き続き使用でき、`stoker add` も `DRAFT` Job を作成するため使用できます。
+編集前に `stoker queue lock`、編集後に `stoker queue unlock` を実行します。
 
-`stoker queue edit` は queue がロックされている場合にのみ使用できます。空の queue でもロックは成功し、`Queue locked. No queued jobs to reorder.` と表示されます。空の queue を編集すると `No queued jobs to reorder.` と表示され、空のターミナル UI は開きません。エディターを終了しても queue のロックは解除されません。
+ロック中は `stoker commit` と `stoker commit --all` は使えませんが、`cancel` と `add` は使用できます。
+
+`stoker queue edit` はロック中のみ使用できます。
 
 エディターには実行順の `QUEUED` Job だけが表示されます。
 
@@ -216,8 +216,6 @@ queue を編集する前に `stoker queue lock` を実行し、scheduler に処�
 | Move | `↑` / `↓` | 選択した Job の位置を調整します。 |
 | Move | `Enter` | 移動を確定して Browse モードに戻ります。 |
 | Move | `q` | 現在の移動だけを元に戻して Browse モードに戻ります。 |
-
-編集中に別のターミナルが選択中の Job をキャンセルした場合、次の移動または取り消しでその Job が復元されることはありません。エディターは削除されたことを知らせ、queued の一覧を再読み込みします。別の queued Job がキャンセルされた場合、次の移動では現在の順序を使い、そのキャンセルを保持します。
 
 ## Job の状態とキャンセル
 

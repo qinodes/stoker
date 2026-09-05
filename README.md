@@ -165,8 +165,6 @@ If the timezone value is omitted, Stoker opens an interactive selector:
 stoker config set timezone
 ```
 
-Type a keyword to filter the IANA timezone list, use `↑`/`↓` to select, and press `Enter` to save. Search is case-insensitive and matches any part of the timezone name. Press `Backspace` to edit the search, or `Esc`/`q` to cancel without changing the configuration. Directly providing a timezone value remains supported.
-
 When Stoker creates or updates `config.json`, it keeps a timestamped snapshot under:
 
 ```text
@@ -181,13 +179,13 @@ stoker config snapshot
 
 This always creates a new snapshot, even when the configuration is unchanged.
 
-Use the interactive restore screen to choose a snapshot. The newest snapshot is shown first; use the arrow keys to select it, `Enter` to view its read-only details, `Esc` or `q` to return to the list, and `Enter` followed by `y` to confirm a restore:
+Use the interactive restore screen to choose a snapshot:
 
 ```bash
+# The newest snapshot is shown first; use the arrow keys to select it, `Enter` to view read-only details, `Esc` or `q` to return to the list, then press `Enter` followed by `y` to confirm a restore.
+# The current configuration is saved as a new snapshot before restoring.
 stoker config restore
 ```
-
-The current configuration is saved as a new snapshot before a restore. Snapshot times use the same display timezone as other displayed timestamps.
 
 Use `--timezone` or the shorter `--tz` to override the setting for one display command:
 
@@ -196,15 +194,17 @@ stoker jobs --tz Asia/Tokyo
 stoker show <JOB_ID> --timezone UTC
 ```
 
-Resolution order is the CLI option, `config.json`, then the operating system timezone. `stoker status` shows the effective timezone and the config file path. Commands that do not display timestamps ignore timezone options; `stoker config restore` uses the option for snapshot timestamps.
+Resolution order is the CLI option, `config.json`, then the operating system timezone.
 
 ## Queue lock and editor
 
-Use `stoker queue lock` before editing the queue and `stoker queue unlock` when you are ready to let the scheduler continue. The lock is durable: it remains after the CLI exits, the scheduler stops, or the scheduler restarts. While locked, the scheduler does not claim another `QUEUED` job. A job already `STARTING`, `RUNNING`, or `CANCELLING` is not stopped and can finish normally.
+You can check the queue status with `stoker status`.
 
-`stoker status` always shows `Queue: locked` or `Queue: unlocked`. When locked, it also reports that the scheduler will not start another queued job. A locked queue rejects `stoker commit` and `stoker commit --all`; `stoker cancel` remains available, and `stoker add` remains available because it creates a `DRAFT` job.
+Run `stoker queue lock` before editing and `stoker queue unlock` when you are done.
 
-`stoker queue edit` requires a locked queue. Locking an empty queue succeeds with `Queue locked. No queued jobs to reorder.` Editing an empty queue succeeds with `No queued jobs to reorder.` and does not open a blank editor. Leaving the editor never unlocks the queue.
+While locked, `stoker commit` and `stoker commit --all` are unavailable, but `cancel` and `add` remain available.
+
+`stoker queue edit` requires a locked queue.
 
 The editor shows only `QUEUED` jobs in execution order:
 
@@ -216,8 +216,6 @@ The editor shows only `QUEUED` jobs in execution order:
 | Move | `↑` / `↓` | Adjust the selected job's position. |
 | Move | `Enter` | Keep the move and return to browse mode. |
 | Move | `q` | Undo only the current move and return to browse mode. |
-
-If another terminal cancels the selected job while you are editing, the next move or undo will not restore it; the editor reports that it was removed and reloads the queued list. If a different queued job is cancelled, the editor uses the current order on the next move and preserves that cancellation.
 
 ## Job states and cancellation
 
