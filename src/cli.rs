@@ -1796,6 +1796,7 @@ mod update_tests {
         platform_binary_name, update_with_gateway,
     };
     use clap::{CommandFactory, Parser};
+    use semver::Version;
     use sha2::Digest;
     use std::cell::RefCell;
     use std::io::{Read, Write};
@@ -2032,14 +2033,27 @@ mod update_tests {
         server.join().unwrap();
     }
 
+    fn release_tag_with_patch_delta(delta: i64) -> String {
+        let mut version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        if delta < 0 {
+            version.patch -= delta.unsigned_abs();
+        } else {
+            version.patch += delta as u64;
+        }
+        format!("v{version}")
+    }
+
     #[test]
     fn mock_update_gateway_covers_release_decisions_without_external_side_effects() {
-        let mut gateway = FakeUpdateGateway::new("v1.2.1");
+        let older = release_tag_with_patch_delta(-1);
+        let current = release_tag_with_patch_delta(0);
+        let newer = release_tag_with_patch_delta(1);
+        let mut gateway = FakeUpdateGateway::new(&older);
         let error = update_with_gateway(true, &gateway).unwrap_err();
         assert!(error.to_string().contains("older than the installed"));
         assert_eq!(gateway.calls(), ["latest_release"]);
 
-        gateway = FakeUpdateGateway::new("v1.2.2");
+        gateway = FakeUpdateGateway::new(&current);
         update_with_gateway(true, &gateway).unwrap();
         assert_eq!(gateway.calls(), ["latest_release"]);
 
@@ -2051,7 +2065,7 @@ mod update_tests {
                 .contains("parse latest GitHub release version")
         );
 
-        gateway = FakeUpdateGateway::new("v1.2.3");
+        gateway = FakeUpdateGateway::new(&newer);
         gateway.confirmation = false;
         update_with_gateway(false, &gateway).unwrap();
         assert_eq!(
@@ -2062,7 +2076,8 @@ mod update_tests {
 
     #[test]
     fn mock_update_gateway_covers_update_side_effects_and_failures() {
-        let gateway = FakeUpdateGateway::new("v1.2.3");
+        let newer = release_tag_with_patch_delta(1);
+        let gateway = FakeUpdateGateway::new(&newer);
         update_with_gateway(true, &gateway).unwrap();
         assert_eq!(
             gateway.calls(),
@@ -2080,32 +2095,32 @@ mod update_tests {
             gateway.binary
         );
 
-        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        let mut gateway = FakeUpdateGateway::new(&newer);
         gateway.ensure_error = Some("scheduler is still running".into());
         let error = update_with_gateway(true, &gateway).unwrap_err();
         assert!(error.to_string().contains("scheduler is still running"));
 
-        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        let mut gateway = FakeUpdateGateway::new(&newer);
         gateway.current_executable_error = Some("executable unavailable".into());
         let error = update_with_gateway(true, &gateway).unwrap_err();
         assert!(error.to_string().contains("executable unavailable"));
 
-        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        let mut gateway = FakeUpdateGateway::new(&newer);
         gateway.download_error = Some("download failed".into());
         let error = update_with_gateway(true, &gateway).unwrap_err();
         assert!(error.to_string().contains("download failed"));
 
-        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        let mut gateway = FakeUpdateGateway::new(&newer);
         gateway.install_error = Some("replacement failed".into());
         let error = update_with_gateway(true, &gateway).unwrap_err();
         assert!(error.to_string().contains("replacement failed"));
 
-        let mut gateway = FakeUpdateGateway::new("v1.2.3");
+        let mut gateway = FakeUpdateGateway::new(&newer);
         gateway.latest_error = Some("GitHub unavailable".into());
         let error = update_with_gateway(true, &gateway).unwrap_err();
         assert!(error.to_string().contains("GitHub unavailable"));
 
-        let gateway = FakeUpdateGateway::new("v1.2.3");
+        let gateway = FakeUpdateGateway::new(&newer);
         assert!(gateway.download_bytes("mock://unexpected").is_err());
     }
 
@@ -2720,7 +2735,6 @@ mod pure_logic_tests {
                 state: JobState::Queued,
                 action: "move",
             }),
-            anyhow::Error::new(StaleQueueMoveError::new("stale queue snapshot".into())),
             anyhow::anyhow!("cannot move job {id} because it does not exist"),
         ] {
             assert!(is_stale_move_error(&error));

@@ -66,7 +66,7 @@ pub struct StaleQueueMoveError {
 }
 
 impl StaleQueueMoveError {
-    pub(crate) fn new(message: String) -> Self {
+    fn new(message: String) -> Self {
         Self { message }
     }
 }
