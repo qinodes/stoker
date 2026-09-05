@@ -335,7 +335,7 @@ async fn handle_client<S>(
                 let _ = send_response(
                     &mut framed,
                     &IpcResponse::Error {
-                        message: error.to_string(),
+                        message: format!("{error:#}"),
                     },
                 )
                 .await;
@@ -347,7 +347,7 @@ async fn handle_client<S>(
                 let _ = send_response(
                     &mut framed,
                     &IpcResponse::Error {
-                        message: error.to_string(),
+                        message: format!("{error:#}"),
                     },
                 )
                 .await;
@@ -359,7 +359,7 @@ async fn handle_client<S>(
             IpcRequest::Status => match scheduler.service_status() {
                 Ok(status) => IpcResponse::Status(status),
                 Err(error) => IpcResponse::Error {
-                    message: error.to_string(),
+                    message: format!("{error:#}"),
                 },
             },
             IpcRequest::Stop => {
@@ -372,48 +372,48 @@ async fn handle_client<S>(
                 match scheduler.stop_active().await {
                     Ok(()) => IpcResponse::Ack,
                     Err(error) => IpcResponse::Error {
-                        message: error.to_string(),
+                        message: format!("{error:#}"),
                     },
                 }
             }
             IpcRequest::Commit { id } => match scheduler.handle_commit(id, &wake_tx) {
                 Ok(_) => IpcResponse::Ack,
                 Err(error) => IpcResponse::Error {
-                    message: error.to_string(),
+                    message: format!("{error:#}"),
                 },
             },
             IpcRequest::CommitAll => match scheduler.handle_commit_all(&wake_tx) {
                 Ok(jobs) => IpcResponse::JobCount { count: jobs.len() },
                 Err(error) => IpcResponse::Error {
-                    message: error.to_string(),
+                    message: format!("{error:#}"),
                 },
             },
             IpcRequest::Cancel { id } => match scheduler.handle_cancel(id).await {
                 Ok(_) => IpcResponse::Ack,
                 Err(error) => IpcResponse::Error {
-                    message: error.to_string(),
+                    message: format!("{error:#}"),
                 },
             },
             IpcRequest::LockQueue => match scheduler.handle_lock_queue() {
                 Ok(()) => IpcResponse::Ack,
                 Err(error) => IpcResponse::Error {
-                    message: error.to_string(),
+                    message: format!("{error:#}"),
                 },
             },
             IpcRequest::UnlockQueue => match scheduler.handle_unlock_queue(&wake_tx) {
                 Ok(()) => IpcResponse::Ack,
                 Err(error) => IpcResponse::Error {
-                    message: error.to_string(),
+                    message: format!("{error:#}"),
                 },
             },
             IpcRequest::MoveQueued { id, target_order } => {
                 match scheduler.handle_move_queued(id, target_order) {
                     Ok(jobs) => IpcResponse::QueuedJobs { jobs },
                     Err(error) if is_stale_move_error(&error) => IpcResponse::StaleQueueMove {
-                        message: error.to_string(),
+                        message: format!("{error:#}"),
                     },
                     Err(error) => IpcResponse::Error {
-                        message: error.to_string(),
+                        message: format!("{error:#}"),
                     },
                 }
             }

@@ -363,13 +363,13 @@ async fn connect_with_retry(paths: &StokerPaths) -> std::io::Result<IpcStream> {
             match connect(paths).await {
                 Ok(client) => return Ok(client),
                 Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound
-                        && !service_lock_is_available(paths)
+                    if is_retryable_pipe_connect_error(paths, &error)
                         && tokio::time::Instant::now() < deadline =>
                 {
                     // The service creates a fresh named-pipe instance after
-                    // each client disconnects. Retry the brief gap before
-                    // reporting that the service is unavailable.
+                    // each client disconnects. Retry the brief gap, including
+                    // ERROR_PIPE_BUSY when another client is using the only
+                    // currently available instance.
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 Err(error) => return Err(error),
@@ -380,6 +380,15 @@ async fn connect_with_retry(paths: &StokerPaths) -> std::io::Result<IpcStream> {
     {
         connect(paths).await
     }
+}
+
+#[cfg(windows)]
+const ERROR_PIPE_BUSY: i32 = 231;
+
+#[cfg(windows)]
+fn is_retryable_pipe_connect_error(paths: &StokerPaths, error: &std::io::Error) -> bool {
+    (error.kind() == std::io::ErrorKind::NotFound && !service_lock_is_available(paths))
+        || error.raw_os_error() == Some(ERROR_PIPE_BUSY)
 }
 
 #[cfg(test)]
