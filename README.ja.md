@@ -56,6 +56,28 @@ cargo install stoker-engine
 
 ## クイックスタート
 
+### 基本的な流れ
+
+```bash
+# scheduler をバックグラウンドで起動
+stoker start
+
+# タスクの実行に必要なルートディレクトリで Job を登録
+stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
+
+# DRAFT の Job を queue に追加
+stoker commit <JOB_ID>
+
+# scheduler と Job の状態を確認
+stoker status
+```
+
+`stoker add` が Job を登録する手順で、最初は DRAFT として作成されます。出力された
+`JOB_ID` を使って `stoker commit` を実行すると、Job が queue に追加されます。Job は
+queue の順番に一つずつ実行されます。
+
+### コマンドリファレンス
+
 ```bash
 
 # scheduler をバックグラウンドで起動（Linux、macOS、Windows）

@@ -56,6 +56,28 @@ cargo install stoker-engine
 
 ## Quick start
 
+### Basic workflow
+
+```bash
+# Start the scheduler in the background
+stoker start
+
+# Submit a job from the root directory required for task execution
+stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
+
+# Add the DRAFT job to the queue
+stoker commit <JOB_ID>
+
+# Check the scheduler and job status
+stoker status
+```
+
+`stoker add` is the job submission step and creates a DRAFT job. Use the
+returned `JOB_ID` with `stoker commit` to add it to the queue. Jobs run one at
+a time in queue order.
+
+### Command reference
+
 ```bash
 
 # Start the scheduler in the background (Linux, macOS, and Windows)

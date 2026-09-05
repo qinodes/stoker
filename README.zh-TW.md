@@ -57,6 +57,27 @@ cargo install stoker-engine
 
 ## 快速開始
 
+### 基本流程
+
+```bash
+# 啟動背景 scheduler
+stoker start
+
+# 在任務執行需要的根目錄下，提交一個 Job
+stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
+
+# 將 DRAFT Job 加入 queue
+stoker commit <JOB_ID>
+
+# 查看 scheduler 與 Job 狀態
+stoker status
+```
+
+`stoker add` 就是提交 Job 的步驟，會先建立一個 DRAFT Job。使用指令輸出的
+`JOB_ID` 執行 `stoker commit`，即可將它加入 queue。Job 會依 queue 順序一次執行一個。
+
+### 指令參考
+
 ```bash
 
 # 啟動背景 scheduler（Linux、macOS 與 Windows 皆適用）
