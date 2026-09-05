@@ -27,7 +27,7 @@ lint:
 	cargo clippy --all-targets --all-features -- -D warnings
 
 test:
-	cargo test --all
+	cargo test --locked --all-targets
 
 cargo-check:
 	cargo check --all-targets --all-features

@@ -31,9 +31,10 @@ cargo publish --dry-run
 
 This runs formatting checks, compilation checks, Clippy, all tests, and a
 release build. The package commands verify the files that will be shipped and
-that publishing can proceed. Tests are run with one test thread to avoid
-Windows scheduler E2E tests competing for process and file resources. Do not
-continue if any check fails.
+that publishing can proceed. Tests use Cargo's default parallel execution so
+that concurrency and resource-competition issues can be detected. If you need
+to diagnose a test that is sensitive to shared resources, rerun it with
+`cargo test -- --test-threads=1`. Do not continue if any check fails.
 
 ## 2. Create the release commit and tag
 
