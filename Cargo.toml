@@ -1,6 +1,6 @@
 [package]
 name = "stoker-engine"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2024"
 description = "A lightweight, cross-platform CLI for running local jobs from the directory where they are submitted"
 license = "Apache-2.0"
