@@ -51,23 +51,19 @@ impl EditorState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn jobs(&self) -> &[Job] {
         &self.jobs
     }
 
+    #[cfg(test)]
     pub(crate) fn selected_index(&self) -> usize {
         self.selected
     }
 
+    #[cfg(test)]
     pub(crate) fn mode(&self) -> EditorMode {
         self.mode
-    }
-
-    pub(crate) fn mode_id(&self) -> Option<Uuid> {
-        match self.mode {
-            EditorMode::Browse => None,
-            EditorMode::Move { id, .. } => Some(id),
-        }
     }
 
     pub(crate) fn replace_jobs(&mut self, mut jobs: Vec<Job>) {
@@ -321,13 +317,12 @@ where
     cleanup.terminal().enter_alternate_screen()?;
     cleanup.terminal().hide_cursor()?;
 
-    let result = run_editor_loop(
+    run_editor_loop(
         cleanup.terminal(),
         initial_jobs,
         &mut move_job,
         &mut reload_jobs,
-    );
-    result
+    )
 }
 
 fn run_editor_loop<T, F, R, E>(
@@ -345,7 +340,7 @@ where
     let mut state = EditorState::new(initial_jobs);
     let mut notice = None;
     loop {
-        render(terminal, &state, notice.as_deref())?;
+        render(terminal, &state, notice)?;
         notice = None;
         if state.jobs.is_empty() {
             return Ok(());

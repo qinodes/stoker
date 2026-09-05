@@ -39,17 +39,21 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum CliCommand {
+    #[command(about = "Create a DRAFT job")]
     Add(AddArgs),
+    #[command(about = "Show a job's details")]
     Show {
+        #[arg(help = "Job ID")]
         id: Uuid,
     },
     #[command(about = "List submitted jobs and their job IDs")]
     Jobs {
-        #[arg(long)]
+        #[arg(long, help = "Filter by logical job owner")]
         user: Option<String>,
-        #[arg(long, value_parser = parse_job_state)]
+        #[arg(long, value_parser = parse_job_state, help = "Filter by job state")]
         state: Option<JobState>,
     },
+    #[command(about = "Manage Stoker user configuration")]
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -60,42 +64,59 @@ pub enum CliCommand {
     Update(ConfirmationArgs),
     #[command(about = "Uninstall stoker with confirmation")]
     Uninstall(ConfirmationArgs),
+    #[command(about = "Start the scheduler service")]
     Start,
     #[command(name = "service-run", hide = true)]
     ServiceRun,
+    #[command(about = "Show scheduler, queue, and timezone status")]
     Status,
+    #[command(about = "Lock, edit, or unlock the queue")]
     Queue {
         #[command(subcommand)]
         command: QueueCommand,
     },
+    #[command(about = "Stop the scheduler service")]
     Stop(ConfirmationArgs),
+    #[command(about = "Commit a DRAFT job to the queue")]
     Commit {
-        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        #[arg(
+            required_unless_present = "all",
+            conflicts_with = "all",
+            help = "Job ID"
+        )]
         id: Option<Uuid>,
-        #[arg(long)]
+        #[arg(long, help = "Commit all DRAFT jobs in creation order")]
         all: bool,
     },
+    #[command(about = "Pause all queued jobs")]
     Pause,
+    #[command(about = "Resume paused jobs")]
     Resume,
+    #[command(about = "Cancel a job")]
     Cancel(CancelArgs),
+    #[command(about = "Show a job's logs")]
     Logs {
+        #[arg(help = "Job ID")]
         id: Uuid,
-        #[arg(short = 'f', long)]
+        #[arg(short = 'f', long, help = "Follow new log output")]
         follow: bool,
     },
 }
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
+    #[command(about = "Set a configuration value")]
     Set {
         #[arg(value_enum)]
         key: ConfigKey,
         value: String,
     },
+    #[command(about = "Get a configuration value")]
     Get {
         #[arg(value_enum)]
         key: ConfigKey,
     },
+    #[command(about = "Clear a configuration value")]
     Unset {
         #[arg(value_enum)]
         key: ConfigKey,
@@ -109,16 +130,19 @@ pub enum ConfigKey {
 
 #[derive(Debug, Subcommand)]
 pub enum QueueCommand {
+    #[command(about = "Prevent the scheduler from claiming queued jobs")]
     Lock,
+    #[command(about = "Interactively reorder queued jobs")]
     Edit,
+    #[command(about = "Allow the scheduler to claim queued jobs")]
     Unlock,
 }
 
 #[derive(Debug, Args)]
 pub struct AddArgs {
-    #[arg(long)]
+    #[arg(long, help = "Logical job owner label")]
     pub user: String,
-    #[arg(long)]
+    #[arg(long, help = "Job name")]
     pub name: String,
     #[arg(
         long = "cmd",
@@ -1163,7 +1187,7 @@ mod tests {
 #[cfg(test)]
 mod update_tests {
     use super::{Cli, checksum_for, is_confirmation, platform_binary_name};
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn platform_binary_name_matches_release_assets() {
@@ -1242,6 +1266,24 @@ mod update_tests {
             .is_ok()
         );
         assert!(Cli::try_parse_from(["stoker", "status", "--tz", "not/a-zone"]).is_ok());
+    }
+
+    #[test]
+    fn top_level_help_describes_commands_and_timezone_option() {
+        let mut command = Cli::command();
+        let help = command.render_help().to_string();
+        for description in [
+            "add        Create a DRAFT job",
+            "config     Manage Stoker user configuration",
+            "status     Show scheduler, queue, and timezone status",
+            "queue      Lock, edit, or unlock the queue",
+            "      --timezone <TIMEZONE>  Timezone used when displaying timestamps [alias: --tz]",
+        ] {
+            assert!(
+                help.contains(description),
+                "missing help text: {description}"
+            );
+        }
     }
 }
 
