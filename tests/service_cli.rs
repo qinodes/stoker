@@ -170,6 +170,12 @@ fn single_commit_reports_the_queued_state() {
             "Committed job {id} (QUEUED)."
         )));
 
+    // The assertion above only waits for the commit acknowledgement. On
+    // slower platforms the short-lived job may still be starting when the
+    // cleanup stop request arrives, making the shutdown response exceed the
+    // IPC timeout. This test is about commit feedback, so wait for execution
+    // to finish before tearing down the service.
+    wait_for_state(&store, id, JobState::Succeeded);
     stoker_with_home(&home)
         .args(["stop", "--yes"])
         .assert()
