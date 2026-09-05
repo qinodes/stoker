@@ -396,6 +396,7 @@ mod tests {
     use super::*;
     use crate::domain::{Job, JobState};
     use std::path::PathBuf;
+    #[cfg(windows)]
     use std::time::{Duration, Instant};
 
     #[test]
