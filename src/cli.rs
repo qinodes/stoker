@@ -831,7 +831,10 @@ fn start() -> anyhow::Result<()> {
             }
         };
         match status {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                println!("Scheduler started.");
+                return Ok(());
+            }
             Err(error) if is_service_unavailable(&error) => {}
             Err(error) => {
                 terminate_child(&mut child);
@@ -1082,7 +1085,9 @@ fn stop(yes: bool) -> anyhow::Result<()> {
                 println!("Stop cancelled.");
                 return Ok(());
             }
-            runtime()?.block_on(client.stop())
+            runtime()?.block_on(client.stop())?;
+            println!("Scheduler stopped.");
+            Ok(())
         }
         Err(error) if is_service_unavailable(&error) => {
             println!("Scheduler is not running.");
@@ -1439,7 +1444,9 @@ fn cancel(id: Uuid, yes: bool) -> anyhow::Result<()> {
         println!("Cancel cancelled.");
         return Ok(());
     }
-    runtime()?.block_on(ServiceClient::new(paths).cancel(id))
+    runtime()?.block_on(ServiceClient::new(paths).cancel(id))?;
+    println!("Cancelled job {id}.");
+    Ok(())
 }
 
 fn logs(id: Uuid, follow: bool) -> anyhow::Result<()> {
@@ -1448,8 +1455,19 @@ fn logs(id: Uuid, follow: bool) -> anyhow::Result<()> {
         return runtime()?.block_on(ServiceClient::new(paths).follow_logs(id));
     }
     let store = Store::open(paths.database)?;
-    store.get_job(id)?;
+    let job = store.get_job(id)?;
     let run = paths.runs.join(id.to_string());
+    if !run.exists() {
+        match job.state {
+            JobState::Draft => anyhow::bail!(
+                "Job {id} is still DRAFT; run `stoker commit {id}` before viewing its logs."
+            ),
+            JobState::Queued => anyhow::bail!(
+                "Job {id} is QUEUED; logs will be available after the scheduler starts it."
+            ),
+            _ => anyhow::bail!("No logs are available for job {id} yet."),
+        }
+    }
     let stdout = std::fs::read(run.join("stdout.log"))
         .with_context(|| format!("read stdout log for job {id}"))?;
     let stderr = std::fs::read(run.join("stderr.log"))
@@ -1658,19 +1676,21 @@ fn parse_job_state(value: &str) -> Result<JobState, String> {
 }
 
 fn print_job(job: &Job, timezone: &ResolvedTimezone) {
-    let execution_cwd = &job.cwd;
-    let execution_cwd_status = match job.state {
+    let working_directory_status = match job.state {
         JobState::Draft | JobState::Queued => "planned",
         JobState::Starting | JobState::Running | JobState::Cancelling => "active",
         _ => "source directory retained",
     };
+    let command = job
+        .command_line
+        .clone()
+        .unwrap_or_else(|| format!("{:?}", job.command));
     println!("id: {}", job.id);
     println!("name: {}", job.name);
     println!("user: {}", job.user);
-    println!("cwd: {}", job.cwd.display());
-    println!("execution_cwd: {}", execution_cwd.display());
-    println!("execution_cwd_status: {execution_cwd_status}");
-    println!("command: {:?}", job.command);
+    println!("working_directory: {}", job.cwd.display());
+    println!("working_directory_status: {working_directory_status}");
+    println!("command: {command}");
     println!("state: {}", job.state);
     println!("display_timezone: {}", timezone.name);
     println!(

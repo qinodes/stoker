@@ -9,12 +9,19 @@
 
 [English](README.md) | [日本語](README.ja.md) | 繁體中文
 
-**stoker 是一個輕量、跨平台、用來執行本機工作的 CLI。**
-每個 Job 都會從你提交指令時所在的資料夾執行。
+**stoker 是一個輕量、跨平台、用來排程多項耗時工作的 CLI。**
+
+特別為了能依序穩定地執行多個耗時任務而設計。
+
+- 適合多人輪流共用、但想避免任務互相搶占資源的需求。
+
+- 支援多人同時下達排程任務。
+
+- 每個 Job 默認都會從你提交指令時(`stoker add`)所在的資料夾執行。
 
 ## 安裝
 
-### 未安裝cargo
+### 不使用 Cargo
 
 從 [GitHub Releases](https://github.com/qinodes/stoker/releases) 下載符合平台的壓縮檔，解壓縮 `stoker` 執行檔後加入 `PATH`：
 
@@ -42,7 +49,7 @@ source ~/.zshrc   # macOS
 
 每個 release 也會提供平台 binary 與 `SHA256SUMS`。
 
-### 已安裝cargo
+### 使用 Cargo
 
 ```bash
 cargo install stoker-engine
@@ -52,11 +59,11 @@ cargo install stoker-engine
 
 ```bash
 
-# 啟動背景 scheduler（Linux, Macos和 Windows 皆適用）
+# 啟動背景 scheduler（Linux、macOS 與 Windows 皆適用）
 stoker start
 
 # 在目標目錄建立 DRAFT Job
-stoker add --user <任意使用者名稱> --name <job名稱> --cmd <待執行指令>
+stoker add --user <任意使用者名稱> --name <job名稱> --cmd "<待執行指令>"
 # 例如: 
 # stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
@@ -76,7 +83,7 @@ stoker queue unlock
 
 # 查詢與管理
 
-# 查看 stoker server(scheduler) 狀態
+# 查看 scheduler 狀態
 stoker status
 
 # 查看所有Job狀態
@@ -127,6 +134,9 @@ stoker uninstall
 `--cmd` 後面的完整指令必須用引號包住。
 
 Job 會在背景執行，不具備互動式終端機。請使用非互動式指令與參數。
+
+指令會交由平台的 shell 執行：Linux／macOS 使用 `sh`，Windows 使用
+`cmd.exe`，因此 shell 語法與可用程式可能因平台不同。
 
 `--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證；
 

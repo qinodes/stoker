@@ -377,7 +377,12 @@ fn cancel_running_job_terminates_tree_then_starts_next_job() {
     let next = add_script(&repo, &output_command("next"), "next");
     start_service_and_commit(&[running, next]);
     wait_for_state(running, JobState::Running);
-    stoker_cancel(running).assert().success();
+    stoker_cancel(running)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Cancelled job {running}."
+        )));
     assert_terminal(running, JobState::Cancelled);
     let home = homes().lock().unwrap().get(&running).cloned().unwrap();
     let cancelled = Store::open(home.join("stoker.db"))

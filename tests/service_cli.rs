@@ -122,7 +122,11 @@ fn start_detaches_and_status_reports_running_service() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Scheduler: running"));
-    stoker_with_home(&home).args(["stop"]).assert().success();
+    stoker_with_home(&home)
+        .args(["stop"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Scheduler stopped."));
 }
 
 #[test]

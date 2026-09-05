@@ -454,6 +454,11 @@ where
         anyhow::bail!("scheduler is shutting down; log follow cancelled");
     }
     let job = scheduler.job_exists(id)?;
+    if job.state == crate::JobState::Draft {
+        anyhow::bail!(
+            "Job {id} is still DRAFT; run `stoker commit {id}` before following its logs."
+        );
+    }
     let (stdout, stderr) = scheduler.log_paths(id);
     let mut receiver = scheduler.log_receiver(id);
     // A commit response only acknowledges persistence. Give the scheduler a

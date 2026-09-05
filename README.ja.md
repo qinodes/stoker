@@ -9,8 +9,15 @@
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | 日本語
 
-**stoker は軽量でクロスプラットフォームな、ローカルジョブ実行用 CLI です。**
-各 Job は、コマンドを登録したディレクトリから実行されます。
+**stoker は、複数の時間のかかる仕事をスケジュールするための、軽量でクロスプラットフォームな CLI です。**
+
+複数の時間のかかるタスクを、順番に安定して実行するために設計されています。
+
+- 複数人で共有しながら、タスク同士のリソース競合を避けたい場合に適しています。
+
+- 複数のユーザーが同時にスケジュールタスクを登録できます。
+
+- 各 Job はデフォルトで、コマンドを登録したディレクトリ（`stoker add` を実行した場所）から実行されます。
 
 ## インストール
 
@@ -55,7 +62,7 @@ cargo install stoker-engine
 stoker start
 
 # 対象ディレクトリで DRAFT Job を作成
-stoker add --user <任意のユーザー名> --name <Job 名> --cmd <実行するコマンド>
+stoker add --user <任意のユーザー名> --name <Job 名> --cmd "<実行するコマンド>"
 # 例:
 # stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
@@ -127,6 +134,10 @@ stoker uninstall
 `--cmd` の後ろの完全なコマンドは、引用符で囲む必要があります。
 
 Job は対話型 terminal のないバックグラウンドで実行されます。対話なしで実行できるコマンドとオプションを使用してください。
+
+コマンドはプラットフォームの shell（Linux／macOS は `sh`、Windows は
+`cmd.exe`）で実行されるため、shell 構文や利用できるプログラムはプラットフォーム
+によって異なる場合があります。
 
 `--user` は stoker の論理的な owner ラベルであり、OS アカウントや認証機能ではありません。
 

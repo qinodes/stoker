@@ -9,8 +9,15 @@
 
 [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | English
 
-**stoker is a lightweight, cross-platform CLI for running local jobs.**
-Jobs run from the directory where you submit them.
+**stoker is a lightweight, cross-platform CLI for scheduling multiple time-consuming jobs.**
+
+Designed specifically to run multiple time-consuming tasks sequentially and reliably.
+
+- Suitable for shared use by multiple people who want to avoid tasks competing for resources.
+
+- Supports multiple users submitting scheduled jobs at the same time.
+
+- Each Job runs by default from the directory where you submit the command (`stoker add`).
 
 ## Installation
 
@@ -55,7 +62,7 @@ cargo install stoker-engine
 stoker start
 
 # Create a DRAFT job in the target directory
-stoker add --user <USER_NAME> --name <JOB_NAME> --cmd <COMMAND>
+stoker add --user <USER_NAME> --name <JOB_NAME> --cmd "<COMMAND>"
 # Example:
 # stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
@@ -127,6 +134,10 @@ stoker uninstall
 The command after `--cmd` must be enclosed in quotes as one complete command string.
 
 Jobs run in the background without an interactive terminal. Use non-interactive commands and flags.
+
+The command is executed by the platform shell (`sh` on Linux/macOS and
+`cmd.exe` on Windows), so shell syntax and available programs can differ by
+platform.
 
 `--user` is a logical owner label, not an operating-system account or an authentication mechanism.
 

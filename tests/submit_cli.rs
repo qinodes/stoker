@@ -115,7 +115,7 @@ fn add_parses_shell_command_for_show_but_preserves_raw_command() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "command: [\"python\", \"--version\", \"&&\", \"timeout\", \"/t\", \"30\"]",
+            "command: python --version && timeout /t 30",
         ));
 
     let home = repo.path().parent().unwrap().join(format!(
@@ -425,7 +425,7 @@ fn jobs_state_filter_shows_queue_order() {
 }
 
 #[test]
-fn show_displays_recorded_and_execution_directories() {
+fn show_displays_the_working_directory_and_command() {
     let repo = TestRepo::new();
     stoker_in(&repo.join("experiments/llama"))
         .args([
@@ -452,10 +452,43 @@ fn show_displays_recorded_and_execution_directories() {
         .args(["show", &job.id.to_string()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("cwd:"))
-        .stdout(predicate::str::contains("execution_cwd:"))
-        .stdout(predicate::str::contains("execution_cwd_status: planned"))
-        .stdout(predicate::str::contains("command: [\"echo\", \"ok\"]"));
+        .stdout(predicate::str::contains("working_directory:"))
+        .stdout(predicate::str::contains(
+            "working_directory_status: planned",
+        ))
+        .stdout(predicate::str::contains("command: echo ok"))
+        .stdout(predicate::str::contains("execution_cwd:").not());
+}
+
+#[test]
+fn logs_for_a_draft_job_explain_how_to_make_logs_available() {
+    let repo = TestRepo::new();
+    let output = stoker_in(repo.path())
+        .args([
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "waiting-logs",
+            "--cmd",
+            "echo ok",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let id = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .to_owned();
+
+    stoker_in(repo.path())
+        .args(["logs", &id])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!(
+            "Job {id} is still DRAFT; run `stoker commit {id}` before viewing its logs."
+        )));
 }
 
 #[test]
