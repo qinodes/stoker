@@ -1,4 +1,4 @@
-.PHONY: format format-check lint test cargo-check build stop-test-process check version tag release publish
+.PHONY: format format-check lint test cargo-check coverage coverage-install build stop-test-process check version tag release publish
 
 VERSION ?=
 TAG = v$(VERSION)
@@ -24,6 +24,14 @@ test:
 
 cargo-check:
 	cargo check --all-targets --all-features
+
+coverage:
+	cargo llvm-cov --locked --all-features --workspace --html
+	@echo "Coverage report: $(CURDIR)/target/llvm-cov/html/index.html"
+
+coverage-install:
+	rustup component add llvm-tools-preview --toolchain stable
+	cargo +stable install cargo-llvm-cov --locked
 
 build:
 	cargo build --release

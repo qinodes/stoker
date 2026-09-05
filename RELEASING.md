@@ -98,3 +98,20 @@ make release VERSION=1.2.1
 # Wait for the Release workflow to pass on GitHub.
 make publish
 ```
+
+## Local coverage
+
+Install the coverage tool once:
+
+```bash
+make coverage-install
+```
+
+Run coverage locally without pushing a branch:
+
+```bash
+make coverage
+```
+
+The command runs the tests and generates an HTML report at
+`target/llvm-cov/html/index.html`.
