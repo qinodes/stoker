@@ -89,6 +89,7 @@ cannot be published again with different contents.
 ## Complete example
 
 ```bash
+make version VERSION=1.2.1
 make check
 git push origin main
 # Wait for CI to pass on GitHub.
