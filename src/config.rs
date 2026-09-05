@@ -1,8 +1,45 @@
 use std::env;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
+
+use anyhow::Context;
+use chrono::{DateTime, SecondsFormat, Utc};
+use chrono_tz::Tz;
+use serde::{Deserialize, Serialize};
 
 #[cfg(windows)]
 use std::ffi::{OsStr, OsString};
+
+const CONFIG_FILE_NAME: &str = "config.json";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StokerConfig {
+    #[serde(default)]
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimezoneSource {
+    Cli,
+    Config,
+    System,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedTimezone {
+    pub name: String,
+    pub source: TimezoneSource,
+    timezone: Tz,
+}
+
+impl ResolvedTimezone {
+    pub fn format(&self, value: DateTime<Utc>) -> String {
+        value
+            .with_timezone(&self.timezone)
+            .to_rfc3339_opts(SecondsFormat::Millis, false)
+    }
+}
 
 /// Paths used by one Stoker installation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +71,55 @@ impl StokerPaths {
     pub fn ensure(&self) -> anyhow::Result<()> {
         std::fs::create_dir_all(&self.root)?;
         std::fs::create_dir_all(&self.runs)?;
+        self.initialize_config()?;
+        Ok(())
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.root.join(CONFIG_FILE_NAME)
+    }
+
+    pub fn read_config(&self) -> anyhow::Result<StokerConfig> {
+        let path = self.config_path();
+        if !path.exists() {
+            return Ok(StokerConfig::default());
+        }
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("read Stoker config {}", path.display()))?;
+        serde_json::from_str(&contents)
+            .with_context(|| format!("parse Stoker config {}", path.display()))
+    }
+
+    pub fn write_config(&self, config: &StokerConfig) -> anyhow::Result<()> {
+        let path = self.config_path();
+        let contents = serde_json::to_string_pretty(config)? + "\n";
+        fs::write(&path, contents)
+            .with_context(|| format!("write Stoker config {}", path.display()))?;
+        Ok(())
+    }
+
+    fn initialize_config(&self) -> anyhow::Result<()> {
+        let path = self.config_path();
+        if path.exists() {
+            return Ok(());
+        }
+
+        let Ok(timezone) = system_timezone_name() else {
+            return Ok(());
+        };
+        let contents = serde_json::to_string_pretty(&StokerConfig {
+            timezone: Some(timezone),
+        })? + "\n";
+        let mut file = match OpenOptions::new().create_new(true).write(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("create Stoker config {}", path.display()));
+            }
+        };
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("initialize Stoker config {}", path.display()))?;
         Ok(())
     }
 
@@ -55,6 +141,33 @@ impl StokerPaths {
     pub fn service_log(&self) -> std::path::PathBuf {
         self.root.join("service.log")
     }
+}
+
+pub fn system_timezone_name() -> anyhow::Result<String> {
+    iana_time_zone::get_timezone().context("detect operating system timezone")
+}
+
+pub fn resolve_timezone(
+    paths: &StokerPaths,
+    cli_timezone: Option<&str>,
+) -> anyhow::Result<ResolvedTimezone> {
+    let (name, source) = if let Some(value) = cli_timezone {
+        (value.to_owned(), TimezoneSource::Cli)
+    } else if let Some(value) = paths.read_config()?.timezone {
+        (value, TimezoneSource::Config)
+    } else {
+        (system_timezone_name()?, TimezoneSource::System)
+    };
+    let timezone = name.parse::<Tz>().map_err(|_| {
+        anyhow::anyhow!(
+            "unknown timezone {name:?}; use an IANA timezone such as Asia/Taipei or UTC"
+        )
+    })?;
+    Ok(ResolvedTimezone {
+        name,
+        source,
+        timezone,
+    })
 }
 
 /// Keep Windows paths usable as process working directories. The filesystem
@@ -144,5 +257,60 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, Path::new(r"C:\Users\name"));
+    }
+}
+
+#[cfg(test)]
+mod timezone_tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn paths(root: &std::path::Path) -> StokerPaths {
+        StokerPaths {
+            root: root.to_path_buf(),
+            database: root.join("stoker.db"),
+            runs: root.join("runs"),
+            lock: root.join("stoker.lock"),
+            endpoint: root.join("stoker.sock"),
+        }
+    }
+
+    #[test]
+    fn config_initialization_uses_system_timezone_and_preserves_existing_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        paths.ensure().unwrap();
+
+        let initial = paths.read_config().unwrap();
+        assert!(initial.timezone.is_some());
+
+        let configured = StokerConfig {
+            timezone: Some("Asia/Tokyo".into()),
+        };
+        paths.write_config(&configured).unwrap();
+        paths.ensure().unwrap();
+        assert_eq!(paths.read_config().unwrap(), configured);
+    }
+
+    #[test]
+    fn timezone_resolution_prefers_cli_over_config_and_formats_with_offset() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        paths.ensure().unwrap();
+        paths
+            .write_config(&StokerConfig {
+                timezone: Some("Asia/Taipei".into()),
+            })
+            .unwrap();
+
+        let from_config = resolve_timezone(&paths, None).unwrap();
+        assert_eq!(from_config.name, "Asia/Taipei");
+        assert_eq!(from_config.source, TimezoneSource::Config);
+
+        let from_cli = resolve_timezone(&paths, Some("Asia/Tokyo")).unwrap();
+        assert_eq!(from_cli.name, "Asia/Tokyo");
+        assert_eq!(from_cli.source, TimezoneSource::Cli);
+        let instant = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        assert_eq!(from_cli.format(instant), "2026-01-01T09:00:00.000+09:00");
     }
 }

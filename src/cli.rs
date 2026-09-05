@@ -5,14 +5,14 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use anyhow::Context;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use semver::Version;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use crate::config::normalize_path;
+use crate::config::{ResolvedTimezone, TimezoneSource, normalize_path, resolve_timezone};
 use crate::domain::{Job, JobState, NewJob};
 use crate::ipc::StaleQueueMoveError;
 use crate::queue_editor::{self, EditorMoveError};
@@ -26,6 +26,13 @@ use crate::{ServiceClient, StokerPaths, Store, StoreError, is_service_unavailabl
     version = env!("CARGO_PKG_VERSION")
 )]
 pub struct Cli {
+    #[arg(
+        long = "timezone",
+        visible_alias = "tz",
+        global = true,
+        help = "Timezone used when displaying timestamps"
+    )]
+    pub timezone: Option<String>,
     #[command(subcommand)]
     pub command: CliCommand,
 }
@@ -42,6 +49,10 @@ pub enum CliCommand {
         user: Option<String>,
         #[arg(long, value_parser = parse_job_state)]
         state: Option<JobState>,
+    },
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
     },
     #[command(about = "Remove terminal job records and logs")]
     Clean,
@@ -72,6 +83,28 @@ pub enum CliCommand {
         #[arg(short = 'f', long)]
         follow: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    Set {
+        #[arg(value_enum)]
+        key: ConfigKey,
+        value: String,
+    },
+    Get {
+        #[arg(value_enum)]
+        key: ConfigKey,
+    },
+    Unset {
+        #[arg(value_enum)]
+        key: ConfigKey,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ConfigKey {
+    Timezone,
 }
 
 #[derive(Debug, Subcommand)]
@@ -111,14 +144,21 @@ pub struct CancelArgs {
 
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    run_command(cli.command)
+    let paths = StokerPaths::from_env()?;
+    paths.ensure()?;
+    run_command_with_timezone(cli.command, cli.timezone)
 }
 
 pub fn run_command(command: CliCommand) -> anyhow::Result<()> {
+    run_command_with_timezone(command, None)
+}
+
+fn run_command_with_timezone(command: CliCommand, timezone: Option<String>) -> anyhow::Result<()> {
     match command {
         CliCommand::Add(args) => add(args),
-        CliCommand::Show { id } => show(id),
-        CliCommand::Jobs { user, state } => jobs(user.as_deref(), state),
+        CliCommand::Show { id } => show(id, timezone.as_deref()),
+        CliCommand::Jobs { user, state } => jobs(user.as_deref(), state, timezone.as_deref()),
+        CliCommand::Config { command } => config(command),
         CliCommand::Clean => clean(),
         CliCommand::Update(args) => update(args.yes),
         CliCommand::Uninstall(args) => uninstall(args.yes),
@@ -149,6 +189,36 @@ fn open_paths() -> anyhow::Result<StokerPaths> {
     let paths = StokerPaths::from_env()?;
     paths.ensure()?;
     Ok(paths)
+}
+
+fn config(command: ConfigCommand) -> anyhow::Result<()> {
+    let paths = open_paths()?;
+    let mut current = paths.read_config()?;
+    match command {
+        ConfigCommand::Set {
+            key: ConfigKey::Timezone,
+            value,
+        } => {
+            resolve_timezone(&paths, Some(&value))?;
+            current.timezone = Some(value.clone());
+            paths.write_config(&current)?;
+            println!("Set timezone to {value}.");
+        }
+        ConfigCommand::Get {
+            key: ConfigKey::Timezone,
+        } => match current.timezone {
+            Some(value) => println!("timezone: {value}"),
+            None => println!("timezone: <using operating system timezone>"),
+        },
+        ConfigCommand::Unset {
+            key: ConfigKey::Timezone,
+        } => {
+            current.timezone = None;
+            paths.write_config(&current)?;
+            println!("Unset timezone; using operating system timezone.");
+        }
+    }
+    Ok(())
 }
 
 fn runtime() -> anyhow::Result<Runtime> {
@@ -231,6 +301,8 @@ fn service_run() -> anyhow::Result<()> {
 
 fn status() -> anyhow::Result<()> {
     let paths = open_paths()?;
+    let timezone = resolve_timezone(&paths, None)?;
+    print_timezone_status(&paths, &timezone);
     match runtime()?.block_on(ServiceClient::new(paths.clone()).status()) {
         Ok(service) => {
             println!("Scheduler: running");
@@ -259,6 +331,15 @@ fn status() -> anyhow::Result<()> {
         Err(error) => return Err(error),
     }
     Ok(())
+}
+
+fn print_timezone_status(paths: &StokerPaths, timezone: &ResolvedTimezone) {
+    println!("Display timezone: {}", timezone.name);
+    if timezone.source == TimezoneSource::Config || paths.config_path().exists() {
+        println!("Timezone config: {}", paths.config_path().display());
+    } else {
+        println!("Timezone config: using operating system timezone");
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -922,15 +1003,22 @@ fn parse_command_line(input: &str) -> anyhow::Result<Vec<String>> {
     Ok(tokens)
 }
 
-fn show(id: Uuid) -> anyhow::Result<()> {
+fn show(id: Uuid, cli_timezone: Option<&str>) -> anyhow::Result<()> {
     let paths = open_paths()?;
+    let timezone = resolve_timezone(&paths, cli_timezone)?;
     let job = Store::open(&paths.database)?.get_job(id)?;
-    print_job(&job);
+    print_job(&job, &timezone);
     Ok(())
 }
 
-fn jobs(owner: Option<&str>, state: Option<JobState>) -> anyhow::Result<()> {
-    let rows: Vec<_> = open_store()?
+fn jobs(
+    owner: Option<&str>,
+    state: Option<JobState>,
+    cli_timezone: Option<&str>,
+) -> anyhow::Result<()> {
+    let paths = open_paths()?;
+    let timezone = resolve_timezone(&paths, cli_timezone)?;
+    let rows: Vec<_> = Store::open(&paths.database)?
         .list_jobs_with_state(owner, state)?
         .into_iter()
         .map(|job| {
@@ -942,14 +1030,22 @@ fn jobs(owner: Option<&str>, state: Option<JobState>) -> anyhow::Result<()> {
                 job.user,
                 job.name,
                 job.state.to_string(),
+                timezone.format(job.created_at),
                 job.committed_at
-                    .or(Some(job.created_at))
-                    .map(|time| time.to_rfc3339())
-                    .unwrap_or_default(),
+                    .map(|time| timezone.format(time))
+                    .unwrap_or_else(|| "-".into()),
             ]
         })
         .collect();
-    let headers = ["queue_order", "job_id", "owner", "name", "state", "time"];
+    let headers = [
+        "queue_order",
+        "job_id",
+        "owner",
+        "name",
+        "state",
+        "created_at",
+        "committed_at",
+    ];
     let mut widths = headers.map(str::len);
     for row in &rows {
         for (index, value) in row.iter().enumerate() {
@@ -961,7 +1057,9 @@ fn jobs(owner: Option<&str>, state: Option<JobState>) -> anyhow::Result<()> {
         println!(
             "{}",
             format_jobs_row(
-                [&row[0], &row[1], &row[2], &row[3], &row[4], &row[5]],
+                [
+                    &row[0], &row[1], &row[2], &row[3], &row[4], &row[5], &row[6],
+                ],
                 &widths,
             )
         );
@@ -983,7 +1081,7 @@ fn clean() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn format_jobs_row(columns: [&str; 6], widths: &[usize; 6]) -> String {
+fn format_jobs_row(columns: [&str; 7], widths: &[usize; 7]) -> String {
     columns
         .into_iter()
         .zip(widths)
@@ -996,7 +1094,7 @@ fn parse_job_state(value: &str) -> Result<JobState, String> {
     value.to_ascii_uppercase().parse()
 }
 
-fn print_job(job: &Job) {
+fn print_job(job: &Job, timezone: &ResolvedTimezone) {
     let execution_cwd = &job.cwd;
     let execution_cwd_status = match job.state {
         JobState::Draft | JobState::Queued | JobState::Paused => "planned",
@@ -1011,33 +1109,37 @@ fn print_job(job: &Job) {
     println!("execution_cwd_status: {execution_cwd_status}");
     println!("command: {:?}", job.command);
     println!("state: {}", job.state);
+    println!("display_timezone: {}", timezone.name);
     println!(
         "queue_order: {}",
         job.queue_order
             .map(|order| order.to_string())
             .unwrap_or_else(|| "-".into())
     );
-    println!("created_at: {}", job.created_at.to_rfc3339());
+    println!("created_at: {}", timezone.format(job.created_at));
     println!(
         "committed_at: {}",
-        format_optional_time(job.committed_at.as_ref())
+        format_optional_time(job.committed_at.as_ref(), timezone)
     );
     println!(
         "started_at: {}",
-        format_optional_time(job.started_at.as_ref())
+        format_optional_time(job.started_at.as_ref(), timezone)
     );
     println!(
         "finished_at: {}",
-        format_optional_time(job.finished_at.as_ref())
+        format_optional_time(job.finished_at.as_ref(), timezone)
     );
     println!("exit_code: {:?}", job.exit_code);
     println!("pid: {:?}", job.pid);
     println!("failure_detail: {:?}", job.failure_detail);
 }
 
-fn format_optional_time(value: Option<&chrono::DateTime<chrono::Utc>>) -> String {
+fn format_optional_time(
+    value: Option<&chrono::DateTime<chrono::Utc>>,
+    timezone: &ResolvedTimezone,
+) -> String {
     value
-        .map(chrono::DateTime::to_rfc3339)
+        .map(|value| timezone.format(*value))
         .unwrap_or_else(|| "-".into())
 }
 
@@ -1124,6 +1226,22 @@ mod update_tests {
         ] {
             assert!(Cli::try_parse_from(args).is_ok());
         }
+    }
+
+    #[test]
+    fn timezone_aliases_are_accepted_for_all_commands() {
+        assert!(Cli::try_parse_from(["stoker", "jobs", "--timezone", "Asia/Tokyo"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "stoker",
+                "show",
+                "00000000-0000-0000-0000-000000000001",
+                "--tz",
+                "UTC"
+            ])
+            .is_ok()
+        );
+        assert!(Cli::try_parse_from(["stoker", "status", "--tz", "not/a-zone"]).is_ok());
     }
 }
 

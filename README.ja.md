@@ -134,6 +134,41 @@ Job は対話型 terminal のないバックグラウンドで実行されます
 
 `--user` は stoker の論理的な owner ラベルであり、OS アカウントや認証機能ではありません。
 
+## タイムゾーン設定
+
+SQLite 内の時刻は常に UTC で保存されます。`stoker jobs` と `stoker show` では、表示時だけ設定されたタイムゾーンへ変換し、RFC3339 の offset も保持します。
+
+Stoker のデータフォルダーを初めて初期化すると、OS の IANA タイムゾーンを検出して次のファイルに保存します。
+
+```text
+~/.stoker/config.json
+```
+
+設定例：
+
+```json
+{
+  "timezone": "Asia/Taipei"
+}
+```
+
+タイムゾーンの設定、確認、解除：
+
+```bash
+stoker config set timezone Asia/Taipei
+stoker config get timezone
+stoker config unset timezone
+```
+
+1 回の表示コマンドだけ設定を上書きする場合は、`--timezone` または短い `--tz` を使用します。
+
+```bash
+stoker jobs --tz Asia/Tokyo
+stoker show <JOB_ID> --timezone UTC
+```
+
+適用順序は CLI オプション、`config.json`、OS のタイムゾーンです。`stoker status` では現在有効なタイムゾーンと config ファイルの場所を確認できます。時刻を表示しないコマンドでは timezone オプションは無視されます。
+
 ## Queue のロックとエディター
 
 queue を編集する前に `stoker queue lock` を実行し、scheduler に処理を再開させる準備ができたら `stoker queue unlock` を実行します。ロックは永続的です。CLI の終了、scheduler の停止、scheduler の再起動後も有効です。ロック中、scheduler は別の `QUEUED` Job を claim しません。すでに `STARTING`、`RUNNING`、または `CANCELLING` の Job は停止せず、通常どおり完了できます。

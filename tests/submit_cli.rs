@@ -130,6 +130,52 @@ fn add_parses_shell_command_for_show_but_preserves_raw_command() {
 }
 
 #[test]
+fn timezone_config_and_cli_override_are_reflected_in_display_output() {
+    let repo = TestRepo::new();
+    stoker_in(repo.path())
+        .args(["config", "set", "timezone", "Asia/Tokyo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Set timezone to Asia/Tokyo."));
+
+    let output = stoker_in(repo.path())
+        .args([
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "timezone-job",
+            "--cmd",
+            "echo ok",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let id = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .to_owned();
+
+    stoker_in(repo.path())
+        .args(["show", &id, "--tz", "Asia/Taipei"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("display_timezone: Asia/Taipei"))
+        .stdout(predicate::str::contains("created_at:").and(predicate::str::contains("+08:00")));
+
+    stoker_in(repo.path())
+        .args(["status", "--tz", "not/a-zone"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Display timezone: Asia/Tokyo"))
+        .stdout(
+            predicate::str::contains("Timezone config: ")
+                .and(predicate::str::contains("config.json")),
+        );
+}
+
+#[test]
 fn add_requires_user() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
@@ -321,7 +367,7 @@ fn jobs_empty_still_prints_header() {
         .assert()
         .success()
         .stdout(predicate::eq(
-            "queue_order  job_id  owner  name  state  time\n",
+            "queue_order  job_id  owner  name  state  created_at  committed_at\n",
         ));
 }
 

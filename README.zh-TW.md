@@ -134,6 +134,41 @@ Job 會在背景執行，不具備互動式終端機。請使用非互動式指�
 
 `--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證；
 
+## 時區設定
+
+SQLite 內的時間一律以 UTC 保存；`stoker jobs` 與 `stoker show` 顯示時，才依照顯示時區轉換，並保留 RFC3339 offset。
+
+首次初始化 Stoker 資料夾時，會偵測作業系統的 IANA 時區並寫入：
+
+```text
+~/.stoker/config.json
+```
+
+設定內容例如：
+
+```json
+{
+  "timezone": "Asia/Taipei"
+}
+```
+
+設定或查詢時區：
+
+```bash
+stoker config set timezone Asia/Taipei
+stoker config get timezone
+stoker config unset timezone
+```
+
+單次指令可以用 `--timezone` 或較短的 `--tz` 覆寫設定：
+
+```bash
+stoker jobs --tz Asia/Tokyo
+stoker show <JOB_ID> --timezone UTC
+```
+
+解析優先順序為 CLI 參數、`config.json`、作業系統時區。`stoker status` 會顯示目前採用的時區與 config 檔案位置。沒有顯示時間的指令會忽略 timezone 參數。
+
 ## Queue 鎖定與編輯器
 
 編輯 queue 前先執行 `stoker queue lock`，準備讓 scheduler 繼續接收工作時再執行 `stoker queue unlock`。鎖定狀態會持久保存：CLI 結束、scheduler 停止或重新啟動後仍然有效。鎖定時 scheduler 不會再 claim 其他 `QUEUED` Job。已經處於 `STARTING`、`RUNNING` 或 `CANCELLING` 的 Job 不會被停止，仍可正常完成。

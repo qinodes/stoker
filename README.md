@@ -134,6 +134,41 @@ Jobs run in the background without an interactive terminal. Use non-interactive 
 
 `--user` is a logical owner label, not an operating-system account or an authentication mechanism.
 
+## Timezone configuration
+
+Timestamps are always stored as UTC in SQLite. `stoker jobs` and `stoker show` convert them only when displaying them, while preserving the RFC3339 offset.
+
+When the Stoker data folder is initialized, Stoker detects the operating system's IANA timezone and writes it to:
+
+```text
+~/.stoker/config.json
+```
+
+For example:
+
+```json
+{
+  "timezone": "Asia/Taipei"
+}
+```
+
+Set, inspect, or clear the configured timezone with:
+
+```bash
+stoker config set timezone Asia/Taipei
+stoker config get timezone
+stoker config unset timezone
+```
+
+Use `--timezone` or the shorter `--tz` to override the setting for one display command:
+
+```bash
+stoker jobs --tz Asia/Tokyo
+stoker show <JOB_ID> --timezone UTC
+```
+
+Resolution order is the CLI option, `config.json`, then the operating system timezone. `stoker status` shows the effective timezone and the config file path. Commands that do not display timestamps ignore timezone options.
+
 ## Queue lock and editor
 
 Use `stoker queue lock` before editing the queue and `stoker queue unlock` when you are ready to let the scheduler continue. The lock is durable: it remains after the CLI exits, the scheduler stops, or the scheduler restarts. While locked, the scheduler does not claim another `QUEUED` job. A job already `STARTING`, `RUNNING`, or `CANCELLING` is not stopped and can finish normally.
