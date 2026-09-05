@@ -72,9 +72,12 @@ stoker commit <JOB_ID>
 stoker status
 ```
 
-`stoker add` が Job を登録する手順で、最初は DRAFT として作成されます。出力された
-`JOB_ID` を使って `stoker commit` を実行すると、Job が queue に追加されます。Job は
+`stoker add` が Job を提出する手順で、最初に DRAFT Job を作成します。
+
+コマンドが出力した`JOB_ID` を使って `stoker commit` を実行すると、Job を queue に追加できます。Job は
 queue の順番に一つずつ実行されます。
+
+`--user` は stoker の論理的な owner ラベルであり、OS アカウントや認証機能ではありません。
 
 ### コマンドリファレンス
 
@@ -161,7 +164,15 @@ Job は対話型 terminal のないバックグラウンドで実行されます
 `cmd.exe`）で実行されるため、shell 構文や利用できるプログラムはプラットフォーム
 によって異なる場合があります。
 
-`--user` は stoker の論理的な owner ラベルであり、OS アカウントや認証機能ではありません。
+## Docker で Job を実行する場合
+
+Job を Docker container で実行し、Stoker に container の終了を待ってから次の Job を実行させるには、foreground モードを使用します。
+
+```bash
+docker run <IMAGE> <COMMAND>
+```
+
+この場合は `docker run -d` を使用しないでください。detach モードでは container の起動直後にコマンドが終了するため、Stoker は完了したと判断し、次の queued Job を開始する場合があります。
 
 ## タイムゾーン設定
 

@@ -73,8 +73,11 @@ stoker commit <JOB_ID>
 stoker status
 ```
 
-`stoker add` 就是提交 Job 的步驟，會先建立一個 DRAFT Job。使用指令輸出的
-`JOB_ID` 執行 `stoker commit`，即可將它加入 queue。Job 會依 queue 順序一次執行一個。
+`stoker add` 就是提交 Job 的步驟，會先建立一個 DRAFT Job。
+
+使用指令輸出的`JOB_ID` 執行 `stoker commit`，即可將它加入 queue。Job 會依 queue 順序一次執行一個。
+
+`--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證。
 
 ### 指令參考
 
@@ -159,7 +162,15 @@ Job 會在背景執行，不具備互動式終端機。請使用非互動式指�
 指令會交由平台的 shell 執行：Linux／macOS 使用 `sh`，Windows 使用
 `cmd.exe`，因此 shell 語法與可用程式可能因平台不同。
 
-`--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證；
+## 使用 Docker 執行任務
+
+如果任務是在 Docker container 中執行，且希望 Stoker 等待 container 結束後才執行下一個 Job，請使用前景模式：
+
+```bash
+docker run <IMAGE> <COMMAND>
+```
+
+此時不要使用 `docker run -d`。背景模式會在 container 啟動後立即返回，Stoker 會視為指令已完成，接著執行下一個 queued Job。
 
 ## 時區設定
 

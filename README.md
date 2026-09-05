@@ -72,9 +72,13 @@ stoker commit <JOB_ID>
 stoker status
 ```
 
-`stoker add` is the job submission step and creates a DRAFT job. Use the
-returned `JOB_ID` with `stoker commit` to add it to the queue. Jobs run one at
-a time in queue order.
+`stoker add` is the job submission step and first creates a DRAFT job. 
+
+Use the`JOB_ID` printed by the command with `stoker commit` to add it to the queue.
+Jobs run one at a time in queue order.
+
+`--user` is a logical owner label for Stoker, not an operating-system account
+or an authentication mechanism.
 
 ### Command reference
 
@@ -161,7 +165,18 @@ The command is executed by the platform shell (`sh` on Linux/macOS and
 `cmd.exe` on Windows), so shell syntax and available programs can differ by
 platform.
 
-`--user` is a logical owner label, not an operating-system account or an authentication mechanism.
+## Running Docker jobs
+
+If a job runs in a Docker container and Stoker should wait for the container
+to finish before starting the next job, run Docker in the foreground:
+
+```bash
+docker run <IMAGE> <COMMAND>
+```
+
+Do not use `docker run -d` in this case. Detached mode returns as soon as the
+container starts, so Stoker considers the command finished and may start the
+next queued job.
 
 ## Timezone configuration
 
