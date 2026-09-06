@@ -5,8 +5,12 @@ on:
     branches: [main]
     paths-ignore:
       - '**.md'
+      - '.github/workflows/**'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.github/workflows/**'
 
 permissions:
   contents: read
