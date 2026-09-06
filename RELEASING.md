@@ -71,7 +71,11 @@ This pushes only the annotated release tag to `origin`.
 After the tag is pushed, GitHub Actions runs
 `.github/workflows/release.yml`. It builds packages for Windows, Linux, macOS
 Apple Silicon. It attaches archives, platform binaries, and
-`SHA256SUMS` to a GitHub Release for the tag.
+`SHA256SUMS` to a GitHub Release for the tag. It also attaches the
+`stoker-install.ps1` and `stoker-install.sh` installers used by the one-line
+installation commands in the README files. The release workflow embeds the
+tag version in those installers, so versioned installer URLs remain pinned to
+that release.
 
 ## 5. Publish to crates.io
 

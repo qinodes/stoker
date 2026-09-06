@@ -27,7 +27,37 @@ Stoker は Job の状態とログをローカルの SQLite に保存します。
 
 ## インストール
 
-### Cargo をインストールしていない場合
+### ワンラインインストーラー（推奨）
+
+インストーラーは最新 release をダウンロードして SHA256 を検証し、Stoker を現在のユーザー用ディレクトリにインストールして、ユーザーの `PATH` に永続的に追加します。管理者権限は必要ありません。
+
+**Windows PowerShell:**
+
+```powershell
+irm https://github.com/qinodes/stoker/releases/latest/download/stoker-install.ps1 | iex
+```
+
+`%LOCALAPPDATA%\Programs\stoker` にインストールされます。
+
+**Linux／macOS:**
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/qinodes/stoker/releases/latest/download/stoker-install.sh | sh
+```
+
+`~/.local/bin` にインストールされます。現在の release は Linux x86_64 と macOS Apple Silicon に対応しています。
+
+特定の公開バージョンをインストールする場合は、URL の `latest` を release tag に置き換えます。
+
+```powershell
+irm https://github.com/qinodes/stoker/releases/download/v1.2.3/stoker-install.ps1 | iex
+```
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/qinodes/stoker/releases/download/v1.2.3/stoker-install.sh | sh
+```
+
+### 手動インストール
 
 [GitHub Releases](https://github.com/qinodes/stoker/releases) から環境に合うアーカイブをダウンロードし、`stoker` 実行ファイルを展開して、そのディレクトリを `PATH` に追加してください。
 

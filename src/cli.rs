@@ -1260,16 +1260,10 @@ fn platform_binary_name() -> anyhow::Result<&'static str> {
     Ok("stoker-macos-arm64")
 }
 
-#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-fn platform_binary_name() -> anyhow::Result<&'static str> {
-    Ok("stoker-macos-x86_64")
-}
-
 #[cfg(not(any(
     all(target_os = "windows", target_arch = "x86_64"),
     all(target_os = "linux", target_arch = "x86_64"),
-    all(target_os = "macos", target_arch = "aarch64"),
-    all(target_os = "macos", target_arch = "x86_64")
+    all(target_os = "macos", target_arch = "aarch64")
 )))]
 fn platform_binary_name() -> anyhow::Result<&'static str> {
     anyhow::bail!("automatic updates are not supported on this platform")
@@ -1968,8 +1962,6 @@ mod update_tests {
         assert_eq!(platform_binary_name().unwrap(), "stoker-linux-x86_64");
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         assert_eq!(platform_binary_name().unwrap(), "stoker-macos-arm64");
-        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        assert_eq!(platform_binary_name().unwrap(), "stoker-macos-x86_64");
     }
 
     #[test]

@@ -27,7 +27,40 @@ Stoker uses a local SQLite database for job state and logs. No Redis, PostgreSQL
 
 ## Installation
 
-### Without Cargo
+### One-line installer (recommended)
+
+The installer downloads the latest release, verifies its SHA256 checksum,
+installs Stoker for your user, and adds the install directory to your
+permanent user `PATH`. No administrator privileges are required.
+
+**Windows PowerShell:**
+
+```powershell
+irm https://github.com/qinodes/stoker/releases/latest/download/stoker-install.ps1 | iex
+```
+
+Installs to `%LOCALAPPDATA%\Programs\stoker`.
+
+**Linux/macOS:**
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/qinodes/stoker/releases/latest/download/stoker-install.sh | sh
+```
+
+Installs to `~/.local/bin`. The current releases support Linux x86_64 and
+macOS Apple Silicon.
+
+To install a specific published version, replace `latest` with its release tag:
+
+```powershell
+irm https://github.com/qinodes/stoker/releases/download/v1.2.3/stoker-install.ps1 | iex
+```
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/qinodes/stoker/releases/download/v1.2.3/stoker-install.sh | sh
+```
+
+### Manual installation
 
 Download the archive for your platform from [GitHub Releases](https://github.com/qinodes/stoker/releases), extract the `stoker` executable, and add its directory to `PATH`:
 

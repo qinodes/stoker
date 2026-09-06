@@ -78,6 +78,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
       - name: Download packages
         uses: actions/download-artifact@v4
         with:
@@ -88,6 +91,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          release_version="${GITHUB_REF_NAME#v}"
+          sed "s/__STOKER_RELEASE_VERSION__/${release_version}/g" scripts/install.ps1 > dist/stoker-install.ps1
+          sed "s/__STOKER_RELEASE_VERSION__/${release_version}/g" scripts/install.sh > dist/stoker-install.sh
           (cd dist && sha256sum stoker-*) > dist/SHA256SUMS
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \

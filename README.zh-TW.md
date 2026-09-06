@@ -27,7 +27,37 @@ Stoker 使用本機 SQLite 保存 Job 狀態與日誌，不需要 Redis、Postgr
 
 ## 安裝
 
-### 不使用 Cargo
+### 一行安裝指令（推薦）
+
+安裝程式會下載最新版 release、驗證 SHA256、將 Stoker 安裝到目前使用者的目錄，並永久加入使用者層級的 `PATH`。不需要系統管理員權限。
+
+**Windows PowerShell：**
+
+```powershell
+irm https://github.com/qinodes/stoker/releases/latest/download/stoker-install.ps1 | iex
+```
+
+安裝到 `%LOCALAPPDATA%\Programs\stoker`。
+
+**Linux／macOS：**
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/qinodes/stoker/releases/latest/download/stoker-install.sh | sh
+```
+
+安裝到 `~/.local/bin`。目前 release 支援 Linux x86_64 與 macOS Apple Silicon。
+
+若要安裝指定的已發布版本，將網址中的 `latest` 替換成 release tag：
+
+```powershell
+irm https://github.com/qinodes/stoker/releases/download/v1.2.3/stoker-install.ps1 | iex
+```
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/qinodes/stoker/releases/download/v1.2.3/stoker-install.sh | sh
+```
+
+### 手動安裝
 
 從 [GitHub Releases](https://github.com/qinodes/stoker/releases) 下載符合平台的壓縮檔，解壓縮 `stoker` 執行檔後加入 `PATH`：
 
