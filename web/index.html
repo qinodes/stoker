@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="Stoker job queue control center">
+    <title>Stoker · Queue control center</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Primary navigation">
+        <a class="brand" href="#overview" aria-label="Stoker overview">
+          <span class="brand-mark"><img src="/assets/logo-mark.png" alt="Stoker flame mark"></span>
+          <span class="brand-copy"><strong>stoker</strong><small>execution forge</small></span>
+        </a>
+
+        <div class="workspace-label">Workspace</div>
+        <nav class="nav-list">
+          <a class="nav-item active" href="#overview" data-route="overview"><span class="nav-icon">◈</span>Overview</a>
+          <a class="nav-item" href="#jobs" data-route="jobs"><span class="nav-icon">▤</span>Jobs</a>
+          <a class="nav-item" href="#queue" data-route="queue"><span class="nav-icon">≡</span>Queue</a>
+          <a class="nav-item" href="#logs" data-route="logs"><span class="nav-icon">⌁</span>Logs</a>
+          <a class="nav-item" href="#configuration" data-route="configuration"><span class="nav-icon">◌</span>Configuration</a>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="connection-card">
+            <span class="connection-dot" id="connection-dot"></span>
+            <div><strong id="connection-label">Connecting</strong><small id="connection-detail">Reading workspace state</small></div>
+          </div>
+          <div class="version-label">Stoker <span id="app-version">—</span></div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="breadcrumbs"><span>Workspace</span><span class="crumb-separator">/</span><strong id="breadcrumb-current">Overview</strong></div>
+          <div class="topbar-actions">
+            <span class="scheduler-pill stopped" id="scheduler-pill"><span class="status-dot"></span><span id="scheduler-label">Scheduler stopped</span></span>
+            <button class="icon-button" id="refresh-button" type="button" title="Refresh data" aria-label="Refresh data">↻</button>
+            <button class="avatar-button" type="button" title="Local UI session" aria-label="Local UI session">S</button>
+          </div>
+        </header>
+
+        <section class="page" id="app" aria-live="polite">
+          <div class="page-loading"><span class="spinner"></span><span>Loading workspace…</span></div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="assertive" aria-atomic="true"></div>
+
+    <dialog class="token-dialog" id="token-dialog">
+      <form method="dialog" id="token-form" class="dialog-card">
+        <div class="dialog-kicker">LAN access</div>
+        <h2>Connect to Stoker</h2>
+        <p>This UI is protected because it is reachable from the local network. Paste the bearer token printed by <code>stoker ui start</code>.</p>
+        <label for="token-input">Access token</label>
+        <input id="token-input" name="token" type="password" autocomplete="off" spellcheck="false" required>
+        <div class="dialog-actions"><button class="button secondary" value="cancel">Cancel</button><button class="button primary" value="connect">Connect</button></div>
+      </form>
+    </dialog>
+
+    <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+      <div class="dialog-card confirm-card">
+        <div class="dialog-kicker" id="confirm-kicker">Configuration</div>
+        <h2 id="confirm-title">Restore snapshot?</h2>
+        <p id="confirm-message">The current configuration will be preserved before this snapshot is restored.</p>
+        <div class="dialog-actions"><button class="button secondary" id="confirm-cancel" type="button">Cancel</button><button class="button primary" id="confirm-accept" type="button">Restore snapshot</button></div>
+      </div>
+    </dialog>
+  </body>
+</html>

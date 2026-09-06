@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::fs;
 use std::io::{self, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -27,6 +28,7 @@ use crate::ipc::StaleQueueMoveError;
 use crate::output;
 use crate::queue_editor::{self, EditorMoveError};
 use crate::service::Service;
+use crate::ui;
 use crate::{ServiceClient, StokerPaths, Store, StoreError, is_service_unavailable};
 
 #[derive(Debug, Parser)]
@@ -87,6 +89,18 @@ pub enum CliCommand {
     },
     #[command(about = "Stop the scheduler service")]
     Stop(ConfirmationArgs),
+    #[command(about = "Start, stop, or inspect the browser UI")]
+    Ui {
+        #[command(subcommand)]
+        command: UiCommand,
+    },
+    #[command(name = "ui-run", hide = true)]
+    UiRun {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: IpAddr,
+        #[arg(long, default_value_t = crate::ui::default_port())]
+        port: u16,
+    },
     #[command(about = "Commit a DRAFT job to the queue")]
     Commit {
         #[arg(
@@ -160,6 +174,30 @@ pub enum QueueCommand {
     Unlock,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum UiCommand {
+    #[command(about = "Start the browser UI server")]
+    Start(UiStartArgs),
+    #[command(about = "Show browser UI server status")]
+    Status,
+    #[command(about = "Stop the browser UI server")]
+    Stop,
+}
+
+#[derive(Debug, Args)]
+pub struct UiStartArgs {
+    #[arg(
+        long,
+        default_value = "127.0.0.1",
+        help = "Address to bind; LAN access requires an explicit non-loopback address"
+    )]
+    pub host: IpAddr,
+    #[arg(long, default_value_t = crate::ui::default_port(), help = "TCP port for the browser UI")]
+    pub port: u16,
+    #[arg(long, help = "Open the UI in the default browser after startup")]
+    pub open: bool,
+}
+
 #[derive(Debug, Args)]
 pub struct AddArgs {
     #[arg(long, help = "Logical job owner label")]
@@ -217,6 +255,12 @@ fn run_command_with_timezone(command: CliCommand, timezone: Option<String>) -> a
             QueueCommand::Unlock => unlock_queue(),
         },
         CliCommand::Stop(args) => stop(args.yes),
+        CliCommand::Ui { command } => match command {
+            UiCommand::Start(args) => ui::start(open_paths()?, args.host, args.port, args.open),
+            UiCommand::Status => ui::status(open_paths()?),
+            UiCommand::Stop => ui::stop(open_paths()?),
+        },
+        CliCommand::UiRun { host, port } => ui::run(open_paths()?, host, port),
         CliCommand::Commit { ids, all, user } => commit(ids, all, user),
         CliCommand::Cancel(args) => cancel(args.id, args.confirmation.yes),
         CliCommand::Logs { id, follow } => logs(id, follow),

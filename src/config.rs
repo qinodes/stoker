@@ -334,6 +334,21 @@ impl StokerPaths {
     pub fn service_log(&self) -> std::path::PathBuf {
         self.root.join("service.log")
     }
+
+    /// Metadata written by the optional browser UI server.
+    pub fn ui_metadata(&self) -> std::path::PathBuf {
+        self.root.join("ui.json")
+    }
+
+    /// Bearer token used by the browser UI when it is bound beyond loopback.
+    pub fn ui_token(&self) -> std::path::PathBuf {
+        self.root.join("ui.token")
+    }
+
+    /// Captures the detached UI server's stdout and stderr.
+    pub fn ui_log(&self) -> std::path::PathBuf {
+        self.root.join("ui.log")
+    }
 }
 
 pub fn system_timezone_name() -> anyhow::Result<String> {
