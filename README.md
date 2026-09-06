@@ -17,6 +17,8 @@
 
 Designed specifically to run multiple time-consuming tasks sequentially and reliably.
 
+Stoker uses a local SQLite database for job state and logs. No Redis, PostgreSQL, or other external database is required.
+
 - Suitable for shared use by multiple people who want to avoid tasks competing for resources.
 
 - Supports multiple users submitting scheduled jobs at the same time.
