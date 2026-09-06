@@ -7,7 +7,7 @@ $asset = 'stoker-windows-x86_64.zip'
 $releaseVersion = '__STOKER_RELEASE_VERSION__'
 $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs\stoker'
 $temporaryDirectory = Join-Path ([IO.Path]::GetTempPath()) ('stoker-install-' + [Guid]::NewGuid().ToString('N'))
-if ($releaseVersion -eq '__STOKER_RELEASE_VERSION__') {
+if ($releaseVersion.StartsWith('__STOKER_')) {
     $releaseBaseUrl = "https://github.com/$repository/releases/latest/download"
     $releaseLabel = 'latest release'
 }

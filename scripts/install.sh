@@ -3,13 +3,16 @@ set -eu
 
 repository='qinodes/stoker'
 release_version='__STOKER_RELEASE_VERSION__'
-if [ "$release_version" = '__STOKER_RELEASE_VERSION__' ]; then
-    release_base_url="https://github.com/$repository/releases/latest/download"
-    release_label='latest release'
-else
-    release_base_url="https://github.com/$repository/releases/download/v$release_version"
-    release_label="v$release_version"
-fi
+case "$release_version" in
+    __STOKER_*)
+        release_base_url="https://github.com/$repository/releases/latest/download"
+        release_label='latest release'
+        ;;
+    *)
+        release_base_url="https://github.com/$repository/releases/download/v$release_version"
+        release_label="v$release_version"
+        ;;
+esac
 install_directory="$HOME/.local/bin"
 
 if [ -z "${HOME:-}" ]; then
