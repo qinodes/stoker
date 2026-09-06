@@ -229,6 +229,41 @@ docker run <IMAGE> <COMMAND>
 
 此時不要使用 `docker run -d`。背景模式會在 container 啟動後立即返回，Stoker 會視為指令已完成，接著執行下一個 queued Job。
 
+## Job 狀態與取消
+
+| 狀態 | 說明 |
+| --- | --- |
+| `DRAFT` | 已 add，但尚未 commit 到 queue。 |
+| `QUEUED` | 已 commit，正在等待執行。 |
+| `STARTING` | scheduler 已取出 Job，正在準備來源目錄與程序。 |
+| `RUNNING` | Job 的程序正在執行。 |
+| `CANCELLING` | 已要求取消，stoker 正在停止程序並清理。 |
+| `SUCCEEDED` | Job 已成功完成。 |
+| `FAILED` | Job 程序失敗，或 stoker 無法完成執行流程。 |
+| `CANCELLED` | Job 已被取消。 |
+| `LOST` | scheduler 重啟時，發現先前執行中的 Job 已失去管理。 |
+
+## Queue 鎖定與編輯器
+
+可以透過`stoker status` 確認Queue狀態。
+
+修改 queue 前先執行 `stoker queue lock`，完成修改後執行 `stoker queue unlock`。
+
+鎖定時不能執行 `stoker commit`、`stoker commit --all` 或 `stoker commit --user`，但仍可 `cancel` 或 `add`。
+
+`stoker queue edit` 必須在鎖定後使用。
+
+編輯器只顯示依執行順序排列的 `QUEUED` Job：
+
+| 模式 | 按鍵 | 動作 |
+| --- | --- | --- |
+| 瀏覽 | `↑` / `↓` | 選取 Job。 |
+| 瀏覽 | `Enter` | 對選取的 Job 進入移動模式。 |
+| 瀏覽 | `q` / `Esc` | 離開編輯器並保持 queue 鎖定。 |
+| 移動 | `↑` / `↓` | 調整選取 Job 的位置。 |
+| 移動 | `Enter` | 保留移動結果並返回瀏覽模式。 |
+| 移動 | `q` / `Esc` | 只復原目前這次移動，並返回瀏覽模式。 |
+
 ## 時區設定
 
 SQLite 內的時間一律以 UTC 保存；`stoker jobs` 與 `stoker show` 顯示時，才依照顯示時區轉換，並保留 RFC3339 offset。
@@ -294,42 +329,6 @@ stoker show <JOB_ID> --timezone UTC
 ```
 
 解析優先順序為 CLI 參數、`config.json`、作業系統時區。
-
-## Queue 鎖定與編輯器
-
-可以透過`stoker status` 確認Queue狀態。
-
-修改 queue 前先執行 `stoker queue lock`，完成修改後執行 `stoker queue unlock`。
-
-鎖定時不能執行 `stoker commit`、`stoker commit --all` 或 `stoker commit --user`，但仍可 `cancel` 或 `add`。
-
-`stoker queue edit` 必須在鎖定後使用。
-
-編輯器只顯示依執行順序排列的 `QUEUED` Job：
-
-| 模式 | 按鍵 | 動作 |
-| --- | --- | --- |
-| 瀏覽 | `↑` / `↓` | 選取 Job。 |
-| 瀏覽 | `Enter` | 對選取的 Job 進入移動模式。 |
-| 瀏覽 | `q` / `Esc` | 離開編輯器並保持 queue 鎖定。 |
-| 移動 | `↑` / `↓` | 調整選取 Job 的位置。 |
-| 移動 | `Enter` | 保留移動結果並返回瀏覽模式。 |
-| 移動 | `q` / `Esc` | 只復原目前這次移動，並返回瀏覽模式。 |
-
-
-## Job 狀態與取消
-
-| 狀態 | 說明 |
-| --- | --- |
-| `DRAFT` | 已 add，但尚未 commit 到 queue。 |
-| `QUEUED` | 已 commit，正在等待執行。 |
-| `STARTING` | scheduler 已取出 Job，正在準備來源目錄與程序。 |
-| `RUNNING` | Job 的程序正在執行。 |
-| `CANCELLING` | 已要求取消，stoker 正在停止程序並清理。 |
-| `SUCCEEDED` | Job 已成功完成。 |
-| `FAILED` | Job 程序失敗，或 stoker 無法完成執行流程。 |
-| `CANCELLED` | Job 已被取消。 |
-| `LOST` | scheduler 重啟時，發現先前執行中的 Job 已失去管理。 |
 
 
 ## 補充說明

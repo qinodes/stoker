@@ -237,6 +237,41 @@ Do not use `docker run -d` in this case. Detached mode returns as soon as the
 container starts, so Stoker considers the command finished and may start the
 next queued job.
 
+## Job states and cancellation
+
+| State | Meaning |
+| --- | --- |
+| `DRAFT` | Submitted, but not committed to the queue yet. |
+| `QUEUED` | Committed and waiting to run. |
+| `STARTING` | Claimed by the scheduler; its source directory and process are being prepared. |
+| `RUNNING` | The job process is running. |
+| `CANCELLING` | A cancellation has been requested; stoker is stopping the process and cleaning up. |
+| `SUCCEEDED` | The job completed successfully. |
+| `FAILED` | The job process failed or stoker could not complete it. |
+| `CANCELLED` | The job was cancelled. |
+| `LOST` | The scheduler restarted after losing management of an in-progress job. |
+
+## Queue lock and editor
+
+You can check the queue status with `stoker status`.
+
+Run `stoker queue lock` before editing and `stoker queue unlock` when you are done.
+
+While locked, `stoker commit`, `stoker commit --all`, and `stoker commit --user` are unavailable, but `cancel` and `add` remain available.
+
+`stoker queue edit` requires a locked queue.
+
+The editor shows only `QUEUED` jobs in execution order:
+
+| Mode | Keys | Action |
+| --- | --- | --- |
+| Browse | `↑` / `↓` | Select a job. |
+| Browse | `Enter` | Enter move mode for the selected job. |
+| Browse | `q` / `Esc` | Leave the editor and keep the queue locked. |
+| Move | `↑` / `↓` | Adjust the selected job's position. |
+| Move | `Enter` | Keep the move and return to browse mode. |
+| Move | `q` / `Esc` | Undo only the current move and return to browse mode. |
+
 ## Timezone configuration
 
 Timestamps are always stored as UTC in SQLite. `stoker jobs` and `stoker show` convert them only when displaying them, while preserving the RFC3339 offset.
@@ -302,41 +337,6 @@ stoker show <JOB_ID> --timezone UTC
 ```
 
 Resolution order is the CLI option, `config.json`, then the operating system timezone.
-
-## Queue lock and editor
-
-You can check the queue status with `stoker status`.
-
-Run `stoker queue lock` before editing and `stoker queue unlock` when you are done.
-
-While locked, `stoker commit`, `stoker commit --all`, and `stoker commit --user` are unavailable, but `cancel` and `add` remain available.
-
-`stoker queue edit` requires a locked queue.
-
-The editor shows only `QUEUED` jobs in execution order:
-
-| Mode | Keys | Action |
-| --- | --- | --- |
-| Browse | `↑` / `↓` | Select a job. |
-| Browse | `Enter` | Enter move mode for the selected job. |
-| Browse | `q` / `Esc` | Leave the editor and keep the queue locked. |
-| Move | `↑` / `↓` | Adjust the selected job's position. |
-| Move | `Enter` | Keep the move and return to browse mode. |
-| Move | `q` / `Esc` | Undo only the current move and return to browse mode. |
-
-## Job states and cancellation
-
-| State | Meaning |
-| --- | --- |
-| `DRAFT` | Submitted, but not committed to the queue yet. |
-| `QUEUED` | Committed and waiting to run. |
-| `STARTING` | Claimed by the scheduler; its source directory and process are being prepared. |
-| `RUNNING` | The job process is running. |
-| `CANCELLING` | A cancellation has been requested; stoker is stopping the process and cleaning up. |
-| `SUCCEEDED` | The job completed successfully. |
-| `FAILED` | The job process failed or stoker could not complete it. |
-| `CANCELLED` | The job was cancelled. |
-| `LOST` | The scheduler restarted after losing management of an in-progress job. |
 
 ## Additional notes
 

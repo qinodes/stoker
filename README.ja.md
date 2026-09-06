@@ -230,6 +230,41 @@ docker run <IMAGE> <COMMAND>
 
 この場合は `docker run -d` を使用しないでください。detach モードでは container の起動直後にコマンドが終了するため、Stoker は完了したと判断し、次の queued Job を開始する場合があります。
 
+## Job の状態とキャンセル
+
+| 状態 | 説明 |
+| --- | --- |
+| `DRAFT` | add 済みですが、まだ commit されていません。 |
+| `QUEUED` | commit 済みで、実行待ちです。 |
+| `STARTING` | scheduler が Job を取得し、ソースディレクトリとプロセスを準備しています。 |
+| `RUNNING` | Job のプロセスが実行中です。 |
+| `CANCELLING` | キャンセルが要求され、stoker がプロセスの停止とクリーンアップを行っています。 |
+| `SUCCEEDED` | Job が正常に完了しました。 |
+| `FAILED` | Job のプロセスが失敗したか、stoker が実行フローを完了できませんでした。 |
+| `CANCELLED` | Job はキャンセルされました。 |
+| `LOST` | scheduler の再起動時に、実行中だった Job の管理状態が失われました。 |
+
+## Queue のロックとエディター
+
+`stoker status` で queue の状態を確認できます。
+
+編集前に `stoker queue lock`、編集後に `stoker queue unlock` を実行します。
+
+ロック中は `stoker commit`、`stoker commit --all`、`stoker commit --user` は使えませんが、`cancel` と `add` は使用できます。
+
+`stoker queue edit` はロック中のみ使用できます。
+
+エディターには実行順の `QUEUED` Job だけが表示されます。
+
+| モード | キー | 操作 |
+| --- | --- | --- |
+| Browse | `↑` / `↓` | Job を選択します。 |
+| Browse | `Enter` | 選択した Job の移動モードに入ります。 |
+| Browse | `q` / `Esc` | queue をロックしたままエディターを終了します。 |
+| Move | `↑` / `↓` | 選択した Job の位置を調整します。 |
+| Move | `Enter` | 移動を確定して Browse モードに戻ります。 |
+| Move | `q` / `Esc` | 現在の移動だけを元に戻して Browse モードに戻ります。 |
+
 ## タイムゾーン設定
 
 SQLite 内の時刻は常に UTC で保存されます。`stoker jobs` と `stoker show` では、表示時だけ設定されたタイムゾーンへ変換し、RFC3339 の offset も保持します。
@@ -295,41 +330,6 @@ stoker show <JOB_ID> --timezone UTC
 ```
 
 適用順序は CLI オプション、`config.json`、OS のタイムゾーンです。
-
-## Queue のロックとエディター
-
-`stoker status` で queue の状態を確認できます。
-
-編集前に `stoker queue lock`、編集後に `stoker queue unlock` を実行します。
-
-ロック中は `stoker commit`、`stoker commit --all`、`stoker commit --user` は使えませんが、`cancel` と `add` は使用できます。
-
-`stoker queue edit` はロック中のみ使用できます。
-
-エディターには実行順の `QUEUED` Job だけが表示されます。
-
-| モード | キー | 操作 |
-| --- | --- | --- |
-| Browse | `↑` / `↓` | Job を選択します。 |
-| Browse | `Enter` | 選択した Job の移動モードに入ります。 |
-| Browse | `q` / `Esc` | queue をロックしたままエディターを終了します。 |
-| Move | `↑` / `↓` | 選択した Job の位置を調整します。 |
-| Move | `Enter` | 移動を確定して Browse モードに戻ります。 |
-| Move | `q` / `Esc` | 現在の移動だけを元に戻して Browse モードに戻ります。 |
-
-## Job の状態とキャンセル
-
-| 状態 | 説明 |
-| --- | --- |
-| `DRAFT` | add 済みですが、まだ commit されていません。 |
-| `QUEUED` | commit 済みで、実行待ちです。 |
-| `STARTING` | scheduler が Job を取得し、ソースディレクトリとプロセスを準備しています。 |
-| `RUNNING` | Job のプロセスが実行中です。 |
-| `CANCELLING` | キャンセルが要求され、stoker がプロセスの停止とクリーンアップを行っています。 |
-| `SUCCEEDED` | Job が正常に完了しました。 |
-| `FAILED` | Job のプロセスが失敗したか、stoker が実行フローを完了できませんでした。 |
-| `CANCELLED` | Job はキャンセルされました。 |
-| `LOST` | scheduler の再起動時に、実行中だった Job の管理状態が失われました。 |
 
 ## 補足説明
 
