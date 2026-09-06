@@ -68,20 +68,33 @@ cargo install stoker-engine
 # Start the scheduler in the background
 stoker start
 
-# Submit a job from the root directory required for task execution
+# Check the scheduler status
+stoker status
+
+# Create a DRAFT job from the root directory required for task execution
+# stoker add prints the JOB_ID
 stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
-# Add the DRAFT job to the queue
+# Commit the JOB_ID printed by stoker add
+# You can also find the JOB_ID with `stoker jobs`
 stoker commit <JOB_ID>
 
-# Check the scheduler and job status
-stoker status
+# Or commit all DRAFT jobs in creation order
+stoker commit --all
+
+# List all jobs and their current states
+stoker jobs
 ```
 
-`stoker add` is the job submission step and first creates a DRAFT job. 
-
-Use the`JOB_ID` printed by the command with `stoker commit` to add it to the queue.
-Jobs run one at a time in queue order.
+```mermaid
+flowchart TD
+    S[Scheduler] -->|stoker start| R[Runs in the background]
+    R -->|stoker status| T[Check scheduler status]
+    D[Target directory] -->|stoker add| J[DRAFT job<br/>JOB_ID is printed]
+    J -->|stoker commit &lt;JOB_ID&gt; / --all| Q[QUEUED]
+    J -.->|stoker jobs| L[Find JOB_ID<br/>and view job states]
+    Q --> E[Jobs run one at a time<br/>in queue order]
+```
 
 `--user` is a logical owner label for Stoker, not an operating-system account
 or an authentication mechanism.

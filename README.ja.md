@@ -68,20 +68,33 @@ cargo install stoker-engine
 # scheduler をバックグラウンドで起動
 stoker start
 
-# タスクの実行に必要なルートディレクトリで Job を登録
+# scheduler の状態を確認
+stoker status
+
+# タスクの実行に必要なルートディレクトリで DRAFT Job を作成
+# stoker add は JOB_ID を出力します
 stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
-# DRAFT の Job を queue に追加
+# stoker add が出力した JOB_ID を使って Job を queue に追加
+# JOB_ID は stoker jobs でも確認できます
 stoker commit <JOB_ID>
 
-# scheduler と Job の状態を確認
-stoker status
+# または、すべての DRAFT Job を作成時間順に queue へ追加
+stoker commit --all
+
+# すべての Job と現在の状態を一覧表示
+stoker jobs
 ```
 
-`stoker add` が Job を提出する手順で、最初に DRAFT Job を作成します。
-
-コマンドが出力した`JOB_ID` を使って `stoker commit` を実行すると、Job を queue に追加できます。Job は
-queue の順番に一つずつ実行されます。
+```mermaid
+flowchart TD
+    S[Scheduler] -->|stoker start| R[バックグラウンドで実行]
+    R -->|stoker status| T[Scheduler の状態を確認]
+    D[対象ディレクトリ] -->|stoker add| J[DRAFT Job<br/>JOB_ID を出力]
+    J -->|stoker commit &lt;JOB_ID&gt; / --all| Q[QUEUED]
+    J -.->|stoker jobs| L[JOB_ID を確認<br/>Job の状態を表示]
+    Q --> E[queue の順番に<br/>一つずつ実行]
+```
 
 `--user` は stoker の論理的な owner ラベルであり、OS アカウントや認証機能ではありません。
 

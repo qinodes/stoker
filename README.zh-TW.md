@@ -69,19 +69,33 @@ cargo install stoker-engine
 # 啟動背景 scheduler
 stoker start
 
-# 在任務執行需要的根目錄下，提交一個 Job
+# 查看 scheduler 狀態
+stoker status
+
+# 在任務執行需要的根目錄下建立 DRAFT Job
+# stoker add 會輸出 JOB_ID
 stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
-# 將 DRAFT Job 加入 queue
+# 使用 stoker add 輸出的 JOB_ID 提交 Job
+# 也可以使用 stoker jobs 查詢 JOB_ID
 stoker commit <JOB_ID>
 
-# 查看 scheduler 與 Job 狀態
-stoker status
+# 或將所有 DRAFT Job 依建立時間加入 queue
+stoker commit --all
+
+# 查看所有 Job 與目前狀態
+stoker jobs
 ```
 
-`stoker add` 就是提交 Job 的步驟，會先建立一個 DRAFT Job。
-
-使用指令輸出的`JOB_ID` 執行 `stoker commit`，即可將它加入 queue。Job 會依 queue 順序一次執行一個。
+```mermaid
+flowchart TD
+    S[Scheduler] -->|stoker start| R[背景執行]
+    R -->|stoker status| T[查看 scheduler 狀態]
+    D[目標目錄] -->|stoker add| J[DRAFT Job<br/>產生 JOB_ID]
+    J -->|stoker commit &lt;JOB_ID&gt; / --all| Q[QUEUED]
+    J -.->|stoker jobs| L[查詢 JOB_ID<br/>查看所有 Job 狀態]
+    Q --> E[依 queue 順序<br/>一次執行一個]
+```
 
 `--user` 是 stoker 的邏輯 owner 標籤，不是作業系統帳號或登入驗證。
 
