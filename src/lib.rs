@@ -2,6 +2,7 @@ pub mod cli;
 pub mod config;
 pub mod domain;
 pub mod ipc;
+pub mod output;
 pub mod process;
 pub(crate) mod queue_editor;
 pub mod scheduler;

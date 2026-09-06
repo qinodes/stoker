@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::execute;
+use crossterm::style::Color;
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use semver::Version;
 use serde::Deserialize;
@@ -22,6 +24,7 @@ use crate::config::{
 };
 use crate::domain::{Job, JobState, NewJob};
 use crate::ipc::StaleQueueMoveError;
+use crate::output;
 use crate::queue_editor::{self, EditorMoveError};
 use crate::service::Service;
 use crate::{ServiceClient, StokerPaths, Store, StoreError, is_service_unavailable};
@@ -232,6 +235,27 @@ fn open_paths() -> anyhow::Result<StokerPaths> {
     Ok(paths)
 }
 
+fn print_success(message: impl Display) {
+    println!(
+        "{}",
+        output::paint(message, Color::Green, output::stdout_color_enabled())
+    );
+}
+
+fn print_warning(message: impl Display) {
+    println!(
+        "{}",
+        output::paint(message, Color::Yellow, output::stdout_color_enabled())
+    );
+}
+
+fn print_info(message: impl Display) {
+    println!(
+        "{}",
+        output::paint(message, Color::Cyan, output::stdout_color_enabled())
+    );
+}
+
 fn config(command: ConfigCommand, cli_timezone: Option<&str>) -> anyhow::Result<()> {
     let paths = open_paths()?;
     match command {
@@ -252,11 +276,18 @@ fn config(command: ConfigCommand, cli_timezone: Option<&str>) -> anyhow::Result<
             resolve_timezone(&paths, Some(&value))?;
             current.timezone = Some(value.clone());
             paths.write_config(&current)?;
-            println!("Set timezone to {value}.");
+            print_success(format!("Set timezone to {value}."));
         }
         ConfigCommand::Show => {
             let current = paths.read_config()?;
-            println!("Stoker configuration");
+            println!(
+                "{}",
+                output::paint_bold(
+                    "Stoker configuration",
+                    Color::Cyan,
+                    output::stdout_color_enabled(),
+                )
+            );
             println!("File: {}", paths.config_path().display());
             println!();
             println!(
@@ -276,13 +307,16 @@ fn config(command: ConfigCommand, cli_timezone: Option<&str>) -> anyhow::Result<
             let mut current = paths.read_config()?;
             current.timezone = None;
             paths.write_config(&current)?;
-            println!("Unset timezone; using operating system timezone.");
+            print_success("Unset timezone; using operating system timezone.");
         }
         ConfigCommand::Restore => restore_config(&paths, cli_timezone)?,
         ConfigCommand::Snapshot => {
             let current = paths.read_config()?;
             let path = paths.create_config_snapshot(&current, ConfigSnapshotReason::Manual)?;
-            println!("Created configuration snapshot: {}.", path.display());
+            print_success(format!(
+                "Created configuration snapshot: {}.",
+                path.display()
+            ));
         }
     }
     Ok(())
@@ -547,10 +581,10 @@ impl Drop for InteractiveTerminalGuard {
 fn restore_config(paths: &StokerPaths, cli_timezone: Option<&str>) -> anyhow::Result<()> {
     let entries = paths.list_config_snapshots()?;
     if entries.is_empty() {
-        println!(
+        print_warning(format!(
             "No configuration snapshots found in {}.",
             paths.snapshot_dir().display()
-        );
+        ));
         return Ok(());
     }
 
@@ -562,9 +596,12 @@ fn restore_config(paths: &StokerPaths, cli_timezone: Option<&str>) -> anyhow::Re
 
     let changed = paths.restore_config_snapshot(&selected.snapshot)?;
     if changed {
-        println!("Restored configuration from {}.", selected.path.display());
+        print_success(format!(
+            "Restored configuration from {}.",
+            selected.path.display()
+        ));
     } else {
-        println!("Configuration already matches that snapshot.");
+        print_info("Configuration already matches that snapshot.");
     }
     Ok(())
 }
@@ -841,7 +878,7 @@ fn start() -> anyhow::Result<()> {
         };
         match status {
             Ok(_) => {
-                println!("Scheduler started.");
+                print_success("Scheduler started.");
                 return Ok(());
             }
             Err(error) if is_service_unavailable(&error) => {}
@@ -880,7 +917,10 @@ fn status() -> anyhow::Result<()> {
     print_timezone_status(&paths, &timezone);
     match runtime()?.block_on(ServiceClient::new(paths.clone()).status()) {
         Ok(service) => {
-            println!("Scheduler: running");
+            println!(
+                "Scheduler: {}",
+                output::paint("running", Color::Green, output::stdout_color_enabled())
+            );
             println!("PID: {}", service.pid);
             println!(
                 "Active job: {}",
@@ -899,7 +939,10 @@ fn status() -> anyhow::Result<()> {
                 .into_iter()
                 .filter(|job| job.state == crate::JobState::Queued)
                 .count();
-            println!("Scheduler: stopped");
+            println!(
+                "Scheduler: {}",
+                output::paint("stopped", Color::DarkGrey, output::stdout_color_enabled())
+            );
             println!("Queued jobs: {queued}");
             print_queue_status(store.queue_locked()?);
         }
@@ -909,7 +952,10 @@ fn status() -> anyhow::Result<()> {
 }
 
 fn print_timezone_status(paths: &StokerPaths, timezone: &ResolvedTimezone) {
-    println!("Display timezone: {}", timezone.name);
+    println!(
+        "Display timezone: {}",
+        output::paint(&timezone.name, Color::Cyan, output::stdout_color_enabled())
+    );
     if timezone.source == TimezoneSource::Config || paths.config_path().exists() {
         println!("Timezone config: {}", paths.config_path().display());
     } else {
@@ -925,9 +971,17 @@ struct QueueSnapshot {
 }
 
 fn print_queue_status(locked: bool) {
-    println!("Queue: {}", if locked { "locked" } else { "unlocked" });
+    let (state, color) = if locked {
+        ("locked", Color::Yellow)
+    } else {
+        ("unlocked", Color::Green)
+    };
+    println!(
+        "Queue: {}",
+        output::paint(state, color, output::stdout_color_enabled())
+    );
     if locked {
-        println!("Scheduler will not start another queued job while the queue is locked.");
+        print_warning("Scheduler will not start another queued job while the queue is locked.");
     }
 }
 
@@ -1004,10 +1058,18 @@ fn set_queue_lock(lock: bool) -> anyhow::Result<()> {
     } else {
         "Queue already unlocked."
     };
-    if lock && before.queued_jobs == 0 {
-        println!("{state} No queued jobs to reorder.");
+    let state_color = if state.starts_with("Queue already") {
+        Color::Yellow
     } else {
-        println!("{state}");
+        Color::Green
+    };
+    if lock && before.queued_jobs == 0 {
+        print_warning(format!("{state} No queued jobs to reorder."));
+    } else {
+        println!(
+            "{}",
+            output::paint(state, state_color, output::stdout_color_enabled())
+        );
     }
     Ok(())
 }
@@ -1022,7 +1084,7 @@ fn queue_edit() -> anyhow::Result<()> {
     let store = Store::open(&paths.database)?;
     let initial_jobs = queued_jobs(&store)?;
     if initial_jobs.is_empty() {
-        println!("No queued jobs to reorder.");
+        print_info("No queued jobs to reorder.");
         return Ok(());
     }
 
@@ -1091,15 +1153,15 @@ fn stop(yes: bool) -> anyhow::Result<()> {
                     "Job {id} is active. Force-cancel it and stop the scheduler"
                 ))?
             {
-                println!("Stop cancelled.");
+                print_warning("Stop cancelled.");
                 return Ok(());
             }
             runtime()?.block_on(client.stop())?;
-            println!("Scheduler stopped.");
+            print_success("Scheduler stopped.");
             Ok(())
         }
         Err(error) if is_service_unavailable(&error) => {
-            println!("Scheduler is not running.");
+            print_warning("Scheduler is not running.");
             Ok(())
         }
         Err(error) => Err(error),
@@ -1159,15 +1221,15 @@ fn update_with_gateway<G: UpdateGateway>(yes: bool, gateway: &G) -> anyhow::Resu
             );
         }
         std::cmp::Ordering::Equal => {
-            println!("Stoker is already up to date ({current}).");
+            print_info(format!("Stoker is already up to date ({current})."));
             return Ok(());
         }
         std::cmp::Ordering::Greater => {}
     }
 
-    println!("Stoker will update from {current} to {latest}.");
+    print_warning(format!("Stoker will update from {current} to {latest}."));
     if !yes && !gateway.request_confirmation("Continue with update")? {
-        println!("Update cancelled.");
+        print_warning("Update cancelled.");
         return Ok(());
     }
 
@@ -1176,10 +1238,10 @@ fn update_with_gateway<G: UpdateGateway>(yes: bool, gateway: &G) -> anyhow::Resu
     let binary = download_release_binary_with_gateway(&release, gateway)?;
     gateway.install_updated_binary(&current_exe, &binary)?;
     #[cfg(unix)]
-    println!("Stoker was updated to {latest}.");
+    print_success(format!("Stoker was updated to {latest}."));
     #[cfg(windows)]
-    println!(
-        "Stoker update is being finalized after this command exits. The update helper will report success or failure."
+    print_success(
+        "Stoker update is being finalized after this command exits. The update helper will report success or failure.",
     );
     Ok(())
 }
@@ -1194,13 +1256,13 @@ fn uninstall(yes: bool) -> anyhow::Result<()> {
         Err(error) => return Err(error),
     }
 
-    println!("Stoker will be uninstalled.");
-    println!(
+    print_warning("Stoker will be uninstalled.");
+    print_warning(format!(
         "Job data and logs will be kept at {}.",
         paths.root.display()
-    );
+    ));
     if !yes && !request_confirmation("Continue with uninstall")? {
-        println!("Uninstall cancelled.");
+        print_warning("Uninstall cancelled.");
         return Ok(());
     }
 
@@ -1386,12 +1448,19 @@ fn install_updated_binary(current_exe: &Path, binary: &[u8]) -> anyhow::Result<(
 fn remove_unix_binary(executable: &Path) -> anyhow::Result<()> {
     fs::remove_file(executable)
         .with_context(|| format!("remove Stoker executable at {}", executable.display()))?;
-    println!("Stoker has been uninstalled. Job data and logs were kept.");
+    print_success("Stoker has been uninstalled. Job data and logs were kept.");
     Ok(())
 }
 
 fn request_confirmation(action: &str) -> anyhow::Result<bool> {
-    print!("{action}? [y/N]: ");
+    print!(
+        "{}",
+        output::paint_bold(
+            format!("{action}? [y/N]: "),
+            Color::Yellow,
+            output::stdout_color_enabled(),
+        )
+    );
     io::stdout().flush().context("write confirmation prompt")?;
     let mut response = String::new();
     io::stdin()
@@ -1415,7 +1484,7 @@ fn schedule_windows_uninstall(process_id: u32, executable: &Path) -> anyhow::Res
         .stdin(Stdio::null())
         .spawn()
         .context("schedule Windows uninstall helper")?;
-    println!("Uninstall scheduled. It will run after Stoker exits.");
+    print_success("Uninstall scheduled. It will run after Stoker exits.");
     Ok(())
 }
 
@@ -1476,7 +1545,7 @@ fn commit(ids: Vec<Uuid>, all: bool, user: Option<String>) -> anyhow::Result<()>
     if all {
         let result = runtime()?.block_on(ServiceClient::new(paths).commit_all());
         let count = result.map_err(commit_service_error)?;
-        println!("Committed {count} DRAFT job(s).");
+        print_success(format!("Committed {count} DRAFT job(s)."));
         return Ok(());
     }
 
@@ -1484,9 +1553,9 @@ fn commit(ids: Vec<Uuid>, all: bool, user: Option<String>) -> anyhow::Result<()>
         let result = runtime()?.block_on(ServiceClient::new(paths).commit_user(user.clone()));
         let count = result.map_err(commit_service_error)?;
         if count == 0 {
-            println!("No DRAFT jobs found for user '{user}'.");
+            print_warning(format!("No DRAFT jobs found for user '{user}'."));
         } else {
-            println!("Committed {count} DRAFT job(s) for user '{user}'.");
+            print_success(format!("Committed {count} DRAFT job(s) for user '{user}'."));
         }
         return Ok(());
     }
@@ -1494,7 +1563,7 @@ fn commit(ids: Vec<Uuid>, all: bool, user: Option<String>) -> anyhow::Result<()>
     if ids.len() > 1 {
         let result = runtime()?.block_on(ServiceClient::new(paths).commit_many(ids));
         let count = result.map_err(commit_service_error)?;
-        println!("Committed {count} DRAFT job(s).");
+        print_success(format!("Committed {count} DRAFT job(s)."));
         return Ok(());
     }
 
@@ -1502,7 +1571,7 @@ fn commit(ids: Vec<Uuid>, all: bool, user: Option<String>) -> anyhow::Result<()>
     runtime()?
         .block_on(ServiceClient::new(paths).commit(id))
         .map_err(commit_service_error)?;
-    println!("Committed job {id} (QUEUED).");
+    print_success(format!("Committed job {id} (QUEUED)."));
     Ok(())
 }
 
@@ -1517,11 +1586,11 @@ fn commit_service_error(error: anyhow::Error) -> anyhow::Error {
 fn cancel(id: Uuid, yes: bool) -> anyhow::Result<()> {
     let paths = open_paths()?;
     if !yes && !request_confirmation(&format!("Cancel job {id}"))? {
-        println!("Cancel cancelled.");
+        print_warning("Cancel cancelled.");
         return Ok(());
     }
     runtime()?.block_on(ServiceClient::new(paths).cancel(id))?;
-    println!("Cancelled job {id}.");
+    print_success(format!("Cancelled job {id}."));
     Ok(())
 }
 
@@ -1578,11 +1647,25 @@ fn add(args: AddArgs) -> anyhow::Result<()> {
         },
         args.command,
     )?;
-    println!("Created job {id} (DRAFT)");
+    print_success(format!("Created job {id} (DRAFT)"));
     println!("Working directory: {}", cwd.display());
     println!();
-    println!("Next: stoker show {id}");
-    println!("      stoker commit {id}");
+    println!(
+        "Next: {}",
+        output::paint_bold(
+            format!("stoker show {id}"),
+            Color::Cyan,
+            output::stdout_color_enabled(),
+        )
+    );
+    println!(
+        "      {}",
+        output::paint_bold(
+            format!("stoker commit {id}"),
+            Color::Cyan,
+            output::stdout_color_enabled(),
+        )
+    );
     Ok(())
 }
 
@@ -1709,15 +1792,21 @@ fn jobs(
             widths[index] = widths[index].max(value.len());
         }
     }
-    println!("{}", format_jobs_row(headers, &widths));
+    let colors_enabled = output::stdout_color_enabled();
+    println!(
+        "{}",
+        format_jobs_row_for_terminal(headers, &widths, true, colors_enabled)
+    );
     for row in &rows {
         println!(
             "{}",
-            format_jobs_row(
+            format_jobs_row_for_terminal(
                 [
                     &row[0], &row[1], &row[2], &row[3], &row[4], &row[5], &row[6],
                 ],
                 &widths,
+                false,
+                colors_enabled,
             )
         );
     }
@@ -1734,15 +1823,44 @@ fn clean() -> anyhow::Result<()> {
                 .with_context(|| format!("remove logs for job {}", job.id))?;
         }
     }
-    println!("Cleaned {} terminal job(s).", jobs.len());
+    print_success(format!("Cleaned {} terminal job(s).", jobs.len()));
     Ok(())
 }
 
+#[cfg(test)]
 fn format_jobs_row(columns: [&str; 7], widths: &[usize; 7]) -> String {
     columns
         .into_iter()
         .zip(widths)
         .map(|(value, width)| format!("{value:<width$}", width = *width))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn format_jobs_row_for_terminal(
+    columns: [&str; 7],
+    widths: &[usize; 7],
+    header: bool,
+    colors_enabled: bool,
+) -> String {
+    columns
+        .into_iter()
+        .enumerate()
+        .zip(widths)
+        .map(|((index, value), width)| {
+            let padded = format!("{value:<width$}", width = *width);
+            if header {
+                output::paint_bold(padded, Color::Cyan, colors_enabled)
+            } else if index == 4 {
+                if let Ok(state) = value.parse::<JobState>() {
+                    output::paint(padded, output::state_color(state), colors_enabled)
+                } else {
+                    padded
+                }
+            } else {
+                padded
+            }
+        })
         .collect::<Vec<_>>()
         .join("  ")
 }
@@ -1767,7 +1885,10 @@ fn print_job(job: &Job, timezone: &ResolvedTimezone) {
     println!("working_directory: {}", job.cwd.display());
     println!("working_directory_status: {working_directory_status}");
     println!("command: {command}");
-    println!("state: {}", job.state);
+    println!(
+        "state: {}",
+        output::paint_state(job.state, output::stdout_color_enabled())
+    );
     println!("display_timezone: {}", timezone.name);
     println!(
         "queue_order: {}",
@@ -2871,6 +2992,24 @@ mod pure_logic_tests {
                 &[2, 4, 5, 1, 1, 1, 1]
             ),
             "id  name  state  x  y  z  w"
+        );
+        assert_eq!(
+            format_jobs_row_for_terminal(
+                ["id", "name", "x", "y", "SUCCEEDED", "z", "w"],
+                &[2, 4, 1, 1, 9, 1, 1],
+                false,
+                false,
+            ),
+            "id  name  x  y  SUCCEEDED  z  w"
+        );
+        assert!(
+            format_jobs_row_for_terminal(
+                ["id", "name", "x", "y", "SUCCEEDED", "z", "w"],
+                &[2, 4, 1, 1, 9, 1, 1],
+                false,
+                true,
+            )
+            .contains("\u{1b}[")
         );
         assert_eq!(format_optional_time(None, &timezone()), "-");
     }
