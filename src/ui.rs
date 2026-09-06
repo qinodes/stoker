@@ -1237,6 +1237,7 @@ struct UiPayloadTooLarge;
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::net::IpAddr;
     use std::path::Path;
     use std::sync::{Arc, atomic::AtomicBool};
 
@@ -1245,12 +1246,17 @@ mod tests {
     use tokio::sync::Notify;
 
     use crate::Store;
-    use crate::domain::NewJob;
+    use crate::config::{StokerConfig, resolve_timezone};
+    use crate::domain::{JobState, NewJob};
 
     use super::{
         APP_JS, HttpRequest, INDEX_HTML, LOGO_MARK_PNG, MAX_LOG_BYTES, STYLES_CSS, StokerPaths,
-        UiMetadata, UiServerState, authorized, constant_time_equal, parse_query, percent_decode,
-        read_log, read_metadata, run_async, split_target,
+        UiBadRequest, UiConflict, UiMetadata, UiMethodNotAllowed, UiNotFound, UiServerState,
+        UiServiceUnavailable, authorized, connect_host, constant_time_equal, count_state,
+        default_port, handle_connection, job_id, json_body, parse_query, percent_decode,
+        queue_job_id, read_log, read_metadata, read_token, remove_if_exists, route_request,
+        run_async, split_target, start, static_asset, status, stop, timezone_response, ui_url,
+        write_metadata, write_token,
     };
 
     #[test]
@@ -1279,6 +1285,387 @@ mod tests {
         assert!(STYLES_CSS.contains(".confirm-dialog"));
         assert!(STYLES_CSS.contains(".button.danger"));
         assert!(INDEX_HTML.contains("confirm-dialog"));
+    }
+
+    #[test]
+    fn ui_helpers_cover_assets_paths_metadata_and_timezone_sources() {
+        assert_eq!(default_port(), 8765);
+
+        for (target, content_type) in [
+            ("/", "text/html; charset=utf-8"),
+            ("/index.html?cache=1", "text/html; charset=utf-8"),
+            ("/styles.css", "text/css; charset=utf-8"),
+            ("/app.js", "text/javascript; charset=utf-8"),
+            ("/assets/logo.svg", "image/svg+xml"),
+            ("/assets/logo-mark.png", "image/png"),
+        ] {
+            let asset = static_asset("GET", target).unwrap().unwrap();
+            assert_eq!(asset.0, content_type);
+            assert!(!asset.1.is_empty());
+        }
+        assert!(static_asset("POST", "/").unwrap().is_none());
+        assert!(static_asset("GET", "/missing").unwrap().is_none());
+
+        let id = uuid::Uuid::new_v4();
+        assert_eq!(job_id(&format!("/api/v1/jobs/{id}/logs")).unwrap(), id);
+        assert!(
+            job_id("/api/v1/jobs//logs")
+                .unwrap_err()
+                .downcast_ref::<UiNotFound>()
+                .is_some()
+        );
+        assert!(
+            job_id("/api/v1/jobs/not-a-uuid/logs")
+                .unwrap_err()
+                .downcast_ref::<UiBadRequest>()
+                .is_some()
+        );
+        assert_eq!(
+            queue_job_id(&format!("/api/v1/queue/{id}/move")).unwrap(),
+            id
+        );
+        assert!(
+            queue_job_id("/api/v1/queue/not-a-uuid/move")
+                .unwrap_err()
+                .downcast_ref::<UiBadRequest>()
+                .is_some()
+        );
+
+        let valid_request = HttpRequest {
+            method: "PUT".into(),
+            target: "/api/v1/config/timezone".into(),
+            headers: HashMap::new(),
+            body: br#"{"value":"UTC"}"#.to_vec(),
+        };
+        let body: serde_json::Value = json_body(&valid_request).unwrap();
+        assert_eq!(body["value"], "UTC");
+        let invalid_request = HttpRequest {
+            body: b"not-json".to_vec(),
+            ..valid_request
+        };
+        assert!(
+            json_body::<serde_json::Value>(&invalid_request)
+                .unwrap_err()
+                .downcast_ref::<UiBadRequest>()
+                .is_some()
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(directory.path());
+        paths.ensure().unwrap();
+        let cli_timezone = resolve_timezone(&paths, Some("UTC")).unwrap();
+        assert_eq!(timezone_response(&cli_timezone).source, "cli");
+        paths
+            .write_config(&StokerConfig {
+                timezone: Some("Asia/Tokyo".into()),
+            })
+            .unwrap();
+        let config_timezone = resolve_timezone(&paths, None).unwrap();
+        assert_eq!(timezone_response(&config_timezone).source, "config");
+        paths.write_config(&StokerConfig::default()).unwrap();
+        let system_timezone = resolve_timezone(&paths, None).unwrap();
+        assert_eq!(timezone_response(&system_timezone).source, "system");
+
+        assert_eq!(
+            connect_host("127.0.0.1".parse().unwrap()),
+            "127.0.0.1".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            connect_host("0.0.0.0".parse().unwrap()),
+            "127.0.0.1".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            connect_host("::".parse().unwrap()),
+            "::1".parse::<IpAddr>().unwrap()
+        );
+        assert_eq!(
+            ui_url(&UiMetadata {
+                pid: 1,
+                host: "::".parse().unwrap(),
+                port: 8765,
+                auth_required: false,
+            }),
+            "http://[::1]:8765"
+        );
+
+        assert!(read_metadata(&paths).unwrap().is_none());
+        let metadata = UiMetadata {
+            pid: 42,
+            host: "127.0.0.1".parse().unwrap(),
+            port: 9000,
+            auth_required: false,
+        };
+        write_metadata(&paths, &metadata).unwrap();
+        assert_eq!(read_metadata(&paths).unwrap().unwrap().pid, 42);
+        write_token(&paths, " secret-token ").unwrap();
+        assert_eq!(read_token(&paths).unwrap(), "secret-token");
+        remove_if_exists(&paths.ui_metadata()).unwrap();
+        remove_if_exists(&paths.ui_metadata()).unwrap();
+
+        assert_eq!(count_state(&[], JobState::Draft), 0);
+        assert_eq!(
+            UiBadRequest::from_error(anyhow::anyhow!("bad")).to_string(),
+            "bad"
+        );
+        assert_eq!(
+            UiConflict::from_error(anyhow::anyhow!("conflict")).to_string(),
+            "conflict"
+        );
+        assert_eq!(
+            UiServiceUnavailable::from_error(anyhow::anyhow!("offline")).to_string(),
+            "offline"
+        );
+    }
+
+    #[test]
+    fn ui_lifecycle_handles_already_running_and_stale_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(directory.path());
+        paths.ensure().unwrap();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        write_metadata(
+            &paths,
+            &UiMetadata {
+                pid: 99,
+                host: "127.0.0.1".parse().unwrap(),
+                port,
+                auth_required: false,
+            },
+        )
+        .unwrap();
+
+        start(paths.clone(), "127.0.0.1".parse().unwrap(), port, false).unwrap();
+        status(paths.clone()).unwrap();
+        drop(listener);
+
+        write_token(&paths, "stale-token").unwrap();
+        status(paths.clone()).unwrap();
+        stop(paths.clone()).unwrap();
+        assert!(!paths.ui_metadata().exists());
+        status(paths.clone()).unwrap();
+        stop(paths).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ui_stop_requests_shutdown_and_cleans_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(directory.path());
+        paths.ensure().unwrap();
+        write_token(&paths, "loopback-token").unwrap();
+        let server_paths = paths.clone();
+        let server = tokio::spawn(async move {
+            run_async(server_paths, "127.0.0.1".parse().unwrap(), 0)
+                .await
+                .unwrap();
+        });
+        wait_for_metadata(&paths).await;
+
+        let stop_paths = paths.clone();
+        tokio::task::spawn_blocking(move || stop(stop_paths))
+            .await
+            .unwrap()
+            .unwrap();
+        server.await.unwrap();
+        assert!(read_metadata(&paths).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn http_error_responses_cover_parser_auth_and_status_mapping() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(directory.path());
+        paths.ensure().unwrap();
+
+        let response = one_shot_request(state_for(&paths, false, None), "GET\r\n\r\n").await;
+        assert!(response.starts_with(b"HTTP/1.1 400 Bad Request"));
+
+        let response = one_shot_request(
+            state_for(&paths, false, None),
+            "GET /missing HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(response.starts_with(b"HTTP/1.1 404 Not Found"));
+
+        let response = one_shot_request(
+            state_for(&paths, false, None),
+            "POST /api/v1/status HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(response.starts_with(b"HTTP/1.1 405 Method Not Allowed"));
+
+        let response = one_shot_request(
+            state_for(&paths, false, None),
+            "GET / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1048577\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(
+            response.starts_with(b"HTTP/1.1 400 Bad Request"),
+            "{}",
+            String::from_utf8_lossy(&response)
+        );
+
+        let response = one_shot_request(
+            state_for(&paths, true, Some("secret")),
+            "GET /api/v1/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(response.starts_with(b"HTTP/1.1 401 Unauthorized"));
+
+        let mut bad_paths = paths.clone();
+        bad_paths.database = directory.path().to_path_buf();
+        let response = one_shot_request(
+            state_for(&bad_paths, false, None),
+            "GET /api/v1/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(response.starts_with(b"HTTP/1.1 500 Internal Server Error"));
+
+        let response = one_shot_request(
+            state_for(&paths, false, None),
+            "GET /__stoker/shutdown HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert!(response.starts_with(b"HTTP/1.1 405 Method Not Allowed"));
+    }
+
+    #[tokio::test]
+    async fn route_validation_covers_logs_filters_snapshots_and_methods() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(directory.path());
+        paths.ensure().unwrap();
+        let state = state_for(&paths, false, None);
+
+        let request = make_request("GET", "/outside", "");
+        assert!(
+            route_request(&request, &state)
+                .await
+                .unwrap_err()
+                .downcast_ref::<UiNotFound>()
+                .is_some()
+        );
+        let request = make_request("GET", "/api/v1/jobs?state=not-a-state", "");
+        assert!(
+            route_request(&request, &state)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("unknown job state")
+        );
+        let request = make_request("GET", "/api/v1/jobs?user=&state=", "");
+        assert!(route_request(&request, &state).await.is_ok());
+
+        let missing_job = uuid::Uuid::new_v4();
+        let request = make_request("GET", &format!("/api/v1/jobs/{missing_job}/logs"), "");
+        assert!(
+            route_request(&request, &state)
+                .await
+                .unwrap_err()
+                .downcast_ref::<UiNotFound>()
+                .is_some()
+        );
+        let request = make_request("GET", "/api/v1/jobs/not-a-uuid/logs", "");
+        assert!(
+            route_request(&request, &state)
+                .await
+                .unwrap_err()
+                .downcast_ref::<UiBadRequest>()
+                .is_some()
+        );
+        let request = make_request("POST", "/api/v1/queue/not-a-uuid/move", "{}");
+        assert!(
+            route_request(&request, &state)
+                .await
+                .unwrap_err()
+                .downcast_ref::<UiBadRequest>()
+                .is_some()
+        );
+
+        let draft = Store::open(&paths.database)
+            .unwrap()
+            .create_job(NewJob {
+                name: "queued-log".into(),
+                user: "test".into(),
+                cwd: directory.path().to_path_buf(),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        Store::open(&paths.database)
+            .unwrap()
+            .commit_job(draft)
+            .unwrap();
+        let request = make_request("GET", &format!("/api/v1/jobs/{draft}/logs"), "");
+        let queued_logs = route_request(&request, &state).await.unwrap().2;
+        assert!(String::from_utf8_lossy(&queued_logs).contains("is QUEUED"));
+
+        let cancelled = Store::open(&paths.database)
+            .unwrap()
+            .create_job(NewJob {
+                name: "cancelled-log".into(),
+                user: "test".into(),
+                cwd: directory.path().to_path_buf(),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        Store::open(&paths.database)
+            .unwrap()
+            .cancel_not_started(cancelled)
+            .unwrap();
+        let request = make_request("GET", &format!("/api/v1/jobs/{cancelled}/logs"), "");
+        let missing_logs = route_request(&request, &state).await.unwrap().2;
+        assert!(String::from_utf8_lossy(&missing_logs).contains("No logs are available"));
+
+        let empty_timezone = make_request("PUT", "/api/v1/config/timezone", r#"{"value":"  "}"#);
+        assert!(
+            route_request(&empty_timezone, &state)
+                .await
+                .unwrap_err()
+                .downcast_ref::<UiBadRequest>()
+                .is_some()
+        );
+        let bad_restore = make_request(
+            "POST",
+            "/api/v1/config/restore",
+            r#"{"path":"missing.json"}"#,
+        );
+        assert!(
+            route_request(&bad_restore, &state)
+                .await
+                .unwrap_err()
+                .downcast_ref::<UiNotFound>()
+                .is_some()
+        );
+        let invalid_restore = make_request(
+            "POST",
+            "/api/v1/config/restore",
+            r#"{"path":"missing.json""#,
+        );
+        assert!(
+            route_request(&invalid_restore, &state)
+                .await
+                .unwrap_err()
+                .downcast_ref::<UiBadRequest>()
+                .is_some()
+        );
+
+        std::fs::write(paths.snapshot_dir().join("broken.json"), "not-json").unwrap();
+        let configuration = make_request("GET", "/api/v1/config/snapshots", "");
+        let configuration = route_request(&configuration, &state).await.unwrap().2;
+        assert!(String::from_utf8_lossy(&configuration).contains("\"valid\":false"));
+
+        for (method, target) in [
+            ("POST", "/api/v1/jobs/not-a-real-id/logs"),
+            ("DELETE", "/api/v1/queue/not-a-real-id/move"),
+            ("POST", "/api/v1/status"),
+        ] {
+            let request = make_request(method, target, "");
+            assert!(
+                route_request(&request, &state)
+                    .await
+                    .unwrap_err()
+                    .downcast_ref::<UiMethodNotAllowed>()
+                    .is_some()
+            );
+        }
     }
 
     #[test]
@@ -1579,6 +1966,48 @@ mod tests {
         assert!(shutdown.starts_with(b"HTTP/1.1 200 OK"));
         server.await.unwrap();
         assert!(read_metadata(&paths).unwrap().is_none());
+    }
+
+    fn make_request(method: &str, target: &str, body: &str) -> HttpRequest {
+        HttpRequest {
+            method: method.into(),
+            target: target.into(),
+            headers: HashMap::new(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    fn state_for(paths: &StokerPaths, auth_required: bool, token: Option<&str>) -> UiServerState {
+        UiServerState {
+            paths: paths.clone(),
+            metadata: UiMetadata {
+                pid: 7,
+                host: if auth_required {
+                    "0.0.0.0".parse().unwrap()
+                } else {
+                    "127.0.0.1".parse().unwrap()
+                },
+                port: 8765,
+                auth_required,
+            },
+            token: token.map(str::to_owned),
+            shutdown: Arc::new(Notify::new()),
+            stopping: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    async fn one_shot_request(state: UiServerState, request: &str) -> Vec<u8> {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            handle_connection(stream, state).await.unwrap();
+        });
+        let response = raw_request(port, request).await;
+        server.await.unwrap();
+        response
     }
 
     async fn wait_for_metadata(paths: &StokerPaths) -> super::UiMetadata {
