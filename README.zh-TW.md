@@ -113,6 +113,9 @@ stoker commit <JOB_ID>
 # 或將所有 DRAFT Job 依建立時間加入 queue
 stoker commit --all
 
+# 或將指定 user 的所有 DRAFT Job 依建立時間加入 queue
+stoker commit --user alice
+
 # 查看所有 Job 與目前狀態
 stoker jobs
 ```
@@ -122,7 +125,7 @@ flowchart TD
     S[Scheduler] -->|stoker start| R[背景執行]
     R -->|stoker status| T[查看 scheduler 狀態]
     D[目標目錄] -->|stoker add| J[DRAFT Job<br/>產生 JOB_ID]
-    J -->|stoker commit JOB_ID / --all| Q[QUEUED]
+    J -->|stoker commit JOB_ID... / --all / --user| Q[QUEUED]
     J -.->|stoker jobs| L[查詢 JOB_ID<br/>查看所有 Job 狀態]
     Q --> E[依 queue 順序<br/>一次執行一個]
 ```
@@ -146,8 +149,12 @@ stoker add --user <任意使用者名稱> --name <job名稱> --cmd "<待執行�
 stoker show <JOB_ID>
 # 送出Job(draft->queued)
 stoker commit <JOB_ID>
+# 一次送出多個 Job，依命令列輸入順序加入 queue
+stoker commit <JOB_ID_1> <JOB_ID_2>
 # 將所有 DRAFT Job 依建立時間加入 queue
 stoker commit --all
+# 將指定 user 的所有 DRAFT Job 依建立時間加入 queue
+stoker commit --user <使用者名稱>
 
 # 重新排序 queued Job 前先鎖定 queue，完成後明確解除鎖定
 stoker queue lock
@@ -294,7 +301,7 @@ stoker show <JOB_ID> --timezone UTC
 
 修改 queue 前先執行 `stoker queue lock`，完成修改後執行 `stoker queue unlock`。
 
-鎖定時不能執行 `stoker commit` 或 `stoker commit --all`，但仍可 `cancel` 或 `add`。
+鎖定時不能執行 `stoker commit`、`stoker commit --all` 或 `stoker commit --user`，但仍可 `cancel` 或 `add`。
 
 `stoker queue edit` 必須在鎖定後使用。
 

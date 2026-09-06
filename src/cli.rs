@@ -87,13 +87,22 @@ pub enum CliCommand {
     #[command(about = "Commit a DRAFT job to the queue")]
     Commit {
         #[arg(
-            required_unless_present = "all",
-            conflicts_with = "all",
-            help = "Job ID"
+            value_name = "JOB_ID",
+            num_args = 1..,
+            required_unless_present_any = ["all", "user"],
+            conflicts_with_all = ["all", "user"],
+            help = "One or more Job IDs"
         )]
-        id: Option<Uuid>,
+        ids: Vec<Uuid>,
         #[arg(long, help = "Commit all DRAFT jobs in creation order")]
         all: bool,
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with_all = ["ids", "all"],
+            help = "Commit all DRAFT jobs for this user in creation order"
+        )]
+        user: Option<String>,
     },
     #[command(about = "Cancel a job")]
     Cancel(CancelArgs),
@@ -205,7 +214,7 @@ fn run_command_with_timezone(command: CliCommand, timezone: Option<String>) -> a
             QueueCommand::Unlock => unlock_queue(),
         },
         CliCommand::Stop(args) => stop(args.yes),
-        CliCommand::Commit { id, all } => commit(id, all),
+        CliCommand::Commit { ids, all, user } => commit(ids, all, user),
         CliCommand::Cancel(args) => cancel(args.id, args.confirmation.yes),
         CliCommand::Logs { id, follow } => logs(id, follow),
     }
@@ -1457,23 +1466,51 @@ fn windows_update_script(
     )
 }
 
-fn commit(id: Option<Uuid>, all: bool) -> anyhow::Result<()> {
+fn commit(ids: Vec<Uuid>, all: bool, user: Option<String>) -> anyhow::Result<()> {
+    if let Some(user) = user.as_deref()
+        && user.trim().is_empty()
+    {
+        anyhow::bail!("--user must not be empty");
+    }
     let paths = open_paths()?;
     if all {
-        let count = runtime()?.block_on(ServiceClient::new(paths).commit_all())?;
+        let result = runtime()?.block_on(ServiceClient::new(paths).commit_all());
+        let count = result.map_err(commit_service_error)?;
         println!("Committed {count} DRAFT job(s).");
         return Ok(());
     }
-    let id = id.expect("clap requires a job ID");
-    match runtime()?.block_on(ServiceClient::new(paths).commit(id)) {
-        Ok(()) => {
-            println!("Committed job {id} (QUEUED).");
-            Ok(())
+
+    if let Some(user) = user {
+        let result = runtime()?.block_on(ServiceClient::new(paths).commit_user(user.clone()));
+        let count = result.map_err(commit_service_error)?;
+        if count == 0 {
+            println!("No DRAFT jobs found for user '{user}'.");
+        } else {
+            println!("Committed {count} DRAFT job(s) for user '{user}'.");
         }
-        Err(error) if is_service_unavailable(&error) => {
-            anyhow::bail!("Scheduler is not running. Run `stoker start` first.")
-        }
-        Err(error) => Err(error),
+        return Ok(());
+    }
+
+    if ids.len() > 1 {
+        let result = runtime()?.block_on(ServiceClient::new(paths).commit_many(ids));
+        let count = result.map_err(commit_service_error)?;
+        println!("Committed {count} DRAFT job(s).");
+        return Ok(());
+    }
+
+    let id = ids.into_iter().next().expect("clap requires a job ID");
+    runtime()?
+        .block_on(ServiceClient::new(paths).commit(id))
+        .map_err(commit_service_error)?;
+    println!("Committed job {id} (QUEUED).");
+    Ok(())
+}
+
+fn commit_service_error(error: anyhow::Error) -> anyhow::Error {
+    if is_service_unavailable(&error) {
+        anyhow::anyhow!("Scheduler is not running. Run `stoker start` first.")
+    } else {
+        error
     }
 }
 
@@ -1785,8 +1822,8 @@ mod tests {
 #[cfg(test)]
 mod update_tests {
     use super::{
-        Cli, GithubAsset, GithubRelease, Sha256, SystemUpdateGateway, UpdateGateway, checksum_for,
-        download_bytes, download_release_binary_with_gateway, is_confirmation,
+        Cli, CliCommand, GithubAsset, GithubRelease, Sha256, SystemUpdateGateway, UpdateGateway,
+        checksum_for, download_bytes, download_release_binary_with_gateway, is_confirmation,
         platform_binary_name, update_with_gateway,
     };
     use clap::{CommandFactory, Parser};
@@ -2164,6 +2201,33 @@ mod update_tests {
     #[test]
     fn uninstall_is_a_valid_cli_command() {
         assert!(Cli::try_parse_from(["stoker", "uninstall"]).is_ok());
+    }
+
+    #[test]
+    fn commit_accepts_multiple_selectors_and_rejects_mixed_modes() {
+        let first = "00000000-0000-0000-0000-000000000001";
+        let second = "00000000-0000-0000-0000-000000000002";
+        let parsed = Cli::try_parse_from(["stoker", "commit", first, second]).unwrap();
+        match parsed.command {
+            CliCommand::Commit { ids, all, user } => {
+                assert_eq!(ids.len(), 2);
+                assert!(!all);
+                assert_eq!(user, None);
+            }
+            command => panic!("unexpected command: {command:?}"),
+        }
+
+        assert!(Cli::try_parse_from(["stoker", "commit", "--all"]).is_ok());
+        assert!(Cli::try_parse_from(["stoker", "commit", "--user", "alice"]).is_ok());
+        assert!(Cli::try_parse_from(["stoker", "commit"]).is_err());
+        assert!(Cli::try_parse_from(["stoker", "commit", first, "--all"]).is_err());
+        assert!(Cli::try_parse_from(["stoker", "commit", "--all", "--user", "alice"]).is_err());
+
+        let error = super::commit(Vec::new(), false, Some("   ".into())).unwrap_err();
+        assert_eq!(error.to_string(), "--user must not be empty");
+
+        let error = super::commit_service_error(anyhow::anyhow!("queue is locked"));
+        assert_eq!(error.to_string(), "queue is locked");
     }
 
     #[test]
@@ -2928,8 +2992,9 @@ mod cli_runtime_tests {
         assert!(log_error.to_string().contains("still DRAFT"));
 
         let commit_error = run_command(CliCommand::Commit {
-            id: Some(draft.id),
+            ids: vec![draft.id],
             all: false,
+            user: None,
         })
         .unwrap_err();
         assert!(

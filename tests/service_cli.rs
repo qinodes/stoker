@@ -113,6 +113,13 @@ fn queued_job(name: &str, cwd: PathBuf) -> NewJob {
     }
 }
 
+fn queued_job_for_user(name: &str, user: &str, cwd: PathBuf) -> NewJob {
+    NewJob {
+        user: user.into(),
+        ..queued_job(name, cwd)
+    }
+}
+
 #[test]
 fn start_detaches_and_status_reports_running_service() {
     let home = TempStokerHome::new();
@@ -594,6 +601,89 @@ fn commit_all_queues_drafts_in_creation_order() {
     stoker_with_home(&home)
         .args(["stop"])
         .write_stdin("y\n")
+        .assert()
+        .success();
+}
+
+#[test]
+fn commit_many_and_commit_user_queue_the_expected_drafts() {
+    let home = TempStokerHome::new();
+    let _cleanup = ServiceCleanup {
+        home: home.path().to_path_buf(),
+    };
+    let cwd = tempfile::tempdir().unwrap();
+    let store = Store::open(home.path().join("stoker.db")).unwrap();
+    let active = store
+        .create_job(long_running_job("active", cwd.path().to_path_buf()))
+        .unwrap();
+    store.commit_job(active).unwrap();
+    let alice_first = store
+        .create_job(queued_job_for_user(
+            "alice-first",
+            "alice",
+            cwd.path().to_path_buf(),
+        ))
+        .unwrap();
+    let alice_second = store
+        .create_job(queued_job_for_user(
+            "alice-second",
+            "alice",
+            cwd.path().to_path_buf(),
+        ))
+        .unwrap();
+    let bob = store
+        .create_job(queued_job_for_user("bob", "bob", cwd.path().to_path_buf()))
+        .unwrap();
+
+    start_service(&home);
+    wait_for_state(&store, active, JobState::Running);
+
+    stoker_with_home(&home)
+        .args([
+            "commit",
+            &alice_first.to_string(),
+            &alice_second.to_string(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Committed 2 DRAFT job(s)."));
+    assert_eq!(
+        store
+            .list_jobs_with_state(None, Some(JobState::Queued))
+            .unwrap()
+            .iter()
+            .map(|job| job.id)
+            .collect::<Vec<_>>(),
+        [alice_first, alice_second]
+    );
+
+    let alice_third = store
+        .create_job(queued_job_for_user(
+            "alice-third",
+            "alice",
+            cwd.path().to_path_buf(),
+        ))
+        .unwrap();
+    stoker_with_home(&home)
+        .args(["commit", "--user", "alice"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Committed 1 DRAFT job(s) for user 'alice'.",
+        ));
+    assert_eq!(store.get_job(alice_third).unwrap().state, JobState::Queued);
+    assert_eq!(store.get_job(bob).unwrap().state, JobState::Draft);
+
+    stoker_with_home(&home)
+        .args(["commit", "--user", "charlie"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "No DRAFT jobs found for user 'charlie'.",
+        ));
+
+    stoker_with_home(&home)
+        .args(["stop", "--yes"])
         .assert()
         .success();
 }

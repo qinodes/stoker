@@ -373,6 +373,77 @@ fn commit_all_drafts_uses_creation_time_order() {
 }
 
 #[test]
+fn commit_jobs_preserves_input_order_and_is_atomic() {
+    let store = test_store();
+    let first = store.create_job(new_job_named("first")).unwrap();
+    let second = store.create_job(new_job_named("second")).unwrap();
+    let third = store.create_job(new_job_named("third")).unwrap();
+
+    let committed = store.commit_jobs(&[third, first]).unwrap();
+    assert_eq!(
+        committed.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [third, first]
+    );
+    assert_eq!(
+        committed
+            .iter()
+            .map(|job| job.queue_order)
+            .collect::<Vec<_>>(),
+        [Some(1), Some(2)]
+    );
+    assert_eq!(store.get_job(second).unwrap().state, JobState::Draft);
+
+    let error = store.commit_jobs(&[second, first]).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::InvalidTransition {
+            id,
+            state: JobState::Queued,
+            action: "commit"
+        } if id == first
+    ));
+    assert_eq!(store.get_job(second).unwrap().state, JobState::Draft);
+    assert_eq!(store.get_job(first).unwrap().state, JobState::Queued);
+
+    let missing = Uuid::new_v4();
+    assert!(matches!(
+        store.commit_jobs(&[second, missing]),
+        Err(StoreError::NotFound { id }) if id == missing
+    ));
+    assert_eq!(store.get_job(second).unwrap().state, JobState::Draft);
+
+    let duplicate = store.create_job(new_job_named("duplicate")).unwrap();
+    let error = store.commit_jobs(&[duplicate, duplicate]).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::InvalidTransition {
+            id,
+            state: JobState::Draft,
+            action: "commit"
+        } if id == duplicate
+    ));
+    assert_eq!(store.get_job(duplicate).unwrap().state, JobState::Draft);
+}
+
+#[test]
+fn commit_user_drafts_only_commits_the_selected_user() {
+    let store = test_store();
+    let alice_first = store.create_job(new_job_named("alice-first")).unwrap();
+    let alice_second = store.create_job(new_job_named("alice-second")).unwrap();
+    let bob = store
+        .create_job(NewJob {
+            user: "bob".into(),
+            ..new_job_named("bob")
+        })
+        .unwrap();
+    store.commit_user_drafts("alice").unwrap();
+
+    assert_eq!(store.get_job(alice_first).unwrap().state, JobState::Queued);
+    assert_eq!(store.get_job(alice_second).unwrap().state, JobState::Queued);
+    assert_eq!(store.get_job(bob).unwrap().state, JobState::Draft);
+}
+
+#[test]
 fn legacy_database_migrates_queued_jobs_to_queue_order() {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("stoker.db");

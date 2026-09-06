@@ -112,6 +112,9 @@ stoker commit <JOB_ID>
 # または、すべての DRAFT Job を作成時間順に queue へ追加
 stoker commit --all
 
+# または、指定した論理ユーザーのすべての DRAFT Job を queue へ追加
+stoker commit --user alice
+
 # すべての Job と現在の状態を一覧表示
 stoker jobs
 ```
@@ -121,7 +124,7 @@ flowchart TD
     S[Scheduler] -->|stoker start| R[バックグラウンドで実行]
     R -->|stoker status| T[Scheduler の状態を確認]
     D[対象ディレクトリ] -->|stoker add| J[DRAFT Job<br/>JOB_ID を出力]
-    J -->|stoker commit JOB_ID / --all| Q[QUEUED]
+    J -->|stoker commit JOB_ID... / --all / --user| Q[QUEUED]
     J -.->|stoker jobs| L[JOB_ID を確認<br/>Job の状態を表示]
     Q --> E[queue の順番に<br/>一つずつ実行]
 ```
@@ -145,8 +148,12 @@ stoker add --user <任意のユーザー名> --name <Job 名> --cmd "<実行す�
 stoker show <JOB_ID>
 # Job を送信（DRAFT -> QUEUED）
 stoker commit <JOB_ID>
+# 複数の Job を指定した順番で queue に追加
+stoker commit <JOB_ID_1> <JOB_ID_2>
 # すべての DRAFT Job を作成時間順に queue へ追加
 stoker commit --all
+# 指定した論理ユーザーの DRAFT Job を作成時間順に queue へ追加
+stoker commit --user <ユーザー名>
 
 # queued Job の順序を変更する前にロックし、完了後に明示的に解除
 stoker queue lock
@@ -295,7 +302,7 @@ stoker show <JOB_ID> --timezone UTC
 
 編集前に `stoker queue lock`、編集後に `stoker queue unlock` を実行します。
 
-ロック中は `stoker commit` と `stoker commit --all` は使えませんが、`cancel` と `add` は使用できます。
+ロック中は `stoker commit`、`stoker commit --all`、`stoker commit --user` は使えませんが、`cancel` と `add` は使用できます。
 
 `stoker queue edit` はロック中のみ使用できます。
 

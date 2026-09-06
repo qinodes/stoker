@@ -14,14 +14,16 @@ use uuid::Uuid;
 
 use crate::{Job, StokerPaths};
 
-pub const IPC_VERSION: u16 = 2;
+pub const IPC_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum IpcRequest {
     Status,
     Stop,
     Commit { id: Uuid },
+    CommitMany { ids: Vec<Uuid> },
     CommitAll,
+    CommitUser { user: String },
     Cancel { id: Uuid },
     FollowLogs { id: Uuid },
     LockQueue,
@@ -194,8 +196,24 @@ impl ServiceClient {
         }
     }
 
+    pub async fn commit_many(&self, ids: Vec<Uuid>) -> anyhow::Result<usize> {
+        match self.request(IpcRequest::CommitMany { ids }).await? {
+            IpcResponse::JobCount { count } => Ok(count),
+            IpcResponse::Error { message } => anyhow::bail!("{message}"),
+            _ => anyhow::bail!("service returned an invalid commit response"),
+        }
+    }
+
     pub async fn commit_all(&self) -> anyhow::Result<usize> {
         match self.request(IpcRequest::CommitAll).await? {
+            IpcResponse::JobCount { count } => Ok(count),
+            IpcResponse::Error { message } => anyhow::bail!("{message}"),
+            _ => anyhow::bail!("service returned an invalid commit response"),
+        }
+    }
+
+    pub async fn commit_user(&self, user: String) -> anyhow::Result<usize> {
+        match self.request(IpcRequest::CommitUser { user }).await? {
             IpcResponse::JobCount { count } => Ok(count),
             IpcResponse::Error { message } => anyhow::bail!("{message}"),
             _ => anyhow::bail!("service returned an invalid commit response"),
@@ -404,6 +422,12 @@ mod tests {
         let id = Uuid::nil();
         for request in [
             IpcRequest::Status,
+            IpcRequest::Commit { id },
+            IpcRequest::CommitMany { ids: vec![id] },
+            IpcRequest::CommitAll,
+            IpcRequest::CommitUser {
+                user: "alice".to_owned(),
+            },
             IpcRequest::LockQueue,
             IpcRequest::UnlockQueue,
             IpcRequest::MoveQueued {
@@ -538,10 +562,10 @@ mod unix_client_tests {
         Fut: Future<Output = anyhow::Result<T>>,
     {
         let (_directory, client, task) = client_with_responses(vec![response]).await;
-        let error = match operation(client).await {
-            Ok(_) => panic!("operation unexpectedly succeeded"),
-            Err(error) => error,
-        };
+        let error = operation(client)
+            .await
+            .err()
+            .expect("operation unexpectedly succeeded");
         assert!(error.to_string().contains(expected), "{error:#}");
         task.await.unwrap();
     }
@@ -654,6 +678,34 @@ mod unix_client_tests {
         )
         .await;
         assert_response_error(
+            IpcResponse::Error {
+                message: "commit many failed".into(),
+            },
+            |client| async move { client.commit_many(vec![id]).await },
+            "commit many failed",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Ack,
+            |client| async move { client.commit_many(vec![id]).await },
+            "invalid commit",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Error {
+                message: "commit user failed".into(),
+            },
+            |client| async move { client.commit_user("alice".to_owned()).await },
+            "commit user failed",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Ack,
+            |client| async move { client.commit_user("alice".to_owned()).await },
+            "invalid commit",
+        )
+        .await;
+        assert_response_error(
             IpcResponse::Status(sample_status()),
             |client| async move { client.commit_all().await },
             "invalid commit",
@@ -671,6 +723,19 @@ mod unix_client_tests {
         let (_directory, client, task) =
             client_with_responses(vec![IpcResponse::JobCount { count: 3 }]).await;
         assert_eq!(client.commit_all().await.unwrap(), 3);
+        task.await.unwrap();
+
+        let (_directory, client, task) =
+            client_with_responses(vec![IpcResponse::JobCount { count: 2 }]).await;
+        assert_eq!(
+            client.commit_many(vec![id, Uuid::new_v4()]).await.unwrap(),
+            2
+        );
+        task.await.unwrap();
+
+        let (_directory, client, task) =
+            client_with_responses(vec![IpcResponse::JobCount { count: 4 }]).await;
+        assert_eq!(client.commit_user("alice".to_owned()).await.unwrap(), 4);
         task.await.unwrap();
 
         let (_directory, client, task) = client_with_responses(vec![IpcResponse::Ack]).await;
@@ -760,5 +825,102 @@ mod unix_client_tests {
         let error = client.follow_logs(Uuid::nil()).await.unwrap_err();
         assert!(error.to_string().contains("closed the log stream"));
         task.await.unwrap();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_client_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use std::future::Future;
+    use std::path::Path;
+    use tokio::net::windows::named_pipe::ServerOptions;
+    use tokio::task::JoinHandle;
+    use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+    fn paths(root: &Path) -> StokerPaths {
+        StokerPaths {
+            root: root.to_path_buf(),
+            database: root.join("stoker.db"),
+            runs: root.join("runs"),
+            lock: root.join("stoker.lock"),
+            endpoint: root.join("stoker.sock"),
+        }
+    }
+
+    async fn client_with_response(
+        response: IpcResponse,
+    ) -> (tempfile::TempDir, ServiceClient, JoinHandle<()>) {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let server = ServerOptions::new().create(paths.ipc_endpoint()).unwrap();
+        let task = tokio::spawn(async move {
+            server.connect().await.unwrap();
+            let mut framed = Framed::new(server, LengthDelimitedCodec::new());
+            let _request = framed.next().await.unwrap().unwrap();
+            framed
+                .send(encode_response(&response).unwrap().into())
+                .await
+                .unwrap();
+        });
+        (directory, ServiceClient::new(paths), task)
+    }
+
+    async fn assert_response_error<T, F, Fut>(response: IpcResponse, operation: F, expected: &str)
+    where
+        F: FnOnce(ServiceClient) -> Fut,
+        Fut: Future<Output = anyhow::Result<T>>,
+    {
+        let (_directory, client, task) = client_with_response(response).await;
+        let error = operation(client)
+            .await
+            .err()
+            .expect("operation unexpectedly succeeded");
+        assert!(error.to_string().contains(expected), "{error:#}");
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn commit_batch_clients_handle_success_errors_and_invalid_responses() {
+        let id = Uuid::nil();
+
+        let (_directory, client, task) =
+            client_with_response(IpcResponse::JobCount { count: 2 }).await;
+        assert_eq!(client.commit_many(vec![id]).await.unwrap(), 2);
+        task.await.unwrap();
+
+        let (_directory, client, task) =
+            client_with_response(IpcResponse::JobCount { count: 4 }).await;
+        assert_eq!(client.commit_user("alice".to_owned()).await.unwrap(), 4);
+        task.await.unwrap();
+
+        assert_response_error(
+            IpcResponse::Error {
+                message: "commit many failed".into(),
+            },
+            |client| async move { client.commit_many(vec![id]).await },
+            "commit many failed",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Ack,
+            |client| async move { client.commit_many(vec![id]).await },
+            "invalid commit",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Error {
+                message: "commit user failed".into(),
+            },
+            |client| async move { client.commit_user("alice".to_owned()).await },
+            "commit user failed",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Ack,
+            |client| async move { client.commit_user("alice".to_owned()).await },
+            "invalid commit",
+        )
+        .await;
     }
 }

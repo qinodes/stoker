@@ -73,8 +73,35 @@ impl Scheduler {
         Ok(job)
     }
 
+    pub fn handle_commit_many(
+        &self,
+        ids: &[Uuid],
+        wake: &watch::Sender<u64>,
+    ) -> anyhow::Result<Vec<Job>> {
+        let jobs = self.store.commit_jobs(ids).context("commit jobs")?;
+        if !jobs.is_empty() {
+            wake.send_modify(|value| *value = value.wrapping_add(1));
+        }
+        Ok(jobs)
+    }
+
     pub fn handle_commit_all(&self, wake: &watch::Sender<u64>) -> anyhow::Result<Vec<Job>> {
         let jobs = self.store.commit_all_drafts().context("commit all jobs")?;
+        if !jobs.is_empty() {
+            wake.send_modify(|value| *value = value.wrapping_add(1));
+        }
+        Ok(jobs)
+    }
+
+    pub fn handle_commit_user(
+        &self,
+        user: &str,
+        wake: &watch::Sender<u64>,
+    ) -> anyhow::Result<Vec<Job>> {
+        let jobs = self
+            .store
+            .commit_user_drafts(user)
+            .context("commit user jobs")?;
         if !jobs.is_empty() {
             wake.send_modify(|value| *value = value.wrapping_add(1));
         }

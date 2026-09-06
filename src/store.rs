@@ -41,6 +41,8 @@ INSERT OR IGNORE INTO settings (id, queue_locked) VALUES (1, 0);
 const INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS jobs_state_queue_order_id
     ON jobs (state, queue_order, id);
+CREATE INDEX IF NOT EXISTS jobs_user_state_created_at_id
+    ON jobs (user, state, created_at, id);
 "#;
 
 #[derive(Debug, Error)]
@@ -252,67 +254,45 @@ impl Store {
     }
 
     pub fn commit_job(&self, id: Uuid) -> Result<Job, StoreError> {
+        self.commit_jobs(&[id])?
+            .into_iter()
+            .next()
+            .ok_or(StoreError::NotFound { id })
+    }
+
+    pub fn commit_jobs(&self, ids: &[Uuid]) -> Result<Vec<Job>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_queue_unlocked(&tx)?;
-        let state = self.current_state(&tx, id)?;
-        if state != JobState::Draft {
-            return Err(StoreError::InvalidTransition {
-                id,
-                state,
-                action: "commit",
-            });
+        for id in ids {
+            let state = self.current_state(&tx, *id)?;
+            if state != JobState::Draft {
+                return Err(StoreError::InvalidTransition {
+                    id: *id,
+                    state,
+                    action: "commit",
+                });
+            }
         }
-        let queue_order = next_queue_order(&tx)?;
-        if tx.execute(
-            "UPDATE jobs SET state = 'QUEUED', queue_order = ?2, committed_at = ?3
-             WHERE id = ?1 AND state = 'DRAFT'",
-            params![id.to_string(), queue_order, Utc::now().to_rfc3339()],
-        )? != 1
-        {
-            return Err(StoreError::InvalidTransition {
-                id,
-                state: JobState::Draft,
-                action: "commit",
-            });
-        }
-        normalize_queue(&tx)?;
-        let job = get_job_with(&tx, id)?;
+        let jobs = commit_draft_ids(&tx, ids)?;
         tx.commit()?;
-        Ok(job)
+        Ok(jobs)
     }
 
     pub fn commit_all_drafts(&self) -> Result<Vec<Job>, StoreError> {
+        self.commit_drafts_for_user(None)
+    }
+
+    pub fn commit_user_drafts(&self, user: &str) -> Result<Vec<Job>, StoreError> {
+        self.commit_drafts_for_user(Some(user))
+    }
+
+    fn commit_drafts_for_user(&self, user: Option<&str>) -> Result<Vec<Job>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         ensure_queue_unlocked(&tx)?;
-        let ids = tx
-            .prepare(
-                "SELECT id FROM jobs WHERE state = 'DRAFT'
-                 ORDER BY created_at, id",
-            )?
-            .query_map([], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        let first_order = next_queue_order(&tx)?;
-        let committed_at = Utc::now().to_rfc3339();
-        for (index, id) in ids.iter().enumerate() {
-            tx.execute(
-                "UPDATE jobs SET state = 'QUEUED', queue_order = ?2, committed_at = ?3
-                 WHERE id = ?1 AND state = 'DRAFT'",
-                params![
-                    id,
-                    first_order + i64::try_from(index).expect("queue length fits i64"),
-                    committed_at,
-                ],
-            )?;
-        }
-        if !ids.is_empty() {
-            normalize_queue(&tx)?;
-        }
-        let jobs = ids
-            .into_iter()
-            .map(|id| get_job_with(&tx, parse_uuid(&id)?))
-            .collect::<Result<Vec<_>, _>>()?;
+        let ids = draft_ids(&tx, user)?;
+        let jobs = commit_draft_ids(&tx, &ids)?;
         tx.commit()?;
         Ok(jobs)
     }
@@ -794,6 +774,62 @@ fn ensure_queue_unlocked(conn: &Connection) -> Result<(), StoreError> {
     } else {
         Ok(())
     }
+}
+
+fn draft_ids(conn: &Connection, user: Option<&str>) -> Result<Vec<Uuid>, StoreError> {
+    let ids = {
+        let mut statement = match user {
+            Some(_) => conn.prepare(
+                "SELECT id FROM jobs
+                 WHERE user = ?1 AND state = 'DRAFT'
+                 ORDER BY created_at, id",
+            )?,
+            None => conn.prepare(
+                "SELECT id FROM jobs
+                 WHERE state = 'DRAFT'
+                 ORDER BY created_at, id",
+            )?,
+        };
+        match user {
+            Some(user) => statement
+                .query_map([user], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?,
+            None => statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?,
+        }
+    };
+    ids.into_iter().map(|id| parse_uuid(&id)).collect()
+}
+
+fn commit_draft_ids(conn: &Connection, ids: &[Uuid]) -> Result<Vec<Job>, StoreError> {
+    let first_order = next_queue_order(conn)?;
+    let committed_at = Utc::now().to_rfc3339();
+    for (index, id) in ids.iter().enumerate() {
+        if conn.execute(
+            "UPDATE jobs SET state = 'QUEUED', queue_order = ?2, committed_at = ?3
+             WHERE id = ?1 AND state = 'DRAFT'",
+            params![
+                id.to_string(),
+                first_order + i64::try_from(index).expect("queue length fits i64"),
+                committed_at,
+            ],
+        )? != 1
+        {
+            return Err(StoreError::InvalidTransition {
+                id: *id,
+                state: JobState::Draft,
+                action: "commit",
+            });
+        }
+    }
+    if !ids.is_empty() {
+        normalize_queue(conn)?;
+    }
+    ids.iter()
+        .copied()
+        .map(|id| get_job_with(conn, id))
+        .collect()
 }
 
 fn next_queue_order(conn: &Connection) -> Result<i64, StoreError> {

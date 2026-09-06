@@ -382,12 +382,26 @@ async fn handle_client<S>(
                     message: format!("{error:#}"),
                 },
             },
+            IpcRequest::CommitMany { ids } => match scheduler.handle_commit_many(&ids, &wake_tx) {
+                Ok(jobs) => IpcResponse::JobCount { count: jobs.len() },
+                Err(error) => IpcResponse::Error {
+                    message: format!("{error:#}"),
+                },
+            },
             IpcRequest::CommitAll => match scheduler.handle_commit_all(&wake_tx) {
                 Ok(jobs) => IpcResponse::JobCount { count: jobs.len() },
                 Err(error) => IpcResponse::Error {
                     message: format!("{error:#}"),
                 },
             },
+            IpcRequest::CommitUser { user } => {
+                match scheduler.handle_commit_user(&user, &wake_tx) {
+                    Ok(jobs) => IpcResponse::JobCount { count: jobs.len() },
+                    Err(error) => IpcResponse::Error {
+                        message: format!("{error:#}"),
+                    },
+                }
+            }
             IpcRequest::Cancel { id } => match scheduler.handle_cancel(id).await {
                 Ok(_) => IpcResponse::Ack,
                 Err(error) => IpcResponse::Error {
@@ -801,6 +815,24 @@ mod tests {
             request_response(Arc::clone(&scheduler), IpcRequest::CommitAll).await,
             IpcResponse::JobCount { count: 0 }
         );
+        assert_eq!(
+            request_response(
+                Arc::clone(&scheduler),
+                IpcRequest::CommitMany { ids: Vec::new() },
+            )
+            .await,
+            IpcResponse::JobCount { count: 0 }
+        );
+        assert_eq!(
+            request_response(
+                Arc::clone(&scheduler),
+                IpcRequest::CommitUser {
+                    user: "alice".into(),
+                },
+            )
+            .await,
+            IpcResponse::JobCount { count: 0 }
+        );
         let response =
             request_response(Arc::clone(&scheduler), IpcRequest::Cancel { id: missing }).await;
         assert!(
@@ -812,6 +844,24 @@ mod tests {
             IpcResponse::Ack
         );
         let response = request_response(Arc::clone(&scheduler), IpcRequest::CommitAll).await;
+        assert!(
+            matches!(response, IpcResponse::Error { message } if message.contains("queue is locked"))
+        );
+        let response = request_response(
+            Arc::clone(&scheduler),
+            IpcRequest::CommitMany { ids: Vec::new() },
+        )
+        .await;
+        assert!(
+            matches!(response, IpcResponse::Error { message } if message.contains("queue is locked"))
+        );
+        let response = request_response(
+            Arc::clone(&scheduler),
+            IpcRequest::CommitUser {
+                user: "alice".into(),
+            },
+        )
+        .await;
         assert!(
             matches!(response, IpcResponse::Error { message } if message.contains("queue is locked"))
         );

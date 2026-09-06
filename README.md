@@ -115,6 +115,9 @@ stoker commit <JOB_ID>
 # Or commit all DRAFT jobs in creation order
 stoker commit --all
 
+# Or commit all DRAFT jobs belonging to one logical user
+stoker commit --user alice
+
 # List all jobs and their current states
 stoker jobs
 ```
@@ -124,7 +127,7 @@ flowchart TD
     S[Scheduler] -->|stoker start| R[Runs in the background]
     R -->|stoker status| T[Check scheduler status]
     D[Target directory] -->|stoker add| J[DRAFT job<br/>JOB_ID is printed]
-    J -->|stoker commit JOB_ID / --all| Q[QUEUED]
+    J -->|stoker commit JOB_ID... / --all / --user| Q[QUEUED]
     J -.->|stoker jobs| L[Find JOB_ID<br/>and view job states]
     Q --> E[Jobs run one at a time<br/>in queue order]
 ```
@@ -149,8 +152,12 @@ stoker add --user <USER_NAME> --name <JOB_NAME> --cmd "<COMMAND>"
 stoker show <JOB_ID>
 # Add the job (DRAFT -> QUEUED)
 stoker commit <JOB_ID>
+# Add multiple selected jobs in the order given
+stoker commit <JOB_ID_1> <JOB_ID_2>
 # Add every DRAFT job to the queue in creation order
 stoker commit --all
+# Add every DRAFT job for one logical user in creation order
+stoker commit --user <USER_NAME>
 
 # Lock the queue before reordering queued jobs, then unlock it explicitly
 stoker queue lock
@@ -302,7 +309,7 @@ You can check the queue status with `stoker status`.
 
 Run `stoker queue lock` before editing and `stoker queue unlock` when you are done.
 
-While locked, `stoker commit` and `stoker commit --all` are unavailable, but `cancel` and `add` remain available.
+While locked, `stoker commit`, `stoker commit --all`, and `stoker commit --user` are unavailable, but `cancel` and `add` remain available.
 
 `stoker queue edit` requires a locked queue.
 
