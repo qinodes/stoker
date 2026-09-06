@@ -25,6 +25,14 @@ Stoker は Job の状態とログをローカルの SQLite に保存します。
 
 - 各 Job はデフォルトで、コマンドを登録したディレクトリ（`stoker add` を実行した場所）から実行されます。
 
+## Web UI デモ
+
+<p align="center">
+  <img src="assets/ui-demo.png" alt="Stoker Web UI デモ">
+</p>
+
+> Web UI では現在 `stoker add` を実行できません。Job の登録には CLI を使用してください。
+
 ## インストール
 
 ### ワンラインインストーラー（推奨）

@@ -25,6 +25,14 @@ Stoker 使用本機 SQLite 保存 Job 狀態與日誌，不需要 Redis、Postgr
 
 - 每個 Job 默認都會從你提交指令時(`stoker add`)所在的資料夾執行。
 
+## Web UI 展示
+
+<p align="center">
+  <img src="assets/ui-demo.png" alt="Stoker Web UI 展示">
+</p>
+
+> Web UI 目前無法執行 `stoker add`；請使用 CLI 提交 Job。
+
 ## 安裝
 
 ### 一行安裝指令（推薦）

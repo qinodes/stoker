@@ -25,6 +25,14 @@ Stoker uses a local SQLite database for job state and logs. No Redis, PostgreSQL
 
 - Each Job runs by default from the directory where you submit the command (`stoker add`).
 
+## Web UI demo
+
+<p align="center">
+  <img src="assets/ui-demo.png" alt="Stoker web UI">
+</p>
+
+> Job submission with `stoker add` is not available in the Web UI; use the CLI to submit jobs.
+
 ## Installation
 
 ### One-line installer (recommended)
