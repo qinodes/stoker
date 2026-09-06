@@ -6,18 +6,19 @@ release.
 The release flow is:
 
 ```text
-check -> push vX.Y.Z -> CI -> merge to main -> tag -> release -> Release workflow -> publish
+check -> push formal/vX.Y.Z -> CI -> merge to main -> tag -> release -> Release workflow -> publish
 ```
 
 ## Prerequisites
 
-- Work on a version branch named with the release version, such as `v1.3.0`.
+- Work on a formal release branch named `formal/vX.Y.Z`, such as
+  `formal/v1.3.0`.
 - Choose the next SemVer version and update it in `Cargo.toml`; verify that
   `Cargo.lock` and user-visible version references agree.
-- Commit the release changes and push the version branch before merging it into
-  `main`.
-- Wait for the CI workflow to pass on the version branch before merging it into
-  `main`.
+- Commit the release changes and push the formal release branch before merging
+  it into `main`.
+- Wait for the CI workflow to pass on the formal release branch before merging
+  it into `main`.
 - Configure your crates.io token once with `cargo login`.
 - Use a version that has not already been published to crates.io.
 
@@ -38,24 +39,25 @@ that concurrency and resource-competition issues can be detected. If you need
 to diagnose a test that is sensitive to shared resources, rerun it with
 `cargo test -- --test-threads=1`. Do not continue if any check fails.
 
-## 2. Push the version branch and wait for CI
+## 2. Push the formal release branch and wait for CI
 
-Commit the intended release changes on the version branch, then push it. For a
-`1.3.0` release, the branch name is `v1.3.0`:
+Commit the intended release changes on the formal release branch, then push it. For a
+`1.3.0` release, the branch name is `formal/v1.3.0`:
 
 ```bash
 make git-formal-push
 ```
 
 Wait for the CI workflow to pass on GitHub before continuing. The CI workflow
-is configured to run for version branches matching `vX.Y.Z`; Markdown-only
+is configured to run for formal release branches matching `formal/vX.Y.Z`; Markdown-only
 changes remain ignored. `make git-formal-push` detects the current branch,
-verifies that it exactly matches `vX.Y.Z`, and pushes that branch to `origin`.
-It stops with an error if the branch is detached or has a different name.
+verifies that it exactly matches `formal/vX.Y.Z`, and pushes that branch to
+`origin`. It stops with an error if the branch is detached or has a different
+name.
 
-## 3. Merge the version branch into `main`
+## 3. Merge the formal release branch into `main`
 
-After CI passes, merge the version branch into `main`. Confirm that the merge
+After CI passes, merge the formal release branch into `main`. Confirm that the merge
 contains the exact commit that passed CI before creating the release tag.
 
 ## 4. Create the release tag
@@ -66,8 +68,9 @@ make tag
 
 `make tag` reads the package version from `Cargo.toml` and creates an annotated
 Git tag with the corresponding `v` prefix, such as `v1.2.1`, on the current
-commit. Run it on `main` after the version branch has been merged, and verify
-that the current commit contains the version branch commit that passed CI. The
+commit. Run it on `main` after the formal release branch has been merged, and
+verify that the current commit contains the formal release branch commit that
+passed CI. The
 command does not update `Cargo.toml` or create a release commit. An explicit
 `VERSION=x.y.z` override is supported when needed, but normally no version
 argument is required.
@@ -107,13 +110,13 @@ cannot be published again with different contents.
 ## Complete example
 
 ```bash
-git switch -c v1.2.1
+git switch -c formal/v1.2.1
 make version VERSION=1.2.1
 make check
 git add Cargo.toml Cargo.lock
 git commit -m "release: prepare v1.2.1"
 make git-formal-push
-# Wait for CI to pass, then merge v1.2.1 into main.
+# Wait for CI to pass, then merge formal/v1.2.1 into main.
 git switch main
 git pull --ff-only origin main
 make tag

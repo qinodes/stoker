@@ -77,21 +77,21 @@ tag:
 
 git-formal-push:
 ifeq ($(OS),Windows_NT)
-	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$branch = (git branch --show-current).Trim(); if ($$branch -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$$') { Write-Error 'Current branch must match vX.Y.Z, for example v1.3.0'; exit 1 }; Write-Host ('Pushing formal release branch ' + $$branch); git push origin $$branch"
+	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$branch = (git branch --show-current).Trim(); if ($$branch -notmatch '^formal/v[0-9]+\.[0-9]+\.[0-9]+$$') { Write-Error 'Current branch must match formal/vX.Y.Z, for example formal/v1.3.0'; exit 1 }; Write-Host ('Pushing formal release branch ' + $$branch); git push origin $$branch"
 else
 	@branch="$$(git branch --show-current)"; \
 	if [ -z "$$branch" ]; then \
-		echo "Current branch must match vX.Y.Z; detached HEAD is not allowed." >&2; exit 1; \
+		echo "Current branch must match formal/vX.Y.Z; detached HEAD is not allowed." >&2; exit 1; \
 	fi; \
-	if ! printf '%s\n' "$$branch" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$$'; then \
-		echo "Current branch '$$branch' must match vX.Y.Z, for example v1.3.0." >&2; exit 1; \
+	if ! printf '%s\n' "$$branch" | grep -Eq '^formal/v[0-9]+\.[0-9]+\.[0-9]+$$'; then \
+		echo "Current branch '$$branch' must match formal/vX.Y.Z, for example formal/v1.3.0." >&2; exit 1; \
 	fi; \
 	echo "Pushing formal release branch $$branch"; \
 	git push origin "$$branch"
 endif
 
 release:
-	git push origin "$(TAG)"
+	git push origin "refs/tags/$(TAG)"
 
 publish:
 	cargo publish
