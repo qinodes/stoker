@@ -50,18 +50,20 @@ release tag together with `main`.
 ## 3. Create the release tag
 
 ```bash
-make tag VERSION=1.2.1
+make tag
 ```
 
-This creates an annotated Git tag named `v1.2.1` on the current commit. The
-current commit must be the one that passed CI. The command does not update
-`Cargo.toml` or create a release commit. Replace `1.2.1` with the version
-already set in `Cargo.toml`.
+`make tag` reads the package version from `Cargo.toml` and creates an annotated
+Git tag with the corresponding `v` prefix, such as `v1.2.1`, on the current
+commit. The current commit must be the one that passed CI. The command does not
+update `Cargo.toml` or create a release commit. An explicit `VERSION=x.y.z`
+override is supported when needed, but normally no version argument is
+required.
 
 ## 4. Push the release tag
 
 ```bash
-make release VERSION=1.2.1
+make release
 ```
 
 This pushes only the annotated release tag to `origin`.
@@ -93,8 +95,8 @@ make version VERSION=1.2.1
 make check
 git push origin main
 # Wait for CI to pass on GitHub.
-make tag VERSION=1.2.1
-make release VERSION=1.2.1
+make tag
+make release
 # Wait for the Release workflow to pass on GitHub.
 make publish
 ```
