@@ -45,6 +45,10 @@ CREATE INDEX IF NOT EXISTS jobs_user_state_created_at_id
     ON jobs (user, state, created_at, id);
 "#;
 
+const COMMIT_DRAFT_SQL: &str =
+    "UPDATE jobs SET state = 'QUEUED', queue_order = ?2, committed_at = ?3
+    WHERE id = ?1 AND state = 'DRAFT'";
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("database error: {0}")]
@@ -778,18 +782,19 @@ fn ensure_queue_unlocked(conn: &Connection) -> Result<(), StoreError> {
 
 fn draft_ids(conn: &Connection, user: Option<&str>) -> Result<Vec<Uuid>, StoreError> {
     let ids = {
-        let mut statement = match user {
-            Some(_) => conn.prepare(
+        let query = match user {
+            Some(_) => {
                 "SELECT id FROM jobs
-                 WHERE user = ?1 AND state = 'DRAFT'
-                 ORDER BY created_at, id",
-            )?,
-            None => conn.prepare(
+                        WHERE user = ?1 AND state = 'DRAFT'
+                        ORDER BY created_at, id"
+            }
+            None => {
                 "SELECT id FROM jobs
-                 WHERE state = 'DRAFT'
-                 ORDER BY created_at, id",
-            )?,
+                     WHERE state = 'DRAFT'
+                     ORDER BY created_at, id"
+            }
         };
+        let mut statement = conn.prepare(query)?;
         match user {
             Some(user) => statement
                 .query_map([user], |row| row.get::<_, String>(0))?
@@ -806,16 +811,13 @@ fn commit_draft_ids(conn: &Connection, ids: &[Uuid]) -> Result<Vec<Job>, StoreEr
     let first_order = next_queue_order(conn)?;
     let committed_at = Utc::now().to_rfc3339();
     for (index, id) in ids.iter().enumerate() {
-        if conn.execute(
-            "UPDATE jobs SET state = 'QUEUED', queue_order = ?2, committed_at = ?3
-             WHERE id = ?1 AND state = 'DRAFT'",
-            params![
-                id.to_string(),
-                first_order + i64::try_from(index).expect("queue length fits i64"),
-                committed_at,
-            ],
-        )? != 1
-        {
+        let update_parameters = params![
+            id.to_string(),
+            first_order + i64::try_from(index).expect("queue length fits i64"),
+            committed_at,
+        ];
+        let updated = conn.execute(COMMIT_DRAFT_SQL, update_parameters)?;
+        if updated != 1 {
             return Err(StoreError::InvalidTransition {
                 id: *id,
                 state: JobState::Draft,

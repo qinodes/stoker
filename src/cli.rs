@@ -2063,13 +2063,40 @@ mod update_tests {
     }
 
     fn release_tag_with_patch_delta(delta: i64) -> String {
-        let mut version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        release_tag_from_version(Version::parse(env!("CARGO_PKG_VERSION")).unwrap(), delta)
+    }
+
+    fn release_tag_from_version(mut version: Version, delta: i64) -> String {
         if delta < 0 {
-            version.patch -= delta.unsigned_abs();
+            if version.patch > 0 {
+                version.patch -= 1;
+            } else if version.minor > 0 {
+                // Keep the older fixture valid when the package version is
+                // released at a .0 patch boundary, such as v1.3.0.
+                version.minor -= 1;
+            } else {
+                version.major = version.major.saturating_sub(1);
+            }
         } else {
             version.patch += delta as u64;
         }
         format!("v{version}")
+    }
+
+    #[test]
+    fn release_tag_patch_delta_handles_version_boundaries() {
+        assert_eq!(
+            release_tag_from_version(Version::new(1, 2, 3), -1),
+            "v1.2.2"
+        );
+        assert_eq!(
+            release_tag_from_version(Version::new(1, 2, 0), -1),
+            "v1.1.0"
+        );
+        assert_eq!(
+            release_tag_from_version(Version::new(0, 0, 0), -1),
+            "v0.0.0"
+        );
     }
 
     #[test]
