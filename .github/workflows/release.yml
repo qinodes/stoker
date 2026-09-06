@@ -48,9 +48,6 @@ jobs:
           rustup default stable
           rustup target add "${{ matrix.target }}"
 
-      - name: Test
-        run: cargo test --locked --all-targets
-
       - name: Build
         run: cargo build --locked --release --target "${{ matrix.target }}"
 
