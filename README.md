@@ -91,7 +91,7 @@ flowchart TD
     S[Scheduler] -->|stoker start| R[Runs in the background]
     R -->|stoker status| T[Check scheduler status]
     D[Target directory] -->|stoker add| J[DRAFT job<br/>JOB_ID is printed]
-    J -->|stoker commit &lt;JOB_ID&gt; / --all| Q[QUEUED]
+    J -->|stoker commit JOB_ID / --all| Q[QUEUED]
     J -.->|stoker jobs| L[Find JOB_ID<br/>and view job states]
     Q --> E[Jobs run one at a time<br/>in queue order]
 ```

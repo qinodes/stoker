@@ -92,7 +92,7 @@ flowchart TD
     S[Scheduler] -->|stoker start| R[背景執行]
     R -->|stoker status| T[查看 scheduler 狀態]
     D[目標目錄] -->|stoker add| J[DRAFT Job<br/>產生 JOB_ID]
-    J -->|stoker commit &lt;JOB_ID&gt; / --all| Q[QUEUED]
+    J -->|stoker commit JOB_ID / --all| Q[QUEUED]
     J -.->|stoker jobs| L[查詢 JOB_ID<br/>查看所有 Job 狀態]
     Q --> E[依 queue 順序<br/>一次執行一個]
 ```

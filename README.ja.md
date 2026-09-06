@@ -91,7 +91,7 @@ flowchart TD
     S[Scheduler] -->|stoker start| R[バックグラウンドで実行]
     R -->|stoker status| T[Scheduler の状態を確認]
     D[対象ディレクトリ] -->|stoker add| J[DRAFT Job<br/>JOB_ID を出力]
-    J -->|stoker commit &lt;JOB_ID&gt; / --all| Q[QUEUED]
+    J -->|stoker commit JOB_ID / --all| Q[QUEUED]
     J -.->|stoker jobs| L[JOB_ID を確認<br/>Job の状態を表示]
     Q --> E[queue の順番に<br/>一つずつ実行]
 ```
