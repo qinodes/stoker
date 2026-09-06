@@ -534,11 +534,14 @@ mod unix_client_tests {
 
     async fn assert_response_error<T, F, Fut>(response: IpcResponse, operation: F, expected: &str)
     where
-        F: FnOnce(&ServiceClient) -> Fut,
+        F: FnOnce(ServiceClient) -> Fut,
         Fut: Future<Output = anyhow::Result<T>>,
     {
         let (_directory, client, task) = client_with_responses(vec![response]).await;
-        let error = operation(&client).await.unwrap_err();
+        let error = match operation(client).await {
+            Ok(_) => panic!("operation unexpectedly succeeded"),
+            Err(error) => error,
+        };
         assert!(error.to_string().contains(expected), "{error:#}");
         task.await.unwrap();
     }
@@ -567,7 +570,12 @@ mod unix_client_tests {
                 message: "stale".into(),
             },
         ] {
-            assert_response_error(response, |client| client.status(), "invalid status").await;
+            assert_response_error(
+                response,
+                |client| async move { client.status().await },
+                "invalid status",
+            )
+            .await;
         }
         for response in [
             IpcResponse::LogChunk {
@@ -576,13 +584,18 @@ mod unix_client_tests {
             },
             IpcResponse::LogEnd,
         ] {
-            assert_response_error(response, |client| client.status(), "invalid status").await;
+            assert_response_error(
+                response,
+                |client| async move { client.status().await },
+                "invalid status",
+            )
+            .await;
         }
         assert_response_error(
             IpcResponse::Error {
                 message: "status failed".into(),
             },
-            |client| client.status(),
+            |client| async move { client.status().await },
             "status failed",
         )
         .await;
@@ -597,16 +610,36 @@ mod unix_client_tests {
             let response = IpcResponse::Status(sample_status());
             match operation {
                 "commit" => {
-                    assert_response_error(response, |client| client.commit(id), expected).await
+                    assert_response_error(
+                        response,
+                        |client| async move { client.commit(id).await },
+                        expected,
+                    )
+                    .await
                 }
                 "cancel" => {
-                    assert_response_error(response, |client| client.cancel(id), expected).await
+                    assert_response_error(
+                        response,
+                        |client| async move { client.cancel(id).await },
+                        expected,
+                    )
+                    .await
                 }
                 "lock queue" => {
-                    assert_response_error(response, |client| client.lock_queue(), expected).await
+                    assert_response_error(
+                        response,
+                        |client| async move { client.lock_queue().await },
+                        expected,
+                    )
+                    .await
                 }
                 "unlock queue" => {
-                    assert_response_error(response, |client| client.unlock_queue(), expected).await
+                    assert_response_error(
+                        response,
+                        |client| async move { client.unlock_queue().await },
+                        expected,
+                    )
+                    .await
                 }
                 _ => unreachable!(),
             }
@@ -616,13 +649,13 @@ mod unix_client_tests {
             IpcResponse::Error {
                 message: "commit failed".into(),
             },
-            |client| client.commit(id),
+            |client| async move { client.commit(id).await },
             "commit failed",
         )
         .await;
         assert_response_error(
             IpcResponse::Status(sample_status()),
-            |client| client.commit_all(),
+            |client| async move { client.commit_all().await },
             "invalid commit",
         )
         .await;
@@ -630,7 +663,7 @@ mod unix_client_tests {
             IpcResponse::Error {
                 message: "cancel failed".into(),
             },
-            |client| client.cancel(id),
+            |client| async move { client.cancel(id).await },
             "cancel failed",
         )
         .await;
@@ -652,7 +685,7 @@ mod unix_client_tests {
             IpcResponse::StaleQueueMove {
                 message: "job disappeared".into(),
             },
-            |client| client.move_queued(id, 1),
+            |client| async move { client.move_queued(id, 1).await },
             "job disappeared",
         )
         .await;
@@ -660,13 +693,13 @@ mod unix_client_tests {
             IpcResponse::Error {
                 message: "move failed".into(),
             },
-            |client| client.move_queued(id, 1),
+            |client| async move { client.move_queued(id, 1).await },
             "move failed",
         )
         .await;
         assert_response_error(
             IpcResponse::Status(sample_status()),
-            |client| client.move_queued(id, 1),
+            |client| async move { client.move_queued(id, 1).await },
             "invalid move queued",
         )
         .await;
@@ -680,7 +713,7 @@ mod unix_client_tests {
 
         assert_response_error(
             IpcResponse::Status(sample_status()),
-            |client| client.stop(),
+            |client| async move { client.stop().await },
             "invalid stop",
         )
         .await;
@@ -688,7 +721,7 @@ mod unix_client_tests {
             IpcResponse::Error {
                 message: "stop failed".into(),
             },
-            |client| client.stop(),
+            |client| async move { client.stop().await },
             "stop failed",
         )
         .await;
@@ -712,13 +745,13 @@ mod unix_client_tests {
             IpcResponse::Error {
                 message: "log follow failed".into(),
             },
-            |client| client.follow_logs(Uuid::nil()),
+            |client| async move { client.follow_logs(Uuid::nil()).await },
             "log follow failed",
         )
         .await;
         assert_response_error(
             IpcResponse::Ack,
-            |client| client.follow_logs(Uuid::nil()),
+            |client| async move { client.follow_logs(Uuid::nil()).await },
             "invalid log response",
         )
         .await;

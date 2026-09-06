@@ -933,8 +933,9 @@ mod tests {
         let (_directory, _store, scheduler) = scheduler_fixture();
         let id = Uuid::nil();
         let (stdout, stderr) = scheduler.log_paths(id);
-        assert!(stdout.ends_with(format!("{id}\\stdout.log")));
-        assert!(stderr.ends_with(format!("{id}\\stderr.log")));
+        let expected_run = PathBuf::from(id.to_string());
+        assert!(stdout.ends_with(expected_run.join("stdout.log")));
+        assert!(stderr.ends_with(expected_run.join("stderr.log")));
         assert!(scheduler.log_receiver(id).is_none());
         assert!(scheduler.job_exists(id).is_err());
     }
