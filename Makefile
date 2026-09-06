@@ -4,9 +4,22 @@ VERSION ?=
 TAG = v$(VERSION)
 MESSAGE = Release $(TAG)
 
-ifneq ($(filter version tag release,$(MAKECMDGOALS)),)
+ifneq ($(filter tag release,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VERSION)),)
-$(error VERSION is required, for example: make version VERSION=1.2.2 or make tag VERSION=1.2.2)
+ifeq ($(OS),Windows_NT)
+VERSION := $(shell powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "scripts/get-version.ps1")
+else
+VERSION := $(shell sh scripts/get-version.sh)
+endif
+endif
+ifeq ($(strip $(VERSION)),)
+$(error Could not read the stoker-engine version from Cargo.toml)
+endif
+endif
+
+ifneq ($(filter version,$(MAKECMDGOALS)),)
+ifeq ($(strip $(VERSION)),)
+$(error VERSION is required for make version, for example: make version VERSION=1.2.2)
 endif
 endif
 
@@ -60,7 +73,7 @@ endif
 
 tag:
 	git tag -a "$(TAG)" -m "$(MESSAGE)"
-	@echo "Tag $(TAG) created at the current commit. Verify CI before running 'make release VERSION=$(VERSION)'."
+	@echo "Tag $(TAG) created at the current commit. Verify CI before running 'make release'."
 
 release:
 	git push origin "$(TAG)"
