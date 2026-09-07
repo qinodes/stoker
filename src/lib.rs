@@ -8,6 +8,7 @@ pub(crate) mod queue_editor;
 pub mod scheduler;
 pub mod service;
 pub mod store;
+pub mod submission;
 pub mod ui;
 
 pub use config::StokerPaths;

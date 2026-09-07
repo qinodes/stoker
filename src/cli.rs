@@ -23,11 +23,15 @@ use crate::config::{
     ConfigSnapshot, ConfigSnapshotEntry, ConfigSnapshotFile, ConfigSnapshotReason,
     ResolvedTimezone, StokerConfig, TimezoneSource, normalize_path, resolve_timezone,
 };
-use crate::domain::{Job, JobState, NewJob};
+#[cfg(test)]
+use crate::domain::NewJob;
+use crate::domain::{Job, JobState};
 use crate::ipc::StaleQueueMoveError;
 use crate::output;
 use crate::queue_editor::{self, EditorMoveError};
 use crate::service::Service;
+#[cfg(test)]
+use crate::submission::parse_command_line;
 use crate::ui;
 use crate::{ServiceClient, StokerPaths, Store, StoreError, is_service_unavailable};
 
@@ -1674,23 +1678,21 @@ fn add(args: AddArgs) -> anyhow::Result<()> {
     if args.name.trim().is_empty() {
         anyhow::bail!("--name must not be empty");
     }
-    let command = parse_command_line(&args.command)?;
-
     let current_dir = std::env::current_dir().context("determine current directory")?;
     let cwd = normalize_path(
         current_dir
             .canonicalize()
             .context("resolve working directory")?,
     );
-    let id = open_store()?.create_shell_job(
-        NewJob {
-            name: args.name,
-            user: args.user,
-            cwd: cwd.clone(),
-            command,
-        },
+    let job = crate::submission::create_shell_job(
+        &open_store()?,
+        args.user,
+        args.name,
+        cwd,
         args.command,
     )?;
+    let id = job.id;
+    let cwd = job.cwd;
     print_success(format!("Created job {id} (DRAFT)"));
     println!("Working directory: {}", cwd.display());
     println!();
@@ -1711,80 +1713,6 @@ fn add(args: AddArgs) -> anyhow::Result<()> {
         )
     );
     Ok(())
-}
-
-fn parse_command_line(input: &str) -> anyhow::Result<Vec<String>> {
-    let mut tokens = Vec::new();
-    let mut token = String::new();
-    let mut token_started = false;
-    let mut quote = None;
-    let mut chars = input.chars().peekable();
-
-    while let Some(character) = chars.next() {
-        match quote {
-            Some('\'') => {
-                if character == '\'' {
-                    quote = None;
-                } else {
-                    token.push(character);
-                }
-            }
-            Some('"') => {
-                if character == '"' {
-                    quote = None;
-                } else if character == '\\' && matches!(chars.peek(), Some('"') | Some('\\')) {
-                    token.push(chars.next().expect("peeked character exists"));
-                } else {
-                    token.push(character);
-                }
-            }
-            Some(_) => unreachable!("command parser only uses single or double quotes"),
-            None if character.is_whitespace() => {
-                if token_started {
-                    tokens.push(std::mem::take(&mut token));
-                    token_started = false;
-                }
-            }
-            None if character == '\'' || character == '"' => {
-                quote = Some(character);
-                token_started = true;
-            }
-            None if character == '\\' => {
-                if matches!(
-                    chars.peek(),
-                    Some(' ') | Some('\t') | Some('\n') | Some('\'') | Some('"') | Some('\\')
-                ) {
-                    token.push(chars.next().expect("peeked character exists"));
-                } else {
-                    token.push(character);
-                }
-                token_started = true;
-            }
-            None if character == '&' && chars.peek() == Some(&'&') => {
-                if token_started {
-                    tokens.push(std::mem::take(&mut token));
-                    token_started = false;
-                }
-                chars.next();
-                tokens.push("&&".to_owned());
-            }
-            None => {
-                token.push(character);
-                token_started = true;
-            }
-        }
-    }
-
-    if let Some(quote) = quote {
-        anyhow::bail!("--cmd contains an unterminated {quote} quote");
-    }
-    if token_started {
-        tokens.push(token);
-    }
-    if tokens.is_empty() {
-        anyhow::bail!("--cmd must not be empty");
-    }
-    Ok(tokens)
 }
 
 fn show(id: Uuid, cli_timezone: Option<&str>) -> anyhow::Result<()> {

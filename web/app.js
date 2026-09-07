@@ -17,6 +17,10 @@
     loading: false,
     renderAfterLoad: false,
     configurationDraft: null,
+    jobDraft: { user: "", name: "", cwd: "", command: "" },
+    jobDialogOpen: false,
+    jobDialogView: "form",
+    filesystem: { roots: null, current: null, inputPath: "", loading: false, error: "", requestId: 0 },
     error: null,
   };
 
@@ -29,6 +33,8 @@
   const confirmMessage = document.getElementById("confirm-message");
   const confirmCancel = document.getElementById("confirm-cancel");
   const confirmAccept = document.getElementById("confirm-accept");
+  const jobDialog = document.getElementById("job-dialog");
+  const jobDialogContent = document.getElementById("job-dialog-content");
   let confirmationResolver = null;
 
   function getToken() {
@@ -218,10 +224,11 @@
     const users = [...new Set(state.jobs.map((job) => job.user))].sort();
     const terminalCount = state.jobs.filter((job) => isTerminalState(job.state)).length;
     app.innerHTML = `
-      <div class="page-heading"><div><div class="eyebrow">Workspace / Jobs</div><h1>All jobs</h1><p>Search every submission, inspect its working directory, and keep an eye on its lifecycle.</p></div><div class="page-actions"><button class="button secondary" id="jobs-refresh">Refresh jobs <span aria-hidden="true">↻</span></button><button class="button danger" id="jobs-clean" type="button" ${terminalCount ? "" : "disabled"}>Clean job history${terminalCount ? ` (${terminalCount})` : ""}</button></div></div>
+      <div class="page-heading"><div><div class="eyebrow">Workspace / Jobs</div><h1>All jobs</h1><p>Search every submission, inspect its working directory, and keep an eye on its lifecycle.</p></div><div class="page-actions"><button class="button primary" id="jobs-new" type="button">＋ New job</button><button class="button secondary" id="jobs-refresh">Refresh jobs <span aria-hidden="true">↻</span></button><button class="button danger" id="jobs-clean" type="button" ${terminalCount ? "" : "disabled"}>Clean job history${terminalCount ? ` (${terminalCount})` : ""}</button></div></div>
       <div class="toolbar"><input class="search-input" id="job-search" type="search" placeholder="Search job name, owner, ID, or path" value="${escapeAttribute(state.filters.search)}" aria-label="Search jobs"><div class="filter-group"><select class="select-input" id="user-filter" aria-label="Filter by owner"><option value="">All owners</option>${users.map((user) => `<option value="${escapeAttribute(user)}" ${user === state.filters.user ? "selected" : ""}>${escapeHtml(user)}</option>`).join("")}</select><select class="select-input" id="state-filter" aria-label="Filter by state"><option value="">All states</option>${["DRAFT", "QUEUED", "STARTING", "RUNNING", "CANCELLING", "SUCCEEDED", "FAILED", "CANCELLED", "LOST"].map((value) => `<option value="${value}" ${value === state.filters.state ? "selected" : ""}>${value}</option>`).join("")}</select></div></div>
       <section class="panel"><div class="panel-header"><div class="panel-title"><div><h2>${filtered.length} visible job${filtered.length === 1 ? "" : "s"}</h2><p>Server state · ${liveTime(new Date())}</p></div></div></div><div class="table-wrap"><table class="data-table jobs-table"><thead><tr><th>Job name</th><th>Owner</th><th>Path</th><th>State</th><th>Queue</th><th>Created</th></tr></thead><tbody>${filtered.length ? filtered.map(jobRow).join("") : emptyTableRow("No jobs match these filters.", 6)}</tbody></table></div></section>`;
     document.getElementById("jobs-refresh").addEventListener("click", loadData);
+    document.getElementById("jobs-new").addEventListener("click", openJobDialog);
     document.getElementById("jobs-clean").addEventListener("click", async () => {
       const confirmed = await openConfirmation({
         kicker: "Workspace cleanup",
@@ -240,6 +247,153 @@
     document.getElementById("user-filter").addEventListener("change", (event) => { state.filters.user = event.target.value; renderJobs(); });
     document.getElementById("state-filter").addEventListener("change", (event) => { state.filters.state = event.target.value; renderJobs(); });
     restoreFocus(focusSnapshot);
+  }
+
+  async function openJobDialog() {
+    state.jobDialogOpen = true;
+    state.jobDialogView = "form";
+    state.filesystem.error = "";
+    state.filesystem.loading = false;
+    if (!state.filesystem.roots) {
+      try {
+        const roots = await request("/api/v1/fs/roots");
+        state.filesystem.roots = roots;
+        if (!state.jobDraft.cwd) state.jobDraft.cwd = roots.default_path || "";
+      } catch (error) {
+        state.filesystem.error = error.message;
+      }
+    }
+    if (!jobDialog.open) jobDialog.showModal();
+    renderJobDialog();
+    const first = document.getElementById(state.jobDialogView === "form" ? "job-user" : "fs-path-input");
+    if (first) first.focus({ preventScroll: true });
+  }
+
+  function closeJobDialog() {
+    state.jobDialogOpen = false;
+    state.jobDialogView = "form";
+    if (jobDialog.open) jobDialog.close();
+  }
+
+  function renderJobDialog() {
+    if (!state.jobDialogOpen) return;
+    if (state.jobDialogView === "browser") renderFilesystemBrowser();
+    else renderJobForm();
+  }
+
+  function renderJobForm() {
+    const draft = state.jobDraft;
+    const users = [...new Set(state.jobs.map((job) => job.user).filter(Boolean))].sort();
+    jobDialogContent.innerHTML = `
+      <div class="dialog-card job-card">
+        <div class="dialog-kicker">Workspace / Jobs</div>
+        <div class="job-dialog-heading"><div><h2 id="job-dialog-title">New job</h2><p>Create a draft job. Commit it when you're ready to run.</p></div><button class="dialog-close" id="job-dialog-close" type="button" aria-label="Close new job">×</button></div>
+        <form id="new-job-form" novalidate>
+          <div class="job-form-grid">
+            <div class="job-field"><label for="job-user">Owner</label><input class="text-input" id="job-user" name="user" value="${escapeAttribute(draft.user)}" list="job-users" autocomplete="off" required><datalist id="job-users">${users.map((user) => `<option value="${escapeAttribute(user)}"></option>`).join("")}</datalist><small class="form-help">A logical label for this job.</small></div>
+            <div class="job-field"><label for="job-name">Job name</label><input class="text-input" id="job-name" name="name" value="${escapeAttribute(draft.name)}" autocomplete="off" required></div>
+          </div>
+          <div class="job-field"><label for="job-cwd">Working directory</label><div class="path-input-row"><input class="text-input mono-input" id="job-cwd" name="cwd" value="${escapeAttribute(draft.cwd)}" placeholder="Choose a folder on the Stoker host" required><button class="button secondary" id="job-browse" type="button">Browse</button></div><small class="form-help">Folders are read from the Stoker host.</small></div>
+          <div class="job-field"><label for="job-command">Command</label><textarea class="command-input" id="job-command" name="command" rows="4" placeholder="cargo build --release" required>${escapeHtml(draft.command)}</textarea><small class="form-help">Enter the command only; Stoker will keep the same quoting rules as <code>stoker add --cmd</code>.</small></div>
+          <div class="form-feedback ${state.filesystem.error ? "invalid" : ""}" id="job-form-feedback" aria-live="polite">${escapeHtml(state.filesystem.error)}</div>
+          <div class="dialog-actions"><button class="button secondary" id="job-cancel" type="button">Cancel</button><button class="button primary" id="job-create" type="submit">Create draft</button></div>
+        </form>
+      </div>`;
+    const form = document.getElementById("new-job-form");
+    ["user", "name", "cwd", "command"].forEach((field) => {
+      document.getElementById(`job-${field}`).addEventListener("input", (event) => { state.jobDraft[field] = event.target.value; });
+    });
+    document.getElementById("job-browse").addEventListener("click", () => {
+      state.jobDialogView = "browser";
+      renderFilesystemBrowser();
+      loadDirectories(state.jobDraft.cwd);
+    });
+    document.getElementById("job-cancel").addEventListener("click", closeJobDialog);
+    document.getElementById("job-dialog-close").addEventListener("click", closeJobDialog);
+    form.addEventListener("submit", submitNewJob);
+  }
+
+  async function submitNewJob(event) {
+    event.preventDefault();
+    const draft = state.jobDraft;
+    const feedback = document.getElementById("job-form-feedback");
+    const button = document.getElementById("job-create");
+    if (!draft.user.trim() || !draft.name.trim() || !draft.cwd.trim() || !draft.command.trim()) {
+      feedback.className = "form-feedback invalid";
+      feedback.textContent = "Owner, job name, working directory, and command are required.";
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Creating…";
+    feedback.className = "form-feedback";
+    feedback.textContent = "Saving DRAFT to the Stoker host…";
+    try {
+      await request("/api/v1/jobs", { method: "POST", body: JSON.stringify(draft) });
+      closeJobDialog();
+      state.jobDraft = { user: "", name: "", cwd: "", command: "" };
+      showToast("Created draft job.");
+      await loadData({ forceRender: true });
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "Create draft";
+      feedback.className = "form-feedback invalid";
+      feedback.textContent = error.message;
+    }
+  }
+
+  function renderFilesystemBrowser() {
+    const fsState = state.filesystem;
+    const roots = fsState.roots && fsState.roots.locations ? fsState.roots.locations : [];
+    const current = fsState.current;
+    const tabs = roots.map((location, index) => `<button class="fs-root-button" type="button" data-fs-root="${index}">${escapeHtml(location.label)}</button>`).join("");
+    const rows = current && current.directories && current.directories.length ? current.directories.map((directory) => `<button class="fs-directory-row" type="button" data-fs-directory="${escapeAttribute(directory.path)}"><span class="fs-folder-glyph">▰</span><span>${escapeHtml(directory.name)}</span><span class="fs-row-arrow">›</span></button>`).join("") : `<div class="fs-empty"><span>○</span><strong>${fsState.loading ? "Loading folders…" : "No subfolders here"}</strong><small>${fsState.loading ? "Reading one level from the Stoker host." : "This folder is still available to select."}</small></div>`;
+    const feedback = fsState.error ? `<div class="form-feedback invalid" aria-live="polite">${escapeHtml(fsState.error)} <button class="button ghost small" id="fs-retry" type="button">Retry</button></div>` : current && current.truncated ? '<div class="form-feedback">Some folders are hidden because this directory is very large. Enter a full path to browse further.</div>' : "";
+    jobDialogContent.innerHTML = `
+      <div class="dialog-card job-card filesystem-card">
+        <div class="dialog-kicker">Working directory</div>
+        <div class="job-dialog-heading"><div><h2 id="job-dialog-title">Choose working directory</h2><p>Folders on the Stoker host</p></div><button class="dialog-close" id="fs-close" type="button" aria-label="Close folder chooser">×</button></div>
+        <div class="fs-root-tabs" role="tablist" aria-label="Folder shortcuts">${tabs || '<span class="fs-no-roots">No shortcuts available</span>'}</div>
+        <div class="fs-path-row"><input class="text-input mono-input" id="fs-path-input" value="${escapeAttribute(fsState.inputPath || (current ? current.path : state.jobDraft.cwd))}" aria-label="Folder path"><button class="button secondary" id="fs-go" type="button">Go</button></div>
+        <div class="fs-breadcrumb" title="${escapeAttribute(current ? current.path : "")}">${escapeHtml(current ? current.path : "Choose a path to browse")}</div>
+        <div class="fs-browser-toolbar"><button class="button small secondary" id="fs-up" type="button" ${!current || !current.parent ? "disabled" : ""}>↑ Up</button><span>${current ? `${current.directories.length} folder${current.directories.length === 1 ? "" : "s"}` : ""}</span></div>
+        <div class="fs-directory-list" aria-live="polite">${rows}</div>${feedback}
+        <div class="fs-selected"><span>Selected</span><code>${escapeHtml(current ? current.path : state.jobDraft.cwd || "—")}</code></div>
+        <div class="dialog-actions"><button class="button secondary" id="fs-back" type="button">Back</button><button class="button primary" id="fs-use" type="button" ${!current || fsState.loading ? "disabled" : ""}>Use this folder</button></div>
+      </div>`;
+    document.getElementById("fs-close").addEventListener("click", closeJobDialog);
+    document.getElementById("fs-back").addEventListener("click", () => { state.jobDialogView = "form"; renderJobDialog(); });
+    document.getElementById("fs-use").addEventListener("click", () => { if (current) { state.jobDraft.cwd = current.path; state.jobDialogView = "form"; renderJobDialog(); } });
+    document.getElementById("fs-go").addEventListener("click", () => loadDirectories(document.getElementById("fs-path-input").value));
+    document.getElementById("fs-path-input").addEventListener("input", (event) => { fsState.inputPath = event.target.value; });
+    document.getElementById("fs-path-input").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); loadDirectories(event.target.value); } });
+    document.getElementById("fs-up").addEventListener("click", () => { if (current && current.parent) loadDirectories(current.parent); });
+    document.querySelectorAll("[data-fs-root]").forEach((button) => button.addEventListener("click", () => loadDirectories(roots[Number(button.dataset.fsRoot)].path)));
+    document.querySelectorAll("[data-fs-directory]").forEach((button) => button.addEventListener("click", () => loadDirectories(button.dataset.fsDirectory)));
+    const retry = document.getElementById("fs-retry");
+    if (retry) retry.addEventListener("click", () => loadDirectories(fsState.inputPath || (current && current.path)));
+  }
+
+  async function loadDirectories(path) {
+    if (!path || state.jobDialogView !== "browser") return;
+    const fsState = state.filesystem;
+    const requestId = ++fsState.requestId;
+    fsState.loading = true;
+    fsState.error = "";
+    fsState.inputPath = path;
+    fsState.current = null;
+    renderFilesystemBrowser();
+    try {
+      const result = await request(`/api/v1/fs/directories?${new URLSearchParams({ path })}`);
+      if (requestId !== fsState.requestId || !state.jobDialogOpen) return;
+      fsState.current = result;
+      fsState.inputPath = result.path;
+    } catch (error) {
+      if (requestId !== fsState.requestId || !state.jobDialogOpen) return;
+      fsState.error = error.message;
+    } finally {
+      if (requestId === fsState.requestId) fsState.loading = false;
+      if (state.jobDialogOpen && state.jobDialogView === "browser") renderFilesystemBrowser();
+    }
   }
 
   function renderQueue() {
@@ -560,6 +714,10 @@
   confirmDialog.addEventListener("cancel", (event) => {
     event.preventDefault();
     closeConfirmation(false);
+  });
+  jobDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeJobDialog();
   });
 
   loadData();
