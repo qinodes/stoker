@@ -179,6 +179,7 @@
     const focusSnapshot = captureFocus();
     const route = ["overview", "jobs", "queue", "logs", "configuration"].includes(state.route) ? state.route : "overview";
     state.route = route;
+    app.dataset.view = route;
     document.querySelectorAll("[data-route]").forEach((item) => item.classList.toggle("active", item.dataset.route === route));
     document.getElementById("breadcrumb-current").textContent = routeTitle(route);
     updateSchedulerPill();
@@ -208,8 +209,8 @@
   }
 
   function paginationMarkup(kind, info, label) {
-    if (info.totalPages <= 1) return "";
-    const from = info.start + 1;
+    if (info.totalPages <= 1 && kind !== "jobs") return "";
+    const from = info.totalItems ? info.start + 1 : 0;
     const to = info.end;
     return `<nav class="list-pagination" aria-label="${escapeAttribute(label)} pagination"><span>Showing ${from}–${to} of ${info.totalItems}</span><div class="list-pagination-controls"><button class="button small secondary" type="button" data-page-kind="${kind}" data-page-number="${info.page - 1}" ${info.page === 1 ? "disabled" : ""}>Previous</button><span>Page ${info.page} of ${info.totalPages}</span><button class="button small secondary" type="button" data-page-kind="${kind}" data-page-number="${info.page + 1}" ${info.page === info.totalPages ? "disabled" : ""}>Next</button></div></nav>`;
   }
@@ -259,7 +260,7 @@
     document.getElementById("overview-refresh").addEventListener("click", loadData);
   }
 
-  function renderJobs() {
+  function renderJobs(pageSize = JOBS_PAGE_SIZE) {
     const focusSnapshot = captureFocus();
     const filtered = state.jobs.filter((job) => {
       const search = state.filters.search.toLowerCase();
@@ -268,12 +269,28 @@
     });
     const users = [...new Set(state.jobs.map((job) => job.user))].sort();
     const terminalCount = state.jobs.filter((job) => isTerminalState(job.state)).length;
-    const jobsPage = pageInfo(filtered, state.pagination.jobs, JOBS_PAGE_SIZE);
+    const requestedPage = state.pagination.jobs;
+    const jobsPage = pageInfo(filtered, requestedPage, pageSize);
     state.pagination.jobs = jobsPage.page;
     app.innerHTML = `
       <div class="page-heading"><div><div class="eyebrow">Workspace / Jobs</div><h1>All jobs</h1><p>Search every submission, inspect its working directory, and keep an eye on its lifecycle.</p></div><div class="page-actions"><button class="button primary" id="jobs-new" type="button">＋ New job</button><button class="button secondary" id="jobs-refresh">Refresh jobs <span aria-hidden="true">↻</span></button><button class="button danger" id="jobs-clean" type="button" ${terminalCount ? "" : "disabled"}>Clean job history${terminalCount ? ` (${terminalCount})` : ""}</button></div></div>
       <div class="toolbar"><input class="search-input" id="job-search" type="search" placeholder="Search job name, owner, ID, or path" value="${escapeAttribute(state.filters.search)}" aria-label="Search jobs"><div class="filter-group"><select class="select-input" id="user-filter" aria-label="Filter by owner"><option value="">All owners</option>${users.map((user) => `<option value="${escapeAttribute(user)}" ${user === state.filters.user ? "selected" : ""}>${escapeHtml(user)}</option>`).join("")}</select><select class="select-input" id="state-filter" aria-label="Filter by state"><option value="">All states</option>${["DRAFT", "QUEUED", "STARTING", "RUNNING", "CANCELLING", "SUCCEEDED", "FAILED", "CANCELLED", "LOST"].map((value) => `<option value="${value}" ${value === state.filters.state ? "selected" : ""}>${value}</option>`).join("")}</select></div></div>
       <section class="panel"><div class="panel-header"><div class="panel-title"><div><h2>${filtered.length} visible job${filtered.length === 1 ? "" : "s"}</h2><p>Server state · ${liveTime(new Date())}</p></div></div></div><div class="table-wrap"><table class="data-table jobs-table"><thead><tr><th>Job name</th><th>Owner</th><th>Path</th><th>State</th><th>Queue</th><th>Created</th></tr></thead><tbody>${filtered.length ? jobsPage.items.map(jobRow).join("") : emptyTableRow("No jobs match these filters.", 6)}</tbody></table></div>${paginationMarkup("jobs", jobsPage, "Jobs")}</section>`;
+    // Measure the actual header, controls, row and pagination heights, including
+    // wrapping and horizontal scrollbars, before choosing how many rows fit.
+    const rows = [...app.querySelectorAll(".jobs-table .job-row")];
+    if (rows.length && pageSize === JOBS_PAGE_SIZE) {
+      const rowHeight = Math.max(...rows.map((row) => row.getBoundingClientRect().height));
+      const panel = app.querySelector(".panel");
+      const spareHeight = listViewportBottom() - panel.getBoundingClientRect().bottom;
+      const fittedSize = Math.max(1, Math.min(JOBS_PAGE_SIZE, Math.floor((rows.length * rowHeight + spareHeight) / rowHeight)));
+      if (fittedSize < JOBS_PAGE_SIZE) {
+        state.pagination.jobs = requestedPage;
+        renderJobs(fittedSize);
+        restoreFocus(focusSnapshot);
+        return;
+      }
+    }
     document.getElementById("jobs-refresh").addEventListener("click", loadData);
     document.getElementById("jobs-new").addEventListener("click", openJobDialog);
     document.getElementById("jobs-clean").addEventListener("click", async () => {
@@ -651,12 +668,20 @@
   }
 
   function renderQueue() {
+    const previousTable = app.querySelector(".queue-table");
+    const scrollTop = previousTable?.scrollTop || 0;
+    const scrollLeft = previousTable?.scrollLeft || 0;
     const jobs = state.queue.jobs;
     const locked = Boolean(state.queue.locked);
     app.innerHTML = `
       <div class="page-heading"><div><div class="eyebrow">Workspace / Queue</div><h1>Execution queue</h1><p>Lock the global queue before changing its order. Every move is checked against the server’s latest state.</p></div><div class="page-actions"><button class="button secondary" id="queue-refresh">Refresh queue <span aria-hidden="true">↻</span></button><button class="button primary" id="queue-lock" ${locked ? "disabled" : ""}>Lock queue</button><button class="button secondary" id="queue-unlock" ${locked ? "" : "disabled"}>Unlock queue</button></div></div>
       ${locked ? '<div class="queue-lock-banner"><div><strong>Queue is locked</strong><small>This global lock is visible to every connected client. Use the arrows below to adjust order.</small></div><span aria-hidden="true">🔒</span></div>' : '<div class="queue-unlock-banner"><div><strong>Queue is unlocked</strong><small>Lock the queue to enable reorder controls and prevent the scheduler from claiming work during edits.</small></div><span aria-hidden="true">↕</span></div>'}
       <section class="panel"><div class="panel-header"><div class="panel-title"><div><h2>${jobs.length} queued job${jobs.length === 1 ? "" : "s"}</h2><p>Ordered by queue position · server state</p></div></div></div><div class="queue-table"><table class="data-table queue-order-table"><thead><tr><th>#</th><th>Job name</th><th>Owner</th><th>Path</th><th>State</th><th>Move</th></tr></thead><tbody>${jobs.length ? jobs.map((job, index) => `<tr><td class="mono">${index + 1}</td><td><div class="job-name"><strong>${escapeHtml(job.name)}</strong><small>${escapeHtml(shortId(job.id))}</small></div></td><td>${escapeHtml(job.user)}</td><td class="path-cell" title="${escapeAttribute(job.cwd)}">${escapeHtml(job.cwd)}</td><td>${stateBadge(job.state)}</td><td><div class="move-controls"><button class="move-button" type="button" data-queue-move="${escapeAttribute(job.id)}" data-target-order="${index}" aria-label="Move ${escapeAttribute(job.name)} up" ${!locked || index === 0 ? "disabled" : ""}>↑</button><button class="move-button" type="button" data-queue-move="${escapeAttribute(job.id)}" data-target-order="${index + 2}" aria-label="Move ${escapeAttribute(job.name)} down" ${!locked || index === jobs.length - 1 ? "disabled" : ""}>↓</button></div></td></tr>`).join("") : emptyTableRow("The queue is clear. Commit a DRAFT job from the Jobs view or CLI.", 6)}</tbody></table></div></section>`;
+    const table = app.querySelector(".queue-table");
+    // Use the remaining viewport instead of assuming a fixed heading height.
+    table.style.maxHeight = `${Math.max(100, listViewportBottom() - table.getBoundingClientRect().top - 1)}px`;
+    table.scrollTop = scrollTop;
+    table.scrollLeft = scrollLeft;
     document.getElementById("queue-refresh").addEventListener("click", loadData);
     document.getElementById("queue-lock").addEventListener("click", () => mutate("/api/v1/queue/lock", "POST"));
     document.getElementById("queue-unlock").addEventListener("click", () => mutate("/api/v1/queue/unlock", "POST"));
@@ -963,6 +988,18 @@
     setTimeout(() => toast.remove(), 4200);
   }
 
+  function listViewportBottom() {
+    const mobile = window.matchMedia("(max-width: 760px)").matches;
+    const main = document.querySelector(".main-content");
+    const bottom = mobile ? window.innerHeight - 70 : main.getBoundingClientRect().top + main.clientHeight;
+    // Account for an existing outer scroll position while measuring a rerender.
+    const scrollOffset = mobile ? window.scrollY : main.scrollTop;
+    return bottom - scrollOffset - parseFloat(getComputedStyle(app).paddingBottom);
+  }
+
+  window.addEventListener("resize", () => {
+    if (state.loaded && ["jobs", "queue"].includes(state.route)) render();
+  });
   window.addEventListener("hashchange", () => { state.route = location.hash.slice(1) || "overview"; if (state.loaded) render(); });
   document.getElementById("refresh-button").addEventListener("click", loadData);
   tokenForm.addEventListener("submit", (event) => {
