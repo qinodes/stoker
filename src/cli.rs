@@ -891,10 +891,13 @@ fn terminate_child(child: &mut Child) {
 
 fn start() -> anyhow::Result<()> {
     let paths = open_paths()?;
-    // An active endpoint is authoritative for the user-facing duplicate error;
-    // stale endpoints are cleaned by the child after it acquires the lock.
+    // An active endpoint is authoritative for the user-facing already-running
+    // notice; stale endpoints are cleaned by the child after it acquires the lock.
     match runtime()?.block_on(ServiceClient::new(paths.clone()).status()) {
-        Ok(_) => anyhow::bail!("scheduler service is already running"),
+        Ok(_) => {
+            print_warning("Scheduler service is already running.");
+            return Ok(());
+        }
         Err(error) if is_service_unavailable(&error) => {}
         Err(error) => return Err(error),
     }

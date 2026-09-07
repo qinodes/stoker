@@ -548,8 +548,11 @@ fn duplicate_service_does_not_replace_running_endpoint() {
     stoker_with_home(&home)
         .args(["start"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("already running"));
+        .success()
+        .stdout(predicate::str::contains(
+            "Scheduler service is already running.",
+        ))
+        .stderr(predicate::str::is_empty());
     stoker_with_home(&home).args(["stop"]).assert().success();
     start_service(&home);
     stoker_with_home(&home).args(["stop"]).assert().success();

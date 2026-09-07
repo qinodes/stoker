@@ -179,6 +179,18 @@ struct CreateJobResponse {
     job: Job,
 }
 
+#[derive(Debug, Serialize)]
+struct JobDetailResponse {
+    job: Job,
+    working_directory_status: &'static str,
+    display_timezone: String,
+}
+
+#[derive(Debug, Serialize)]
+struct JobActionResponse {
+    job: Job,
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateJobRequest {
     user: String,
@@ -486,7 +498,9 @@ async fn handle_connection(mut stream: TcpStream, state: UiServerState) -> anyho
                 HttpStatus::BAD_REQUEST
             } else if error.downcast_ref::<UiConflict>().is_some() {
                 HttpStatus::CONFLICT
-            } else if error.downcast_ref::<UiNotFound>().is_some() {
+            } else if error.downcast_ref::<UiNotFound>().is_some()
+                || error.downcast_ref::<UiPathNotFound>().is_some()
+            {
                 HttpStatus::NOT_FOUND
             } else if error.downcast_ref::<UiMethodNotAllowed>().is_some() {
                 HttpStatus::METHOD_NOT_ALLOWED
@@ -549,10 +563,21 @@ async fn route_request(
         ("GET", path) if path.starts_with("/api/v1/jobs/") && path.ends_with("/logs") => {
             (HttpStatus::OK, logs_json(state, job_id(path)?)?)
         }
+        ("GET", path) if path.starts_with("/api/v1/jobs/") => {
+            (HttpStatus::OK, job_detail_json(state, plain_job_id(path)?)?)
+        }
         ("GET", "/api/v1/config") | ("GET", "/api/v1/config/snapshots") => {
             (HttpStatus::OK, configuration_json(state)?)
         }
         ("POST", "/api/v1/jobs") => (HttpStatus::CREATED, create_job_json(request, state)?),
+        ("POST", path) if path.starts_with("/api/v1/jobs/") && path.ends_with("/commit") => (
+            HttpStatus::OK,
+            commit_job_json(state, action_job_id(path, "commit")?).await?,
+        ),
+        ("POST", path) if path.starts_with("/api/v1/jobs/") && path.ends_with("/cancel") => (
+            HttpStatus::OK,
+            cancel_job_json(state, action_job_id(path, "cancel")?).await?,
+        ),
         ("POST", "/api/v1/clean") => (HttpStatus::OK, clean_json(state)?),
         ("POST", "/api/v1/queue/lock") => (HttpStatus::OK, queue_lock_json(state, true).await?),
         ("POST", "/api/v1/queue/unlock") => (HttpStatus::OK, queue_lock_json(state, false).await?),
@@ -569,6 +594,15 @@ async fn route_request(
             (HttpStatus::OK, move_queue_json(request, state, id).await?)
         }
         (_, path) if path.starts_with("/api/v1/jobs/") && path.ends_with("/logs") => {
+            return Err(UiMethodNotAllowed.into());
+        }
+        (_, path)
+            if path.starts_with("/api/v1/jobs/")
+                && (path.ends_with("/commit") || path.ends_with("/cancel")) =>
+        {
+            return Err(UiMethodNotAllowed.into());
+        }
+        (_, path) if path.starts_with("/api/v1/jobs/") => {
             return Err(UiMethodNotAllowed.into());
         }
         (_, path) if path.starts_with("/api/v1/queue/") && path.ends_with("/move") => {
@@ -605,6 +639,63 @@ fn create_job_json(request: &HttpRequest, state: &UiServerState) -> anyhow::Resu
     )
     .map_err(UiBadRequest::from_error)?;
     Ok(serde_json::to_vec(&CreateJobResponse { job })?)
+}
+
+fn job_detail_json(state: &UiServerState, id: Uuid) -> anyhow::Result<Vec<u8>> {
+    let job = get_job_or_not_found(state, id)?;
+    let timezone = resolve_timezone(&state.paths, None)?;
+    Ok(serde_json::to_vec(&JobDetailResponse {
+        working_directory_status: working_directory_status(job.state),
+        display_timezone: timezone.name,
+        job,
+    })?)
+}
+
+async fn commit_job_json(state: &UiServerState, id: Uuid) -> anyhow::Result<Vec<u8>> {
+    get_job_or_not_found(state, id)?;
+    ServiceClient::new(state.paths.clone())
+        .commit(id)
+        .await
+        .map_err(action_error)?;
+    let job = get_job_or_not_found(state, id)?;
+    Ok(serde_json::to_vec(&JobActionResponse { job })?)
+}
+
+async fn cancel_job_json(state: &UiServerState, id: Uuid) -> anyhow::Result<Vec<u8>> {
+    get_job_or_not_found(state, id)?;
+    ServiceClient::new(state.paths.clone())
+        .cancel(id)
+        .await
+        .map_err(action_error)?;
+    let job = get_job_or_not_found(state, id)?;
+    Ok(serde_json::to_vec(&JobActionResponse { job })?)
+}
+
+fn action_error(error: anyhow::Error) -> anyhow::Error {
+    if is_service_unavailable(&error) {
+        UiServiceUnavailable::from_error(anyhow::anyhow!(
+            "Scheduler is not running. Run `stoker start` first."
+        ))
+    } else {
+        UiConflict::from_error(error)
+    }
+}
+
+fn get_job_or_not_found(state: &UiServerState, id: Uuid) -> anyhow::Result<Job> {
+    Store::open(&state.paths.database)?
+        .get_job(id)
+        .map_err(|error| match error {
+            StoreError::NotFound { .. } => UiNotFound.into(),
+            other => anyhow::Error::from(other),
+        })
+}
+
+fn working_directory_status(state: JobState) -> &'static str {
+    match state {
+        JobState::Draft | JobState::Queued => "planned",
+        JobState::Starting | JobState::Running | JobState::Cancelling => "active",
+        _ => "source directory retained",
+    }
 }
 
 fn require_json_content_type(request: &HttpRequest) -> anyhow::Result<()> {
@@ -699,7 +790,7 @@ fn fs_directories_json(query: &str) -> anyhow::Result<Vec<u8>> {
     }
     let metadata = fs::metadata(&path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
-            UiNotFound.into()
+            UiPathNotFound.into()
         } else if error.kind() == std::io::ErrorKind::PermissionDenied {
             UiForbidden.into()
         } else {
@@ -709,19 +800,18 @@ fn fs_directories_json(query: &str) -> anyhow::Result<Vec<u8>> {
     if !metadata.is_dir() {
         return Err(UiBadRequest::new("path is not a directory").into());
     }
-    let path = path
-        .canonicalize()
-        .map_err(|error| UiBadRequest::new(format!("resolve directory: {error}")))?;
+    let path = path.canonicalize().map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => anyhow::Error::from(UiPathNotFound),
+        _ => UiBadRequest::new(format!("resolve directory: {error}")).into(),
+    })?;
     let parent = path.parent().map(Path::to_path_buf);
     let mut directories = Vec::new();
     let mut skipped_entries = 0;
     let mut truncated = false;
-    let entries = fs::read_dir(&path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::PermissionDenied {
-            UiForbidden.into()
-        } else {
-            anyhow::Error::from(error)
-        }
+    let entries = fs::read_dir(&path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => anyhow::Error::from(UiPathNotFound),
+        std::io::ErrorKind::PermissionDenied => anyhow::Error::from(UiForbidden),
+        _ => anyhow::Error::from(error),
     })?;
     for (index, entry) in entries.enumerate() {
         if index >= MAX_ENTRIES {
@@ -1110,6 +1200,26 @@ fn job_id(path: &str) -> anyhow::Result<Uuid> {
     let value = path
         .strip_prefix("/api/v1/jobs/")
         .and_then(|value| value.strip_suffix("/logs"))
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+        .ok_or(UiNotFound)?;
+    Uuid::parse_str(value)
+        .map_err(|error| UiBadRequest::new(format!("invalid job id: {error}")).into())
+}
+
+fn plain_job_id(path: &str) -> anyhow::Result<Uuid> {
+    let value = path
+        .strip_prefix("/api/v1/jobs/")
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+        .ok_or(UiNotFound)?;
+    Uuid::parse_str(value)
+        .map_err(|error| UiBadRequest::new(format!("invalid job id: {error}")).into())
+}
+
+fn action_job_id(path: &str, action: &str) -> anyhow::Result<Uuid> {
+    let suffix = format!("/{action}");
+    let value = path
+        .strip_prefix("/api/v1/jobs/")
+        .and_then(|value| value.strip_suffix(&suffix))
         .filter(|value| !value.is_empty() && !value.contains('/'))
         .ok_or(UiNotFound)?;
     Uuid::parse_str(value)
@@ -1555,6 +1665,10 @@ impl UiServiceUnavailable {
 struct UiNotFound;
 
 #[derive(Debug, thiserror::Error)]
+#[error("working directory not found")]
+struct UiPathNotFound;
+
+#[derive(Debug, thiserror::Error)]
 #[error("HTTP method is not allowed")]
 struct UiMethodNotAllowed;
 
@@ -1584,11 +1698,11 @@ mod tests {
     use super::{
         APP_JS, HttpRequest, INDEX_HTML, LOGO_MARK_PNG, MAX_LOG_BYTES, STYLES_CSS, StokerPaths,
         UiBadRequest, UiConflict, UiForbidden, UiMetadata, UiMethodNotAllowed, UiNotFound,
-        UiServerState, UiServiceUnavailable, UiUnsupportedMediaType, authorized, connect_host,
-        constant_time_equal, count_state, default_port, handle_connection, job_id, json_body,
-        parse_query, percent_decode, queue_job_id, read_log, read_metadata, read_token,
-        remove_if_exists, route_request, run_async, split_target, start, static_asset, status,
-        stop, timezone_response, ui_url, write_metadata, write_token,
+        UiPathNotFound, UiServerState, UiServiceUnavailable, UiUnsupportedMediaType, authorized,
+        connect_host, constant_time_equal, count_state, default_port, handle_connection, job_id,
+        json_body, parse_query, percent_decode, plain_job_id, queue_job_id, read_log,
+        read_metadata, read_token, remove_if_exists, route_request, run_async, split_target, start,
+        static_asset, status, stop, timezone_response, ui_url, write_metadata, write_token,
     };
 
     #[test]
@@ -1612,16 +1726,48 @@ mod tests {
         assert!(LOGO_MARK_PNG.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert!(APP_JS.contains("/api/v1/config/timezone"));
         assert!(APP_JS.contains("/api/v1/config/restore"));
-        assert!(APP_JS.contains("How to use Logs"));
+        assert!(!APP_JS.contains("How to use Logs"));
         assert!(APP_JS.contains("/logs"));
+        assert!(APP_JS.contains("openJobDetail"));
+        assert!(APP_JS.contains("runJobAction"));
+        assert!(APP_JS.contains("Commit job"));
+        assert!(APP_JS.contains("Cancel job"));
+        assert!(APP_JS.contains("job-suggestions"));
+        assert!(APP_JS.contains("Known owners"));
+        assert!(APP_JS.contains("destructive"));
+        assert!(APP_JS.contains("event.target === jobDialog"));
+        assert!(APP_JS.contains("event.target === jobDetailDialog"));
+        assert!(APP_JS.contains("prefetchDirectory"));
+        assert!(APP_JS.contains("directoryCache"));
+        assert!(APP_JS.contains("JOBS_PAGE_SIZE"));
+        assert!(APP_JS.contains("SNAPSHOTS_PAGE_SIZE"));
+        assert!(APP_JS.contains("JOBS_PAGE_SIZE = 6"));
+        assert!(APP_JS.contains("SNAPSHOTS_PAGE_SIZE = 5"));
+        assert!(APP_JS.contains("data-page-kind"));
+        assert!(APP_JS.contains("paginationMarkup(\"snapshots\""));
+        assert!(APP_JS.contains("log-job-search"));
         assert!(STYLES_CSS.contains(".jobs-table"));
         assert!(STYLES_CSS.contains(".queue-order-table"));
+        assert!(STYLES_CSS.contains(".queue-table { max-height: 560px"));
+        assert!(
+            STYLES_CSS.contains(".main-content { height: 100vh; min-height: 0; overflow: auto; }")
+        );
+        assert!(
+            STYLES_CSS.contains(".sidebar { height: 100vh; min-height: 0; overflow-y: auto; }")
+        );
+        assert!(STYLES_CSS.contains(".list-pagination"));
+        assert!(STYLES_CSS.contains(".log-job-search"));
+        assert!(STYLES_CSS.contains(".snapshot-list { height: 300px"));
         assert!(STYLES_CSS.contains(".log-output"));
         assert!(STYLES_CSS.contains(".confirm-dialog"));
         assert!(STYLES_CSS.contains(".button.danger"));
         assert!(INDEX_HTML.contains("confirm-dialog"));
         assert!(INDEX_HTML.contains("job-dialog"));
+        assert!(INDEX_HTML.contains("job-detail-dialog"));
+        assert!(INDEX_HTML.contains("id=\"job-dialog\" tabindex=\"-1\""));
         assert!(STYLES_CSS.contains(".job-dialog"));
+        assert!(STYLES_CSS.contains(".job-detail-dialog"));
+        assert!(STYLES_CSS.contains(".job-suggestions"));
     }
 
     #[test]
@@ -1645,6 +1791,7 @@ mod tests {
 
         let id = uuid::Uuid::new_v4();
         assert_eq!(job_id(&format!("/api/v1/jobs/{id}/logs")).unwrap(), id);
+        assert_eq!(plain_job_id(&format!("/api/v1/jobs/{id}")).unwrap(), id);
         assert!(
             job_id("/api/v1/jobs//logs")
                 .unwrap_err()
@@ -2006,6 +2153,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn job_detail_and_actions_expose_show_data_and_service_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(directory.path());
+        paths.ensure().unwrap();
+        let state = state_for(&paths, false, None);
+        let job = Store::open(&paths.database)
+            .unwrap()
+            .create_job(NewJob {
+                name: "detail-job".into(),
+                user: "alice".into(),
+                cwd: directory.path().to_path_buf(),
+                command: vec!["echo".into(), "hello world".into()],
+            })
+            .unwrap();
+
+        let detail = route_request(
+            &make_request("GET", &format!("/api/v1/jobs/{job}"), ""),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(detail.0.code, 200);
+        let detail: serde_json::Value = serde_json::from_slice(&detail.2).unwrap();
+        assert_eq!(detail["job"]["id"], job.to_string());
+        assert_eq!(detail["job"]["name"], "detail-job");
+        assert_eq!(detail["job"]["state"], "DRAFT");
+        assert_eq!(detail["working_directory_status"], "planned");
+        assert!(detail["display_timezone"].as_str().is_some());
+
+        let wrong_method = route_request(
+            &make_request("POST", &format!("/api/v1/jobs/{job}"), ""),
+            &state,
+        )
+        .await
+        .unwrap_err();
+        assert!(wrong_method.downcast_ref::<UiMethodNotAllowed>().is_some());
+
+        let commit = route_request(
+            &make_request("POST", &format!("/api/v1/jobs/{job}/commit"), ""),
+            &state,
+        )
+        .await
+        .unwrap_err();
+        assert!(commit.downcast_ref::<UiServiceUnavailable>().is_some());
+
+        let cancel = route_request(
+            &make_request("POST", &format!("/api/v1/jobs/{job}/cancel"), ""),
+            &state,
+        )
+        .await
+        .unwrap_err();
+        assert!(cancel.downcast_ref::<UiServiceUnavailable>().is_some());
+
+        let missing_action = route_request(
+            &make_request(
+                "POST",
+                &format!("/api/v1/jobs/{}/commit", uuid::Uuid::new_v4()),
+                "",
+            ),
+            &state,
+        )
+        .await
+        .unwrap_err();
+        assert!(missing_action.downcast_ref::<UiNotFound>().is_some());
+
+        let missing = route_request(
+            &make_request("GET", &format!("/api/v1/jobs/{}", uuid::Uuid::new_v4()), ""),
+            &state,
+        )
+        .await
+        .unwrap_err();
+        assert!(missing.downcast_ref::<UiNotFound>().is_some());
+    }
+
+    #[tokio::test]
     async fn filesystem_and_create_job_routes_use_server_paths_and_persist_draft() {
         let directory = tempfile::tempdir().unwrap();
         let working = directory.path().join("工作 目錄");
@@ -2031,6 +2253,21 @@ mod tests {
         let listing: serde_json::Value = serde_json::from_slice(&listing.2).unwrap();
         assert_eq!(listing["directories"][0]["name"], "子資料夾");
         assert_eq!(listing["directories"].as_array().unwrap().len(), 1);
+
+        let missing = route_request(
+            &make_request(
+                "GET",
+                &format!(
+                    "/api/v1/fs/directories?path={}",
+                    percent_encode_for_test(&working.join("missing"))
+                ),
+                "",
+            ),
+            &state,
+        )
+        .await
+        .unwrap_err();
+        assert!(missing.downcast_ref::<UiPathNotFound>().is_some());
 
         let body = format!(
             r#"{{"user":"alice","name":"build","cwd":{},"command":"echo \"hello world\""}}"#,
