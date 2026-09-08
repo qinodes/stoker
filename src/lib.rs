@@ -12,7 +12,10 @@ pub mod submission;
 pub mod ui;
 
 pub use config::StokerPaths;
-pub use domain::{Job, JobState, NewJob};
+pub use domain::{
+    Job, JobState, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, NewJob, validate_job_name,
+    validate_job_user,
+};
 pub use ipc::{
     IPC_VERSION, IpcRequest, IpcResponse, ServiceClient, ServiceStatus, ServiceUnavailable,
     is_service_unavailable,

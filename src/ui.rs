@@ -24,7 +24,7 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::config::{ResolvedTimezone, StokerPaths, TimezoneSource, resolve_timezone};
-use crate::domain::{Job, JobState};
+use crate::domain::{Job, JobState, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH};
 use crate::ipc::{ServiceClient, is_service_unavailable};
 use crate::output;
 use crate::{Store, StoreError};
@@ -127,6 +127,8 @@ struct UiServerState {
 struct UiConfigResponse {
     auth_required: bool,
     version: &'static str,
+    max_job_name_length: usize,
+    max_job_user_length: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -553,6 +555,8 @@ async fn route_request(
             serde_json::to_vec(&UiConfigResponse {
                 auth_required: state.metadata.auth_required,
                 version: env!("CARGO_PKG_VERSION"),
+                max_job_name_length: MAX_JOB_NAME_LENGTH,
+                max_job_user_length: MAX_JOB_USER_LENGTH,
             })?,
         ),
         ("GET", "/api/v1/status") => (HttpStatus::OK, status_json(state).await?),
@@ -1709,6 +1713,12 @@ mod tests {
     fn embedded_ui_contains_jobs_queue_and_configuration_controls() {
         assert!(INDEX_HTML.contains("Configuration"));
         assert!(APP_JS.contains("Job name"));
+        assert!(APP_JS.contains("maxJobNameLength"));
+        assert!(APP_JS.contains("maxlength=\"${maxJobNameLength}\""));
+        assert!(APP_JS.contains("max_job_name_length"));
+        assert!(APP_JS.contains("maxJobUserLength"));
+        assert!(APP_JS.contains("max_job_user_length"));
+        assert!(APP_JS.contains("128"));
         assert!(APP_JS.contains("/api/v1/jobs"));
         assert!(APP_JS.contains("/api/v1/fs/directories"));
         assert!(APP_JS.contains("Choose working directory"));

@@ -4,6 +4,34 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Maximum number of Unicode characters allowed in a user-provided job name.
+pub const MAX_JOB_NAME_LENGTH: usize = 128;
+pub const MAX_JOB_USER_LENGTH: usize = 50;
+
+pub fn validate_job_name(name: &str) -> Result<(), String> {
+    if name.trim().is_empty() {
+        return Err("name must not be empty".to_owned());
+    }
+    if name.chars().count() > MAX_JOB_NAME_LENGTH {
+        return Err(format!(
+            "name must be {MAX_JOB_NAME_LENGTH} characters or fewer"
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_job_user(user: &str) -> Result<(), String> {
+    if user.trim().is_empty() {
+        return Err("user must not be empty".to_owned());
+    }
+    if user.chars().count() > MAX_JOB_USER_LENGTH {
+        return Err(format!(
+            "user must be {MAX_JOB_USER_LENGTH} characters or fewer"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum JobState {

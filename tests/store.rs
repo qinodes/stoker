@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 
 use rusqlite::{Connection, params};
-use stoker::{JobState, NewJob, Store, StoreError};
+use stoker::{JobState, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, NewJob, Store, StoreError};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -28,6 +28,60 @@ fn new_job_named(name: &str) -> NewJob {
         name: name.into(),
         ..new_job()
     }
+}
+
+#[test]
+fn database_schema_enforces_job_name_length_for_existing_databases() {
+    let directory = TempDir::new().unwrap();
+    let db_path = directory.path().join("stoker.db");
+    let connection = Connection::open(&db_path).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE jobs (
+                id TEXT PRIMARY KEY NOT NULL,
+                name TEXT NOT NULL,
+                user TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                command TEXT NOT NULL,
+                command_line TEXT,
+                state TEXT NOT NULL,
+                queue_order INTEGER,
+                created_at TEXT NOT NULL,
+                committed_at TEXT,
+                started_at TEXT,
+                finished_at TEXT,
+                exit_code INTEGER,
+                pid INTEGER,
+                failure_detail TEXT
+            )",
+        )
+        .unwrap();
+    drop(connection);
+
+    // Opening a pre-existing database upgrades the jobs table with the CHECK.
+    Store::open(&db_path).unwrap();
+    let connection = Connection::open(&db_path).unwrap();
+    let error = connection.execute(
+        "INSERT INTO jobs
+         (id,name,user,cwd,command,state,created_at)
+         VALUES (?1,?2,'alice','/tmp','[]','DRAFT','2026-01-01T00:00:00Z')",
+        rusqlite::params![
+            Uuid::new_v4().to_string(),
+            "x".repeat(MAX_JOB_NAME_LENGTH + 1)
+        ],
+    );
+    assert!(error.is_err());
+
+    let error = connection.execute(
+        "INSERT INTO jobs
+         (id,name,user,cwd,command,state,created_at)
+         VALUES (?1,'valid',?2,'/tmp','[]','DRAFT','2026-01-01T00:00:00Z')",
+        rusqlite::params![
+            Uuid::new_v4().to_string(),
+            "u".repeat(MAX_JOB_USER_LENGTH + 1)
+        ],
+    );
+    assert!(error.is_err());
 }
 
 #[test]

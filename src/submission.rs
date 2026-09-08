@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 
 use crate::config::normalize_path;
-use crate::domain::{Job, NewJob};
+use crate::domain::{Job, NewJob, validate_job_name, validate_job_user};
 use crate::store::Store;
 
 /// Create a DRAFT shell job after applying the same validation used by both
@@ -18,12 +18,8 @@ pub fn create_shell_job(
     cwd: PathBuf,
     command_line: String,
 ) -> anyhow::Result<Job> {
-    if user.trim().is_empty() {
-        anyhow::bail!("--user must not be empty");
-    }
-    if name.trim().is_empty() {
-        anyhow::bail!("--name must not be empty");
-    }
+    validate_job_user(&user).map_err(|message| anyhow::anyhow!("--{message}"))?;
+    validate_job_name(&name).map_err(|message| anyhow::anyhow!("--{message}"))?;
     let command = parse_command_line(&command_line)?;
     let cwd = resolve_working_directory(cwd)?;
     let id = store.create_shell_job(
@@ -134,6 +130,29 @@ mod tests {
     use std::path::Path;
 
     use super::parse_command_line;
+    use crate::domain::{
+        MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, validate_job_name, validate_job_user,
+    };
+
+    #[test]
+    fn job_name_validation_accepts_limit_and_rejects_longer_names() {
+        assert!(validate_job_name(&"a".repeat(MAX_JOB_NAME_LENGTH)).is_ok());
+        assert_eq!(
+            validate_job_name(&"a".repeat(MAX_JOB_NAME_LENGTH + 1)).unwrap_err(),
+            "name must be 128 characters or fewer"
+        );
+        assert!(validate_job_name(&"🙂".repeat(MAX_JOB_NAME_LENGTH)).is_ok());
+    }
+
+    #[test]
+    fn job_user_validation_accepts_limit_and_rejects_longer_names() {
+        assert!(validate_job_user(&"a".repeat(MAX_JOB_USER_LENGTH)).is_ok());
+        assert_eq!(
+            validate_job_user(&"a".repeat(MAX_JOB_USER_LENGTH + 1)).unwrap_err(),
+            "user must be 50 characters or fewer"
+        );
+        assert!(validate_job_user(&"🙂".repeat(MAX_JOB_USER_LENGTH)).is_ok());
+    }
 
     #[test]
     fn parses_quotes_escapes_and_shell_separator() {

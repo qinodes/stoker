@@ -7,6 +7,8 @@
   const DIRECTORY_CACHE_LIMIT = 64;
   const JOBS_PAGE_SIZE = 6;
   const SNAPSHOTS_PAGE_SIZE = 5;
+  const DEFAULT_MAX_JOB_NAME_LENGTH = 128;
+  const DEFAULT_MAX_JOB_USER_LENGTH = 50;
 
   const state = {
     config: null,
@@ -483,6 +485,8 @@
 
   function renderJobForm() {
     const draft = state.jobDraft;
+    const maxJobNameLength = Number(state.config?.max_job_name_length) || DEFAULT_MAX_JOB_NAME_LENGTH;
+    const maxJobUserLength = Number(state.config?.max_job_user_length) || DEFAULT_MAX_JOB_USER_LENGTH;
     const users = [...new Set(state.jobs.map((job) => job.user).filter(Boolean))].sort();
     jobDialogContent.innerHTML = `
       <div class="dialog-card job-card">
@@ -490,8 +494,8 @@
         <div class="job-dialog-heading"><div><h2 id="job-dialog-title">New job</h2><p>Create a draft job. Commit it when you're ready to run.</p></div><button class="dialog-close" id="job-dialog-close" type="button" aria-label="Close new job">×</button></div>
         <form id="new-job-form" novalidate>
           <div class="job-form-grid">
-            <div class="job-field"><label for="job-user">Owner</label><div class="job-user-picker"><input class="text-input" id="job-user" name="user" value="${escapeAttribute(draft.user)}" autocomplete="off" autocapitalize="off" aria-autocomplete="list" aria-controls="job-user-suggestions" aria-expanded="false" required><div class="job-suggestions" id="job-user-suggestions" role="listbox"></div></div><small class="form-help">A logical label for this job.</small></div>
-            <div class="job-field"><label for="job-name">Job name</label><input class="text-input" id="job-name" name="name" value="${escapeAttribute(draft.name)}" autocomplete="off" required></div>
+            <div class="job-field"><label for="job-user">Owner</label><div class="job-user-picker"><input class="text-input" id="job-user" name="user" value="${escapeAttribute(draft.user)}" autocomplete="off" autocapitalize="off" maxlength="${maxJobUserLength}" aria-autocomplete="list" aria-controls="job-user-suggestions" aria-expanded="false" required><div class="job-suggestions" id="job-user-suggestions" role="listbox"></div></div><small class="form-help">Maximum ${maxJobUserLength} characters.</small></div>
+            <div class="job-field"><label for="job-name">Job name</label><input class="text-input" id="job-name" name="name" value="${escapeAttribute(draft.name)}" autocomplete="off" maxlength="${maxJobNameLength}" required><small class="form-help">Maximum ${maxJobNameLength} characters.</small></div>
           </div>
           <div class="job-field"><label for="job-cwd">Working directory</label><div class="path-input-row"><input class="text-input mono-input" id="job-cwd" name="cwd" value="${escapeAttribute(draft.cwd)}" placeholder="Choose a folder on the Stoker host" autocomplete="off" autocapitalize="off" spellcheck="false" required><button class="button secondary" id="job-browse" type="button">Browse</button></div><small class="form-help">Folders are read from the Stoker host.</small></div>
           <div class="job-field"><label for="job-command">Command</label><textarea class="command-input" id="job-command" name="command" rows="4" placeholder="cargo build --release" required>${escapeHtml(draft.command)}</textarea><small class="form-help">Enter the command only; Stoker will keep the same quoting rules as <code>stoker add --cmd</code>.</small></div>
@@ -544,9 +548,21 @@
     const draft = state.jobDraft;
     const feedback = document.getElementById("job-form-feedback");
     const button = document.getElementById("job-create");
+    const maxJobNameLength = Number(state.config?.max_job_name_length) || DEFAULT_MAX_JOB_NAME_LENGTH;
+    const maxJobUserLength = Number(state.config?.max_job_user_length) || DEFAULT_MAX_JOB_USER_LENGTH;
     if (!draft.user.trim() || !draft.name.trim() || !draft.cwd.trim() || !draft.command.trim()) {
       feedback.className = "form-feedback invalid";
       feedback.textContent = "Owner, job name, working directory, and command are required.";
+      return;
+    }
+    if ([...draft.name].length > maxJobNameLength) {
+      feedback.className = "form-feedback invalid";
+      feedback.textContent = `Job name must be ${maxJobNameLength} characters or fewer.`;
+      return;
+    }
+    if ([...draft.user].length > maxJobUserLength) {
+      feedback.className = "form-feedback invalid";
+      feedback.textContent = `Owner must be ${maxJobUserLength} characters or fewer.`;
       return;
     }
     button.disabled = true;

@@ -9,13 +9,16 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::config::normalize_path;
-use crate::domain::{Job, JobState, NewJob};
+use crate::domain::{
+    Job, JobState, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, NewJob, validate_job_name,
+    validate_job_user,
+};
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY NOT NULL,
-    name TEXT NOT NULL,
-    user TEXT NOT NULL,
+    name TEXT NOT NULL CHECK (length(name) <= 128),
+    user TEXT NOT NULL CHECK (length(user) <= 50),
     cwd TEXT NOT NULL,
     command TEXT NOT NULL,
     command_line TEXT,
@@ -99,6 +102,7 @@ impl Store {
         migrate_legacy_git_schema(&mut connection)?;
         migrate_command_line(&connection)?;
         migrate_queue_order(&mut connection)?;
+        migrate_job_text_lengths(&mut connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -121,6 +125,8 @@ impl Store {
         new_job: NewJob,
         command_line: Option<String>,
     ) -> Result<Uuid, StoreError> {
+        validate_job_name(&new_job.name).map_err(StoreError::InvalidData)?;
+        validate_job_user(&new_job.user).map_err(StoreError::InvalidData)?;
         let id = Uuid::new_v4();
         let created_at = Utc::now();
         let command = serde_json::to_string(&new_job.command)?;
@@ -629,6 +635,73 @@ fn migrate_queue_order(connection: &mut Connection) -> Result<(), StoreError> {
     tx.execute(
         "UPDATE jobs SET queue_order = NULL WHERE state <> 'QUEUED'",
         [],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn migrate_job_text_lengths(connection: &mut Connection) -> Result<(), StoreError> {
+    let table_sql: Option<String> = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'",
+        [],
+        |row| row.get(0),
+    )?;
+    if table_sql.as_deref().is_some_and(|sql| {
+        sql.contains("CHECK (length(name) <= 128)") && sql.contains("CHECK (length(user) <= 50)")
+    }) {
+        return Ok(());
+    }
+
+    let has_invalid_name: bool = connection.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM jobs
+             WHERE length(name) > ?1 OR length(user) > ?2
+         )",
+        params![
+            i64::try_from(MAX_JOB_NAME_LENGTH).expect("job name limit fits i64"),
+            i64::try_from(MAX_JOB_USER_LENGTH).expect("job user limit fits i64")
+        ],
+        |row| row.get(0),
+    )?;
+    if has_invalid_name {
+        return Err(StoreError::InvalidData(format!(
+            "jobs table contains a name longer than {MAX_JOB_NAME_LENGTH} characters or a user longer than {MAX_JOB_USER_LENGTH} characters"
+        )));
+    }
+
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute_batch(
+        "CREATE TABLE jobs_name_limit (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL CHECK (length(name) <= 128),
+            user TEXT NOT NULL CHECK (length(user) <= 50),
+            cwd TEXT NOT NULL,
+            command TEXT NOT NULL,
+            command_line TEXT,
+            state TEXT NOT NULL,
+            queue_order INTEGER,
+            created_at TEXT NOT NULL,
+            committed_at TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            exit_code INTEGER,
+            pid INTEGER,
+            failure_detail TEXT
+        );
+        INSERT INTO jobs_name_limit
+            (id,name,user,cwd,command,command_line,state,queue_order,created_at,
+             committed_at,started_at,finished_at,exit_code,pid,failure_detail)
+        SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
+               committed_at,started_at,finished_at,exit_code,pid,failure_detail
+        FROM jobs;
+        DROP INDEX IF EXISTS jobs_state_queue_order_id;
+        DROP INDEX IF EXISTS jobs_user_state_created_at_id;
+        DROP TABLE jobs;
+        ALTER TABLE jobs_name_limit RENAME TO jobs;
+        CREATE INDEX jobs_state_queue_order_id
+            ON jobs (state, queue_order, id);
+        CREATE INDEX jobs_user_state_created_at_id
+            ON jobs (user, state, created_at, id);",
     )?;
     tx.commit()?;
     Ok(())

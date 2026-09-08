@@ -1587,10 +1587,8 @@ fn windows_update_script(
 }
 
 fn commit(ids: Vec<Uuid>, all: bool, user: Option<String>) -> anyhow::Result<()> {
-    if let Some(user) = user.as_deref()
-        && user.trim().is_empty()
-    {
-        anyhow::bail!("--user must not be empty");
+    if let Some(user) = user.as_deref() {
+        crate::domain::validate_job_user(user).map_err(|message| anyhow::anyhow!("--{message}"))?;
     }
     let paths = open_paths()?;
     if all {

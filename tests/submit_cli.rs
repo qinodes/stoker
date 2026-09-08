@@ -253,6 +253,32 @@ fn add_rejects_empty_user_and_name() {
 }
 
 #[test]
+fn add_rejects_job_names_and_users_longer_than_the_supported_limits() {
+    let repo = TestRepo::new();
+    let long_name = "x".repeat(stoker::domain::MAX_JOB_NAME_LENGTH + 1);
+    stoker_in(repo.path())
+        .args([
+            "add", "--user", "alice", "--name", &long_name, "--cmd", "echo ok",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--name must be 128 characters or fewer",
+        ));
+
+    let long_user = "u".repeat(stoker::MAX_JOB_USER_LENGTH + 1);
+    stoker_in(repo.path())
+        .args([
+            "add", "--user", &long_user, "--name", "job", "--cmd", "echo ok",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--user must be 50 characters or fewer",
+        ));
+}
+
+#[test]
 fn logs_explain_when_queued_or_finished_jobs_have_no_run_directory() {
     let repo = TestRepo::new();
     let home = repo.path().parent().unwrap().join(format!(
