@@ -1,4 +1,4 @@
-.PHONY: format format-check lint test cargo-check coverage coverage-install build stop-test-process stop-all dev-install start-all check version tag git-formal-push release publish
+.PHONY: format format-check lint test cargo-check coverage coverage-install build stop-test-process dev-restart check version tag git-formal-push release publish
 
 VERSION ?=
 TAG = v$(VERSION)
@@ -56,14 +56,10 @@ else
 	-pkill -f -- "$(CURDIR)/target/debug/stoker"
 endif
 
-# Development helpers for restarting the locally installed Stoker binary.
-stop-all:
+# Development helper for restarting the locally installed Stoker binary.
+dev-restart:
 	stoker ui stop && stoker stop
-
-dev-install:
 	cargo install --path .
-
-start-all:
 	stoker start && stoker ui start --open
 
 check:
