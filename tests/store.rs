@@ -3,6 +3,7 @@ use std::sync::{Arc, Barrier};
 
 use rusqlite::{Connection, params};
 use stoker::{JobState, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, NewJob, Store, StoreError};
+use stoker::{MAX_JOB_DESCRIPTION_LENGTH, normalize_description};
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -18,6 +19,7 @@ fn new_job() -> NewJob {
     NewJob {
         name: "example".into(),
         user: "alice".into(),
+        description: None,
         cwd: PathBuf::from("/tmp/repository/experiments/example"),
         command: vec!["echo".into(), "ok".into()],
     }
@@ -28,6 +30,133 @@ fn new_job_named(name: &str) -> NewJob {
         name: name.into(),
         ..new_job()
     }
+}
+
+#[test]
+fn descriptions_are_optional_bounded_and_revision_checked() {
+    let store = test_store();
+    let id = store
+        .create_job(NewJob {
+            description: Some("initial description".into()),
+            ..new_job()
+        })
+        .unwrap();
+    let created = store.get_job(id).unwrap();
+    assert_eq!(created.description.as_deref(), Some("initial description"));
+    assert_eq!(created.description_revision, 0);
+
+    let updated = store
+        .update_description(id, Some("updated description".into()), 0)
+        .unwrap();
+    assert_eq!(updated.description.as_deref(), Some("updated description"));
+    assert_eq!(updated.description_revision, 1);
+
+    let conflict = store
+        .update_description(id, Some("stale update".into()), 0)
+        .unwrap_err();
+    assert!(matches!(
+        conflict,
+        StoreError::DescriptionConflict {
+            expected_revision: 0,
+            actual_revision: 1,
+            ..
+        }
+    ));
+    assert_eq!(
+        store.get_job(id).unwrap().description.as_deref(),
+        Some("updated description")
+    );
+
+    let cleared = store.update_description(id, None, 1).unwrap();
+    assert_eq!(cleared.description, None);
+    assert_eq!(cleared.description_revision, 2);
+}
+
+#[test]
+fn description_length_is_checked_in_store_and_normalization_preserves_optional_values() {
+    let store = test_store();
+    let too_long = "x".repeat(MAX_JOB_DESCRIPTION_LENGTH + 1);
+    let error = store
+        .create_job(NewJob {
+            description: Some(too_long),
+            ..new_job()
+        })
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("description must be 200 characters or fewer")
+    );
+    assert_eq!(normalize_description(Some("   ".into())), None);
+    assert_eq!(
+        normalize_description(Some("text".into())),
+        Some("text".into())
+    );
+}
+
+#[test]
+fn concurrent_description_updates_allow_only_one_writer() {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("stoker.db");
+    let first_store = Arc::new(Store::open(&db_path).unwrap());
+    let second_store = Arc::new(Store::open(&db_path).unwrap());
+    let id = first_store.create_job(new_job()).unwrap();
+    let barrier = Arc::new(Barrier::new(3));
+
+    let first_barrier = Arc::clone(&barrier);
+    let first = Arc::clone(&first_store);
+    let first_handle = std::thread::spawn(move || {
+        first_barrier.wait();
+        first.update_description(id, Some("first writer".into()), 0)
+    });
+    let second_barrier = Arc::clone(&barrier);
+    let second = Arc::clone(&second_store);
+    let second_handle = std::thread::spawn(move || {
+        second_barrier.wait();
+        second.update_description(id, Some("second writer".into()), 0)
+    });
+    barrier.wait();
+
+    let results = [first_handle.join().unwrap(), second_handle.join().unwrap()];
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(StoreError::DescriptionConflict { .. })))
+            .count(),
+        1
+    );
+    let final_job = first_store.get_job(id).unwrap();
+    assert_eq!(final_job.description_revision, 1);
+    assert!(matches!(
+        final_job.description.as_deref(),
+        Some("first writer" | "second writer")
+    ));
+}
+
+#[test]
+fn description_update_and_terminal_cleanup_are_serialized() {
+    let store = test_store();
+    let id = store.create_job(new_job()).unwrap();
+    store.cancel_not_started(id).unwrap();
+
+    let updated = store
+        .update_description(id, Some("retained until cleanup".into()), 0)
+        .unwrap();
+    assert_eq!(
+        updated.description.as_deref(),
+        Some("retained until cleanup")
+    );
+    let cleaned = store.clean_terminal_jobs().unwrap();
+    assert_eq!(cleaned.len(), 1);
+    assert_eq!(
+        cleaned[0].description.as_deref(),
+        Some("retained until cleanup")
+    );
+    assert!(matches!(
+        store.update_description(id, Some("too late".into()), 1),
+        Err(StoreError::NotFound { .. })
+    ));
 }
 
 #[test]
@@ -79,6 +208,31 @@ fn database_schema_enforces_job_name_length_for_existing_databases() {
         rusqlite::params![
             Uuid::new_v4().to_string(),
             "u".repeat(MAX_JOB_USER_LENGTH + 1)
+        ],
+    );
+    assert!(error.is_err());
+
+    let columns = connection
+        .prepare("PRAGMA table_info(jobs)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(columns.iter().any(|column| column == "description"));
+    assert!(
+        columns
+            .iter()
+            .any(|column| column == "description_revision")
+    );
+
+    let error = connection.execute(
+        "INSERT INTO jobs
+         (id,name,user,cwd,command,state,created_at,description)
+         VALUES (?1,'valid','alice','/tmp','[]','DRAFT','2026-01-01T00:00:00Z',?2)",
+        rusqlite::params![
+            Uuid::new_v4().to_string(),
+            "d".repeat(MAX_JOB_DESCRIPTION_LENGTH + 1)
         ],
     );
     assert!(error.is_err());

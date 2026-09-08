@@ -9,6 +9,7 @@
   const SNAPSHOTS_PAGE_SIZE = 5;
   const DEFAULT_MAX_JOB_NAME_LENGTH = 128;
   const DEFAULT_MAX_JOB_USER_LENGTH = 50;
+  const DEFAULT_MAX_JOB_DESCRIPTION_LENGTH = 200;
 
   const state = {
     config: null,
@@ -25,11 +26,11 @@
     loading: false,
     renderAfterLoad: false,
     configurationDraft: null,
-    jobDraft: { user: "", name: "", cwd: "", command: "" },
+    jobDraft: { user: "", name: "", cwd: "", command: "", description: "" },
     jobDialogOpen: false,
     jobDialogView: "form",
     filesystem: { roots: null, current: null, inputPath: "", loading: false, error: "", requestId: 0, directoryCache: new Map(), directoryRequests: new Map() },
-    jobDetails: { selectedId: "", job: null, workingDirectoryStatus: "", displayTimezone: "", loading: false, action: "", error: "", requestId: 0 },
+    jobDetails: { selectedId: "", job: null, workingDirectoryStatus: "", displayTimezone: "", loading: false, action: "", error: "", requestId: 0, descriptionEditing: false, descriptionDraft: "", descriptionExpanded: false, descriptionSaving: false, descriptionError: "" },
     error: null,
   };
 
@@ -75,7 +76,9 @@
     if (!response.ok) {
       let message = `Request failed (${response.status})`;
       try { message = (await response.json()).error || message; } catch (_) { /* keep status */ }
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = response.status;
+      throw error;
     }
     return response.json();
   }
@@ -141,7 +144,11 @@
         const currentJob = state.jobs.find((job) => job.id === state.jobDetails.selectedId);
         if (currentJob) {
           state.jobDetails.job = currentJob;
-          if (jobDetailDialog.open) renderJobDetail();
+          if (!state.jobDetails.descriptionEditing && !state.jobDetails.descriptionSaving) {
+            state.jobDetails.descriptionDraft = currentJob.description || "";
+            state.jobDetails.descriptionError = "";
+          }
+          if (jobDetailDialog.open && !state.jobDetails.descriptionEditing && !state.jobDetails.descriptionSaving) renderJobDetail();
         } else if (jobDetailDialog.open) {
           state.jobDetails.job = null;
           state.jobDetails.error = "This job is no longer in the workspace.";
@@ -160,7 +167,8 @@
       state.loaded = true;
       document.getElementById("app-version").textContent = state.config.version || "—";
       updateConnection(true);
-      const shouldRender = options.forceRender || state.renderAfterLoad || !isInteractiveEditing();
+      const detailEditing = state.jobDetails.descriptionEditing || state.jobDetails.descriptionSaving;
+      const shouldRender = options.forceRender || state.renderAfterLoad || (!detailEditing && !isInteractiveEditing());
       state.renderAfterLoad = false;
       if (shouldRender) render();
       else {
@@ -334,6 +342,11 @@
     state.jobDetails.loading = true;
     state.jobDetails.action = "";
     state.jobDetails.error = "";
+    state.jobDetails.descriptionEditing = false;
+    state.jobDetails.descriptionDraft = "";
+    state.jobDetails.descriptionExpanded = false;
+    state.jobDetails.descriptionSaving = false;
+    state.jobDetails.descriptionError = "";
     const requestId = ++state.jobDetails.requestId;
     if (!jobDetailDialog.open) jobDetailDialog.showModal();
     renderJobDetail();
@@ -341,6 +354,7 @@
       const result = await request(`/api/v1/jobs/${encodeURIComponent(id)}`);
       if (requestId !== state.jobDetails.requestId || state.jobDetails.selectedId !== id) return;
       state.jobDetails.job = result.job;
+      state.jobDetails.descriptionDraft = result.job.description || "";
       state.jobDetails.workingDirectoryStatus = result.working_directory_status || "";
       state.jobDetails.displayTimezone = result.display_timezone || "";
       state.jobDetails.error = "";
@@ -358,6 +372,11 @@
     state.jobDetails.job = null;
     state.jobDetails.action = "";
     state.jobDetails.error = "";
+    state.jobDetails.descriptionEditing = false;
+    state.jobDetails.descriptionDraft = "";
+    state.jobDetails.descriptionExpanded = false;
+    state.jobDetails.descriptionSaving = false;
+    state.jobDetails.descriptionError = "";
     state.jobDetails.requestId += 1;
     if (jobDetailDialog.open) jobDetailDialog.close();
   }
@@ -380,17 +399,24 @@
     const command = job.command_line || (Array.isArray(job.command) ? job.command.join(" ") : job.command) || "—";
     const actionButtons = jobActionMarkup(job, detail.action);
     const directoryStatus = detail.workingDirectoryStatus || workingDirectoryStatus(job.state);
+    const description = detail.descriptionEditing ? detail.descriptionDraft : (job.description || "");
+    const descriptionHasMore = [...description].length > 160 || description.split("\n").length > 4;
+    const timeline = [["Created", job.created_at], ["Committed", job.committed_at], ["Started", job.started_at], ["Finished", job.finished_at]];
+    const timelineMarkup = timeline.map(([label, value]) => {
+      return `<div class="timeline-item${value ? " has-value" : ""}"><span class="timeline-dot" aria-hidden="true"></span><span class="timeline-label">${label}</span><span class="timeline-time">${value ? liveTime(value) : "Not recorded"}</span></div>`;
+    }).join("");
     jobDetailContent.innerHTML = `
       <div class="job-detail-card">
-        <div class="job-detail-heading"><div><div class="dialog-kicker">Workspace / Jobs</div><h2 id="job-detail-title">${escapeHtml(job.name)}</h2><p class="job-detail-id mono">${escapeHtml(job.id)}</p></div><button class="dialog-close" id="job-detail-close" type="button" aria-label="Close job details">×</button></div>
-        <div class="job-detail-status"><div><span class="section-kicker">Current state</span><div class="job-detail-state">${stateBadge(job.state)}</div></div><div class="job-detail-status-meta"><span class="job-detail-directory-status">${escapeHtml(directoryStatus)}</span>${detail.displayTimezone ? `<span class="job-detail-timezone">Times shown in ${escapeHtml(detail.displayTimezone)}</span>` : ""}</div></div>
+        <div class="job-detail-heading"><div><div class="dialog-kicker">Workspace / Jobs</div><h2 id="job-detail-title">${escapeHtml(job.name)}</h2><p class="job-detail-id mono"><span>${escapeHtml(job.id)}</span><button class="copy-id-button" id="job-detail-copy-id" type="button" title="Copy job ID" aria-label="Copy job ID"></button></p></div><button class="dialog-close" id="job-detail-close" type="button" aria-label="Close job details">×</button></div>
+        <div class="job-detail-status"><div><span class="section-kicker">Current state</span><div class="job-detail-state">${stateBadge(job.state)}</div></div><div class="job-detail-status-meta"><span class="job-detail-directory-status">${escapeHtml(directoryStatus)}</span></div></div>
         ${detail.error ? `<div class="form-feedback invalid" aria-live="polite">${escapeHtml(detail.error)}</div>` : ""}
         <section class="job-detail-section"><div class="section-kicker">Job overview</div><div class="job-detail-grid"><div><span class="detail-label">Owner</span><strong>${escapeHtml(job.user)}</strong></div><div><span class="detail-label">Queue order</span><strong>${job.queue_order == null ? "—" : escapeHtml(job.queue_order)}</strong></div><div class="job-detail-wide"><span class="detail-label">Working directory</span><code>${escapeHtml(job.cwd)}</code></div><div class="job-detail-wide"><span class="detail-label">Command</span><pre class="job-command">${escapeHtml(command)}</pre></div></div></section>
-        <section class="job-detail-section"><div class="section-kicker">Timeline</div><div class="job-timeline"><div><span>Created</span>${liveTime(job.created_at)}</div><div><span>Committed</span>${liveTime(job.committed_at)}</div><div><span>Started</span>${liveTime(job.started_at)}</div><div><span>Finished</span>${liveTime(job.finished_at)}</div></div></section>
-        <section class="job-detail-section"><div class="section-kicker">Result</div><div class="job-detail-grid"><div><span class="detail-label">Process ID</span><strong>${job.pid == null ? "—" : escapeHtml(job.pid)}</strong></div><div><span class="detail-label">Exit code</span><strong>${job.exit_code == null ? "—" : escapeHtml(job.exit_code)}</strong></div>${job.failure_detail ? `<div class="job-detail-wide detail-failure"><span class="detail-label">Failure detail</span><p>${escapeHtml(job.failure_detail)}</p></div>` : ""}</div></section>
+        <section class="job-detail-section job-description-section"><div class="section-heading-row"><div class="section-kicker">Description</div>${detail.descriptionEditing ? "" : `<button class="button small secondary" id="job-description-edit" type="button">${description ? "Edit" : "Add description"}</button>`}</div>${detail.descriptionEditing ? `<textarea class="description-input job-description-editor" id="job-description-editor" maxlength="${(Number(state.config?.max_job_description_length) || DEFAULT_MAX_JOB_DESCRIPTION_LENGTH) * 2}" rows="5">${escapeHtml(description)}</textarea><div class="description-editor-meta"><small class="form-help"><span id="job-description-editor-count">${[...description].length}</span>/${Number(state.config?.max_job_description_length) || DEFAULT_MAX_JOB_DESCRIPTION_LENGTH}</small><div class="description-editor-actions"><button class="button small secondary" id="job-description-cancel" type="button" ${detail.descriptionSaving ? "disabled" : ""}>Cancel</button><button class="button small primary" id="job-description-save" type="button" ${detail.descriptionSaving ? "disabled" : ""}>${detail.descriptionSaving ? "Saving…" : "Save"}</button></div></div>${detail.descriptionError ? `<div class="form-feedback invalid" aria-live="polite">${escapeHtml(detail.descriptionError)} <button class="button ghost small" id="job-description-reload" type="button">Reload latest</button></div>` : ""}` : `<p class="job-description-preview${detail.descriptionExpanded ? " expanded" : ""}${description ? "" : " empty"}">${escapeHtml(description || "No description provided.")}</p>${descriptionHasMore ? `<button class="button ghost small" id="job-description-expand" type="button">${detail.descriptionExpanded ? "Show less" : "Show more"}</button>` : ""}`}</section>
+        <section class="job-detail-section"><div class="timeline-heading"><div class="section-kicker">Timeline</div>${detail.displayTimezone ? `<span class="job-detail-timezone">Times shown in ${escapeHtml(detail.displayTimezone)}</span>` : ""}</div><div class="job-timeline">${timelineMarkup}</div></section>
         <div class="job-detail-actions"><button class="button secondary" id="job-detail-logs" type="button">View logs</button><span class="job-action-spacer"></span>${actionButtons}</div>
       </div>`;
     document.getElementById("job-detail-close").addEventListener("click", closeJobDetail);
+    document.getElementById("job-detail-copy-id").addEventListener("click", (event) => copyJobId(job.id, event.currentTarget));
     document.getElementById("job-detail-logs").addEventListener("click", () => {
       state.logs.jobId = job.id;
       state.logs.data = null;
@@ -404,6 +430,99 @@
     if (commit) commit.addEventListener("click", () => confirmJobAction("commit", job));
     const cancel = document.getElementById("job-detail-cancel");
     if (cancel) cancel.addEventListener("click", () => confirmJobAction("cancel", job));
+    const descriptionEdit = document.getElementById("job-description-edit");
+    if (descriptionEdit) descriptionEdit.addEventListener("click", () => {
+      detail.descriptionEditing = true;
+      detail.descriptionDraft = job.description || "";
+      detail.descriptionError = "";
+      renderJobDetail();
+      document.getElementById("job-description-editor")?.focus({ preventScroll: true });
+    });
+    const descriptionExpand = document.getElementById("job-description-expand");
+    if (descriptionExpand) descriptionExpand.addEventListener("click", () => {
+      detail.descriptionExpanded = !detail.descriptionExpanded;
+      renderJobDetail();
+    });
+    const descriptionEditor = document.getElementById("job-description-editor");
+    if (descriptionEditor) {
+      descriptionEditor.addEventListener("input", (event) => {
+        detail.descriptionDraft = limitUnicode(event.target.value, Number(state.config?.max_job_description_length) || DEFAULT_MAX_JOB_DESCRIPTION_LENGTH);
+        event.target.value = detail.descriptionDraft;
+        document.getElementById("job-description-editor-count").textContent = String([...detail.descriptionDraft].length);
+      });
+      document.getElementById("job-description-cancel").addEventListener("click", () => {
+        detail.descriptionEditing = false;
+        detail.descriptionDraft = job.description || "";
+        detail.descriptionError = "";
+        renderJobDetail();
+      });
+      document.getElementById("job-description-save").addEventListener("click", () => saveJobDescription(job));
+      const reload = document.getElementById("job-description-reload");
+      if (reload) reload.addEventListener("click", () => openJobDetail(job.id));
+    }
+  }
+
+  async function saveJobDescription(job) {
+    const detail = state.jobDetails;
+    const maxLength = Number(state.config?.max_job_description_length) || DEFAULT_MAX_JOB_DESCRIPTION_LENGTH;
+    if ([...detail.descriptionDraft].length > maxLength) {
+      detail.descriptionError = `Description must be ${maxLength} characters or fewer.`;
+      renderJobDetail();
+      return;
+    }
+    detail.descriptionSaving = true;
+    detail.descriptionError = "";
+    renderJobDetail();
+    try {
+      const response = await request(`/api/v1/jobs/${encodeURIComponent(job.id)}/description`, {
+        method: "PATCH",
+        body: JSON.stringify({ description: detail.descriptionDraft.trim() ? detail.descriptionDraft : null, expected_revision: job.description_revision }),
+      });
+      detail.job = response.job;
+      detail.descriptionDraft = response.job.description || "";
+      detail.descriptionEditing = false;
+      detail.descriptionSaving = false;
+      detail.descriptionError = "";
+      showToast(response.job.description ? "Description updated." : "Description cleared.");
+      await loadData({ forceRender: true });
+      if (state.jobDetails.selectedId === job.id) renderJobDetail();
+    } catch (error) {
+      detail.descriptionSaving = false;
+      if (error.status === 404) {
+        detail.descriptionEditing = false;
+        detail.error = "This job was deleted before its description could be saved.";
+      } else {
+        detail.descriptionError = error.status === 409 ? `${error.message} Reload the job to resolve the conflict.` : error.message;
+      }
+      showToast(error.message, true);
+      renderJobDetail();
+    }
+  }
+
+  async function copyJobId(id, button) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(id);
+      } else {
+        const input = document.createElement("textarea");
+        input.value = id;
+        input.setAttribute("readonly", "");
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        input.select();
+        const copied = document.execCommand("copy");
+        input.remove();
+        if (!copied) throw new Error("Clipboard access is unavailable.");
+      }
+      showToast("Job ID copied.");
+      button.classList.remove("copied");
+      void button.offsetWidth;
+      button.classList.add("copied");
+      setTimeout(() => button.classList.remove("copied"), 1200);
+    } catch (error) {
+      showToast(error.message || "Could not copy the job ID.", true);
+    }
   }
 
   function jobActionMarkup(job, action) {
@@ -487,6 +606,7 @@
     const draft = state.jobDraft;
     const maxJobNameLength = Number(state.config?.max_job_name_length) || DEFAULT_MAX_JOB_NAME_LENGTH;
     const maxJobUserLength = Number(state.config?.max_job_user_length) || DEFAULT_MAX_JOB_USER_LENGTH;
+    const maxJobDescriptionLength = Number(state.config?.max_job_description_length) || DEFAULT_MAX_JOB_DESCRIPTION_LENGTH;
     const users = [...new Set(state.jobs.map((job) => job.user).filter(Boolean))].sort();
     jobDialogContent.innerHTML = `
       <div class="dialog-card job-card">
@@ -499,13 +619,22 @@
           </div>
           <div class="job-field"><label for="job-cwd">Working directory</label><div class="path-input-row"><input class="text-input mono-input" id="job-cwd" name="cwd" value="${escapeAttribute(draft.cwd)}" placeholder="Choose a folder on the Stoker host" autocomplete="off" autocapitalize="off" spellcheck="false" required><button class="button secondary" id="job-browse" type="button">Browse</button></div><small class="form-help">Folders are read from the Stoker host.</small></div>
           <div class="job-field"><label for="job-command">Command</label><textarea class="command-input" id="job-command" name="command" rows="4" placeholder="cargo build --release" required>${escapeHtml(draft.command)}</textarea><small class="form-help">Enter the command only; Stoker will keep the same quoting rules as <code>stoker add --cmd</code>.</small></div>
+          <div class="job-field"><label for="job-description">Description <span class="field-optional">Optional</span></label><textarea class="description-input" id="job-description" name="description" rows="4" maxlength="${maxJobDescriptionLength * 2}" placeholder="What is this job for?">${escapeHtml(draft.description)}</textarea><small class="form-help">Maximum ${maxJobDescriptionLength} characters. <span id="job-description-count">${[...draft.description].length}/${maxJobDescriptionLength}</span></small></div>
           <div class="form-feedback ${state.filesystem.error ? "invalid" : ""}" id="job-form-feedback" aria-live="polite">${escapeHtml(state.filesystem.error)}</div>
           <div class="dialog-actions"><button class="button secondary" id="job-cancel" type="button">Cancel</button><button class="button primary" id="job-create" type="submit">Create draft</button></div>
         </form>
       </div>`;
     const form = document.getElementById("new-job-form");
-    ["user", "name", "cwd", "command"].forEach((field) => {
-      document.getElementById(`job-${field}`).addEventListener("input", (event) => { state.jobDraft[field] = event.target.value; if (field === "user") renderUserSuggestions(); });
+    ["user", "name", "cwd", "command", "description"].forEach((field) => {
+      document.getElementById(`job-${field}`).addEventListener("input", (event) => {
+        state.jobDraft[field] = event.target.value;
+        if (field === "user") renderUserSuggestions();
+        if (field === "description") {
+          event.target.value = limitUnicode(event.target.value, maxJobDescriptionLength);
+          state.jobDraft.description = event.target.value;
+          document.getElementById("job-description-count").textContent = `${[...event.target.value].length}/${maxJobDescriptionLength}`;
+        }
+      });
     });
     const userInput = document.getElementById("job-user");
     const userSuggestions = document.getElementById("job-user-suggestions");
@@ -550,6 +679,7 @@
     const button = document.getElementById("job-create");
     const maxJobNameLength = Number(state.config?.max_job_name_length) || DEFAULT_MAX_JOB_NAME_LENGTH;
     const maxJobUserLength = Number(state.config?.max_job_user_length) || DEFAULT_MAX_JOB_USER_LENGTH;
+    const maxJobDescriptionLength = Number(state.config?.max_job_description_length) || DEFAULT_MAX_JOB_DESCRIPTION_LENGTH;
     if (!draft.user.trim() || !draft.name.trim() || !draft.cwd.trim() || !draft.command.trim()) {
       feedback.className = "form-feedback invalid";
       feedback.textContent = "Owner, job name, working directory, and command are required.";
@@ -565,14 +695,19 @@
       feedback.textContent = `Owner must be ${maxJobUserLength} characters or fewer.`;
       return;
     }
+    if ([...draft.description].length > maxJobDescriptionLength) {
+      feedback.className = "form-feedback invalid";
+      feedback.textContent = `Description must be ${maxJobDescriptionLength} characters or fewer.`;
+      return;
+    }
     button.disabled = true;
     button.textContent = "Creating…";
     feedback.className = "form-feedback";
     feedback.textContent = "Saving DRAFT to the Stoker host…";
     try {
-      await request("/api/v1/jobs", { method: "POST", body: JSON.stringify(draft) });
+      await request("/api/v1/jobs", { method: "POST", body: JSON.stringify({ ...draft, description: draft.description.trim() ? draft.description : null }) });
       closeJobDialog();
-      state.jobDraft = { user: "", name: "", cwd: "", command: "" };
+      state.jobDraft = { user: "", name: "", cwd: "", command: "", description: "" };
       showToast("Created draft job.");
       await loadData({ forceRender: true });
     } catch (error) {
@@ -756,7 +891,8 @@
       app.innerHTML = '<div class="page-loading"><span class="spinner"></span><span>Loading configuration…</span></div>';
       return;
     }
-    const configuredTimezone = state.configurationDraft !== null ? state.configurationDraft : (settings.config.timezone || "");
+    const savedTimezone = settings.config.timezone || "";
+    const configuredTimezone = state.configurationDraft !== null ? state.configurationDraft : savedTimezone;
     const timezone = settings.effective_timezone || { name: "—", source: "—" };
     const timezones = settings.timezones || [];
     const snapshots = settings.snapshots || [];
@@ -792,9 +928,10 @@
     const updateTimezoneFeedback = () => {
       const value = timezoneInput.value.trim();
       const exact = timezones.includes(value);
-      timezoneSet.disabled = !exact;
+      const changed = value !== savedTimezone;
+      timezoneSet.disabled = !exact || !changed;
       timezoneFeedback.className = `form-feedback ${exact ? "valid" : value ? "invalid" : ""}`;
-      timezoneFeedback.textContent = exact ? "✓ Valid timezone. Ready to save." : value ? "Choose a timezone from the suggestions." : "Start typing to search available timezones.";
+      timezoneFeedback.textContent = exact && changed ? "✓ Valid timezone. Ready to save." : exact ? "Current timezone is already selected." : value ? "Choose a timezone from the suggestions." : "Start typing to search available timezones.";
     };
     const renderTimezoneSuggestions = () => {
       const matches = timezoneMatches();
@@ -975,6 +1112,8 @@
   function escapeHtml(value) { return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char])); }
 
   function escapeAttribute(value) { return escapeHtml(value); }
+
+  function limitUnicode(value, maximum) { return [...String(value ?? "")].slice(0, maximum).join(""); }
 
   function updateSchedulerPill() {
     const pill = document.getElementById("scheduler-pill");

@@ -24,7 +24,9 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 use crate::config::{ResolvedTimezone, StokerPaths, TimezoneSource, resolve_timezone};
-use crate::domain::{Job, JobState, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH};
+use crate::domain::{
+    Job, JobState, MAX_JOB_DESCRIPTION_LENGTH, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH,
+};
 use crate::ipc::{ServiceClient, is_service_unavailable};
 use crate::output;
 use crate::{Store, StoreError};
@@ -129,6 +131,7 @@ struct UiConfigResponse {
     version: &'static str,
     max_job_name_length: usize,
     max_job_user_length: usize,
+    max_job_description_length: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -197,8 +200,16 @@ struct JobActionResponse {
 struct CreateJobRequest {
     user: String,
     name: String,
+    #[serde(default)]
+    description: Option<String>,
     cwd: String,
     command: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateDescriptionRequest {
+    description: Option<String>,
+    expected_revision: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -557,6 +568,7 @@ async fn route_request(
                 version: env!("CARGO_PKG_VERSION"),
                 max_job_name_length: MAX_JOB_NAME_LENGTH,
                 max_job_user_length: MAX_JOB_USER_LENGTH,
+                max_job_description_length: MAX_JOB_DESCRIPTION_LENGTH,
             })?,
         ),
         ("GET", "/api/v1/status") => (HttpStatus::OK, status_json(state).await?),
@@ -574,6 +586,10 @@ async fn route_request(
             (HttpStatus::OK, configuration_json(state)?)
         }
         ("POST", "/api/v1/jobs") => (HttpStatus::CREATED, create_job_json(request, state)?),
+        ("PATCH", path) if path.starts_with("/api/v1/jobs/") && path.ends_with("/description") => (
+            HttpStatus::OK,
+            update_description_json(request, state, action_job_id(path, "description")?)?,
+        ),
         ("POST", path) if path.starts_with("/api/v1/jobs/") && path.ends_with("/commit") => (
             HttpStatus::OK,
             commit_job_json(state, action_job_id(path, "commit")?).await?,
@@ -640,9 +656,29 @@ fn create_job_json(request: &HttpRequest, state: &UiServerState) -> anyhow::Resu
         body.name,
         PathBuf::from(body.cwd),
         body.command,
+        body.description,
     )
     .map_err(UiBadRequest::from_error)?;
     Ok(serde_json::to_vec(&CreateJobResponse { job })?)
+}
+
+fn update_description_json(
+    request: &HttpRequest,
+    state: &UiServerState,
+    id: Uuid,
+) -> anyhow::Result<Vec<u8>> {
+    require_json_content_type(request)?;
+    let body: UpdateDescriptionRequest = json_body(request)?;
+    let store = Store::open(&state.paths.database)?;
+    match store.update_description(id, body.description, body.expected_revision) {
+        Ok(job) => Ok(serde_json::to_vec(&JobActionResponse { job })?),
+        Err(StoreError::NotFound { .. }) => Err(UiNotFound.into()),
+        Err(error @ StoreError::DescriptionConflict { .. }) => {
+            Err(UiConflict::from_error(error.into()))
+        }
+        Err(StoreError::InvalidData(message)) => Err(UiBadRequest::new(message).into()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn job_detail_json(state: &UiServerState, id: Uuid) -> anyhow::Result<Vec<u8>> {
@@ -1697,7 +1733,7 @@ mod tests {
 
     use crate::Store;
     use crate::config::{StokerConfig, resolve_timezone};
-    use crate::domain::{JobState, NewJob};
+    use crate::domain::{JobState, MAX_JOB_DESCRIPTION_LENGTH, NewJob};
 
     use super::{
         APP_JS, HttpRequest, INDEX_HTML, LOGO_MARK_PNG, MAX_LOG_BYTES, STYLES_CSS, StokerPaths,
@@ -1718,6 +1754,8 @@ mod tests {
         assert!(APP_JS.contains("max_job_name_length"));
         assert!(APP_JS.contains("maxJobUserLength"));
         assert!(APP_JS.contains("max_job_user_length"));
+        assert!(APP_JS.contains("maxJobDescriptionLength"));
+        assert!(APP_JS.contains("max_job_description_length"));
         assert!(APP_JS.contains("128"));
         assert!(APP_JS.contains("/api/v1/jobs"));
         assert!(APP_JS.contains("/api/v1/fs/directories"));
@@ -1735,11 +1773,19 @@ mod tests {
         assert!(INDEX_HTML.contains("/assets/logo-mark.png"));
         assert!(LOGO_MARK_PNG.starts_with(b"\x89PNG\r\n\x1a\n"));
         assert!(APP_JS.contains("/api/v1/config/timezone"));
+        assert!(APP_JS.contains("timezoneSet.disabled = !exact || !changed"));
         assert!(APP_JS.contains("/api/v1/config/restore"));
         assert!(!APP_JS.contains("How to use Logs"));
         assert!(APP_JS.contains("/logs"));
         assert!(APP_JS.contains("openJobDetail"));
         assert!(APP_JS.contains("runJobAction"));
+        assert!(APP_JS.contains("job-description-editor"));
+        assert!(APP_JS.contains("/description"));
+        assert!(APP_JS.contains("description_revision"));
+        assert!(APP_JS.contains("timeline-time"));
+        assert!(APP_JS.contains("job-detail-copy-id"));
+        assert!(APP_JS.contains("copyJobId"));
+        assert!(APP_JS.contains("timeline-heading"));
         assert!(APP_JS.contains("Commit job"));
         assert!(APP_JS.contains("Cancel job"));
         assert!(APP_JS.contains("job-suggestions"));
@@ -1778,6 +1824,10 @@ mod tests {
         assert!(STYLES_CSS.contains(".job-dialog"));
         assert!(STYLES_CSS.contains(".job-detail-dialog"));
         assert!(STYLES_CSS.contains(".job-suggestions"));
+        assert!(STYLES_CSS.contains(".job-description-preview"));
+        assert!(STYLES_CSS.contains(".job-timeline"));
+        assert!(STYLES_CSS.contains(".timeline-time"));
+        assert!(STYLES_CSS.contains(".copy-id-button"));
     }
 
     #[test]
@@ -2079,6 +2129,7 @@ mod tests {
             .create_job(NewJob {
                 name: "queued-log".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into()],
             })
@@ -2096,6 +2147,7 @@ mod tests {
             .create_job(NewJob {
                 name: "cancelled-log".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into()],
             })
@@ -2173,6 +2225,7 @@ mod tests {
             .create_job(NewJob {
                 name: "detail-job".into(),
                 user: "alice".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into(), "hello world".into()],
             })
@@ -2280,7 +2333,7 @@ mod tests {
         assert!(missing.downcast_ref::<UiPathNotFound>().is_some());
 
         let body = format!(
-            r#"{{"user":"alice","name":"build","cwd":{},"command":"echo \"hello world\""}}"#,
+            r#"{{"user":"alice","name":"build","description":"Build the project","cwd":{},"command":"echo \"hello world\""}}"#,
             serde_json::to_string(&working.to_string_lossy()).unwrap()
         );
         let mut request = make_request("POST", "/api/v1/jobs", &body);
@@ -2293,7 +2346,61 @@ mod tests {
         let created: serde_json::Value = serde_json::from_slice(&created.2).unwrap();
         assert_eq!(created["job"]["state"], "DRAFT");
         assert_eq!(created["job"]["user"], "alice");
+        assert_eq!(created["job"]["description"], "Build the project");
+        assert_eq!(created["job"]["description_revision"], 0);
         assert_eq!(created["job"]["command_line"], "echo \"hello world\"");
+        let created_id = created["job"]["id"].as_str().unwrap();
+        let mut update = make_request(
+            "PATCH",
+            &format!("/api/v1/jobs/{created_id}/description"),
+            r#"{"description":"Updated from the browser","expected_revision":0}"#,
+        );
+        update
+            .headers
+            .insert("content-type".into(), "application/json".into());
+        let updated = route_request(&update, &state).await.unwrap();
+        let updated: serde_json::Value = serde_json::from_slice(&updated.2).unwrap();
+        assert_eq!(updated["job"]["description"], "Updated from the browser");
+        assert_eq!(updated["job"]["description_revision"], 1);
+
+        let mut stale = make_request(
+            "PATCH",
+            &format!("/api/v1/jobs/{created_id}/description"),
+            r#"{"description":"Stale update","expected_revision":0}"#,
+        );
+        stale
+            .headers
+            .insert("content-type".into(), "application/json".into());
+        let conflict = route_request(&stale, &state).await.unwrap_err();
+        assert!(conflict.downcast_ref::<UiConflict>().is_some());
+
+        let mut too_long = make_request(
+            "PATCH",
+            &format!("/api/v1/jobs/{created_id}/description"),
+            &serde_json::json!({
+                "description": "x".repeat(MAX_JOB_DESCRIPTION_LENGTH + 1),
+                "expected_revision": 1
+            })
+            .to_string(),
+        );
+        too_long
+            .headers
+            .insert("content-type".into(), "application/json".into());
+        let too_long = route_request(&too_long, &state).await.unwrap_err();
+        assert!(too_long.downcast_ref::<UiBadRequest>().is_some());
+
+        let mut missing_description = make_request(
+            "PATCH",
+            &format!("/api/v1/jobs/{}/description", uuid::Uuid::new_v4()),
+            r#"{"description":"Missing","expected_revision":0}"#,
+        );
+        missing_description
+            .headers
+            .insert("content-type".into(), "application/json".into());
+        let missing_description = route_request(&missing_description, &state)
+            .await
+            .unwrap_err();
+        assert!(missing_description.downcast_ref::<UiNotFound>().is_some());
         assert_eq!(
             Store::open(&paths.database)
                 .unwrap()
@@ -2470,6 +2577,7 @@ mod tests {
             .create_job(NewJob {
                 name: "logs-draft".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into(), "draft".into()],
             })
@@ -2493,6 +2601,7 @@ mod tests {
             .create_job(NewJob {
                 name: "clean-terminal".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into(), "clean".into()],
             })
@@ -2590,6 +2699,7 @@ mod tests {
             .create_job(NewJob {
                 name: "queue-first".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into(), "first".into()],
             })
@@ -2598,6 +2708,7 @@ mod tests {
             .create_job(NewJob {
                 name: "queue-second".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into(), "second".into()],
             })

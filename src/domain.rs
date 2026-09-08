@@ -7,6 +7,7 @@ use uuid::Uuid;
 /// Maximum number of Unicode characters allowed in a user-provided job name.
 pub const MAX_JOB_NAME_LENGTH: usize = 128;
 pub const MAX_JOB_USER_LENGTH: usize = 50;
+pub const MAX_JOB_DESCRIPTION_LENGTH: usize = 200;
 
 pub fn validate_job_name(name: &str) -> Result<(), String> {
     if name.trim().is_empty() {
@@ -30,6 +31,22 @@ pub fn validate_job_user(user: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+pub fn validate_description(description: Option<&str>) -> Result<(), String> {
+    let Some(description) = description else {
+        return Ok(());
+    };
+    if description.chars().count() > MAX_JOB_DESCRIPTION_LENGTH {
+        return Err(format!(
+            "description must be {MAX_JOB_DESCRIPTION_LENGTH} characters or fewer"
+        ));
+    }
+    Ok(())
+}
+
+pub fn normalize_description(description: Option<String>) -> Option<String> {
+    description.filter(|value| !value.trim().is_empty())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +108,7 @@ impl std::str::FromStr for JobState {
 pub struct NewJob {
     pub name: String,
     pub user: String,
+    pub description: Option<String>,
     pub cwd: PathBuf,
     pub command: Vec<String>,
 }
@@ -114,6 +132,8 @@ pub struct Job {
     pub exit_code: Option<i32>,
     pub pid: Option<u32>,
     pub failure_detail: Option<String>,
+    pub description: Option<String>,
+    pub description_revision: i64,
 }
 
 #[cfg(test)]

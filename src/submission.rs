@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use anyhow::Context;
 
 use crate::config::normalize_path;
-use crate::domain::{Job, NewJob, validate_job_name, validate_job_user};
+use crate::domain::{
+    Job, NewJob, normalize_description, validate_description, validate_job_name, validate_job_user,
+};
 use crate::store::Store;
 
 /// Create a DRAFT shell job after applying the same validation used by both
@@ -17,15 +19,19 @@ pub fn create_shell_job(
     name: String,
     cwd: PathBuf,
     command_line: String,
+    description: Option<String>,
 ) -> anyhow::Result<Job> {
     validate_job_user(&user).map_err(|message| anyhow::anyhow!("--{message}"))?;
     validate_job_name(&name).map_err(|message| anyhow::anyhow!("--{message}"))?;
+    validate_description(description.as_deref())
+        .map_err(|message| anyhow::anyhow!("--{message}"))?;
     let command = parse_command_line(&command_line)?;
     let cwd = resolve_working_directory(cwd)?;
     let id = store.create_shell_job(
         NewJob {
             name,
             user,
+            description: normalize_description(description),
             cwd,
             command,
         },
@@ -131,7 +137,8 @@ mod tests {
 
     use super::parse_command_line;
     use crate::domain::{
-        MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, validate_job_name, validate_job_user,
+        MAX_JOB_DESCRIPTION_LENGTH, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, validate_description,
+        validate_job_name, validate_job_user,
     };
 
     #[test]
@@ -152,6 +159,16 @@ mod tests {
             "user must be 50 characters or fewer"
         );
         assert!(validate_job_user(&"🙂".repeat(MAX_JOB_USER_LENGTH)).is_ok());
+    }
+
+    #[test]
+    fn description_validation_accepts_optional_unicode_at_limit() {
+        assert!(validate_description(None).is_ok());
+        assert!(validate_description(Some(&"🙂".repeat(MAX_JOB_DESCRIPTION_LENGTH))).is_ok());
+        assert_eq!(
+            validate_description(Some(&"x".repeat(MAX_JOB_DESCRIPTION_LENGTH + 1))).unwrap_err(),
+            "description must be 200 characters or fewer"
+        );
     }
 
     #[test]

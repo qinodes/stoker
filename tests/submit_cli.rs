@@ -11,6 +11,7 @@ fn job(name: &str, user: &str) -> NewJob {
     NewJob {
         name: name.into(),
         user: user.into(),
+        description: None,
         cwd: PathBuf::from("."),
         command: vec!["echo".into(), name.into()],
     }
@@ -64,6 +65,72 @@ fn add_records_absolute_cwd_as_draft() {
     assert!(cwd.ends_with("experiments/llama"));
     assert_eq!(command, r#"["python","train.py","--lr","0.0001"]"#);
     assert_eq!(command_line, "python train.py --lr 0.0001");
+}
+
+#[test]
+fn add_and_set_description_persist_optional_text() {
+    let repo = TestRepo::new();
+    let output = stoker_in(repo.path())
+        .args([
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "described",
+            "--description",
+            "Initial purpose",
+            "--cmd",
+            "echo ok",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let id = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .to_owned();
+
+    stoker_in(repo.path())
+        .args(["show", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("description: Initial purpose"))
+        .stdout(predicate::str::contains("Some(\"Initial purpose\")").not());
+    stoker_in(repo.path())
+        .args(["set-description", &id, "Updated purpose"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated description for job"));
+    stoker_in(repo.path())
+        .args(["set-description", &id, "--clear"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Cleared description for job"));
+    stoker_in(repo.path())
+        .args(["show", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("description: -"));
+
+    let long_description = "d".repeat(stoker::MAX_JOB_DESCRIPTION_LENGTH + 1);
+    stoker_in(repo.path())
+        .args([
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "too-long-description",
+            "--description",
+            &long_description,
+            "--cmd",
+            "echo ok",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--description must be 200 characters or fewer",
+        ));
 }
 
 #[test]

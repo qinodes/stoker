@@ -673,6 +673,7 @@ mod tests {
             .create_job(NewJob {
                 name: "missing cwd".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().join("does-not-exist"),
                 command: vec!["echo".into()],
             })
@@ -681,6 +682,7 @@ mod tests {
             .create_job(NewJob {
                 name: "empty command".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: Vec::new(),
             })
@@ -689,6 +691,7 @@ mod tests {
             .create_job(NewJob {
                 name: "spawn failure".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["program-that-does-not-exist".into()],
             })
@@ -738,6 +741,7 @@ mod tests {
             .create_job(NewJob {
                 name: "wait failure".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into(), "mocked".into()],
             })
@@ -782,6 +786,7 @@ mod tests {
             .create_job(NewJob {
                 name: "queued".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })
@@ -805,6 +810,7 @@ mod tests {
             .create_job(NewJob {
                 name: "draft".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })
@@ -818,6 +824,7 @@ mod tests {
             .create_job(NewJob {
                 name: "queued".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })
@@ -839,6 +846,7 @@ mod tests {
             .create_job(NewJob {
                 name: "active".into(),
                 user: "test".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: if cfg!(windows) {
                     vec![
@@ -888,6 +896,7 @@ mod tests {
             .create_job(NewJob {
                 name: "cancelled".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })

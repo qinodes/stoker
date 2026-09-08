@@ -457,6 +457,8 @@ mod tests {
             exit_code: None,
             pid: None,
             failure_detail: None,
+            description: None,
+            description_revision: 0,
         };
         let queued_jobs = IpcResponse::QueuedJobs { jobs: vec![job] };
         let encoded = encode_response(&queued_jobs).unwrap();

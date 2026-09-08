@@ -453,6 +453,8 @@ mod tests {
             exit_code: None,
             pid: None,
             failure_detail: None,
+            description: None,
+            description_revision: 0,
         }
     }
 

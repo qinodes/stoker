@@ -769,6 +769,7 @@ mod tests {
             .create_job(NewJob {
                 name: "queued".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into(), "queued".into()],
             })
@@ -903,6 +904,7 @@ mod tests {
             .create_job(NewJob {
                 name: "draft".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })
@@ -920,6 +922,7 @@ mod tests {
             .create_job(NewJob {
                 name: "finished".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })
@@ -969,6 +972,7 @@ mod tests {
             .create_job(NewJob {
                 name: "running".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })
@@ -1041,6 +1045,7 @@ mod tests {
             .create_job(NewJob {
                 name: "finished".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })
@@ -1062,6 +1067,7 @@ mod tests {
             .create_job(NewJob {
                 name: "queued".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })
@@ -1086,6 +1092,7 @@ mod tests {
             .create_job(NewJob {
                 name: "queued".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })
@@ -1144,6 +1151,7 @@ mod tests {
             .create_job(NewJob {
                 name: "queued".into(),
                 user: "test".into(),
+                description: None,
                 cwd: PathBuf::from("."),
                 command: vec!["echo".into()],
             })

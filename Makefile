@@ -60,7 +60,7 @@ endif
 dev-restart:
 	stoker ui stop && stoker stop
 	cargo install --path .
-	stoker start && stoker ui start --open
+	stoker start && stoker ui start
 
 check:
 	$(MAKE) stop-test-process

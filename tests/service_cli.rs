@@ -87,6 +87,7 @@ fn long_running_job(name: &str, cwd: PathBuf) -> NewJob {
     NewJob {
         name: name.into(),
         user: "test".into(),
+        description: None,
         cwd,
         command: if cfg!(windows) {
             vec![
@@ -104,6 +105,7 @@ fn queued_job(name: &str, cwd: PathBuf) -> NewJob {
     NewJob {
         name: name.into(),
         user: "test".into(),
+        description: None,
         cwd,
         command: if cfg!(windows) {
             vec!["cmd".into(), "/C".into(), "echo queued".into()]
@@ -778,6 +780,7 @@ fn service_restart_marks_stranded_running_job_lost() {
         .create_job(NewJob {
             name: "stranded".into(),
             user: "test".into(),
+            description: None,
             cwd: PathBuf::from("/tmp/repository"),
             command: vec!["echo".into(), "never".into()],
         })
@@ -806,6 +809,7 @@ fn clean_can_remove_terminal_jobs_while_service_is_running() {
         .create_job(NewJob {
             name: "finished".into(),
             user: "test".into(),
+            description: None,
             cwd: PathBuf::from("/tmp/repository"),
             command: vec!["echo".into(), "finished".into()],
         })

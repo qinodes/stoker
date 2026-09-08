@@ -57,6 +57,8 @@ pub struct Cli {
 pub enum CliCommand {
     #[command(about = "Create a DRAFT job")]
     Add(AddArgs),
+    #[command(about = "Set or clear a job's description")]
+    SetDescription(SetDescriptionArgs),
     #[command(about = "Show a job's details")]
     Show {
         #[arg(help = "Job ID")]
@@ -208,6 +210,8 @@ pub struct AddArgs {
     pub user: String,
     #[arg(long, help = "Job name")]
     pub name: String,
+    #[arg(long, help = "Optional job description (maximum 200 characters)")]
+    pub description: Option<String>,
     #[arg(
         long = "cmd",
         required = true,
@@ -215,6 +219,21 @@ pub struct AddArgs {
         help = "Complete shell command string (quote it when it contains spaces)"
     )]
     pub command: String,
+}
+
+#[derive(Debug, Args)]
+pub struct SetDescriptionArgs {
+    #[arg(help = "Job ID")]
+    pub id: Uuid,
+    #[arg(
+        value_name = "DESCRIPTION",
+        required_unless_present = "clear",
+        conflicts_with = "clear",
+        help = "New job description (maximum 200 characters)"
+    )]
+    pub description: Option<String>,
+    #[arg(long, help = "Clear the current description")]
+    pub clear: bool,
 }
 
 #[derive(Debug, Args)]
@@ -244,6 +263,7 @@ pub fn run_command(command: CliCommand) -> anyhow::Result<()> {
 fn run_command_with_timezone(command: CliCommand, timezone: Option<String>) -> anyhow::Result<()> {
     match command {
         CliCommand::Add(args) => add(args),
+        CliCommand::SetDescription(args) => set_description(args),
         CliCommand::Show { id } => show(id, timezone.as_deref()),
         CliCommand::Jobs { user, state } => jobs(user.as_deref(), state, timezone.as_deref()),
         CliCommand::Config { command } => config(command, timezone.as_deref()),
@@ -1691,6 +1711,7 @@ fn add(args: AddArgs) -> anyhow::Result<()> {
         args.name,
         cwd,
         args.command,
+        args.description,
     )?;
     let id = job.id;
     let cwd = job.cwd;
@@ -1713,6 +1734,19 @@ fn add(args: AddArgs) -> anyhow::Result<()> {
             output::stdout_color_enabled(),
         )
     );
+    Ok(())
+}
+
+fn set_description(args: SetDescriptionArgs) -> anyhow::Result<()> {
+    let store = open_store()?;
+    let current = store.get_job(args.id)?;
+    let description = if args.clear { None } else { args.description };
+    let updated = store.update_description(args.id, description, current.description_revision)?;
+    if updated.description.is_some() {
+        print_success(format!("Updated description for job {}.", updated.id));
+    } else {
+        print_success(format!("Cleared description for job {}.", updated.id));
+    }
     Ok(())
 }
 
@@ -1855,6 +1889,10 @@ fn print_job(job: &Job, timezone: &ResolvedTimezone) {
     println!("id: {}", job.id);
     println!("name: {}", job.name);
     println!("user: {}", job.user);
+    println!(
+        "description: {}",
+        job.description.as_deref().unwrap_or("-")
+    );
     println!("working_directory: {}", job.cwd.display());
     println!("working_directory_status: {working_directory_status}");
     println!("command: {command}");
@@ -2420,6 +2458,17 @@ mod update_tests {
     }
 
     #[test]
+    fn description_commands_accept_set_and_clear_forms() {
+        let id = "00000000-0000-0000-0000-000000000001";
+        assert!(Cli::try_parse_from(["stoker", "set-description", id, "Build"]).is_ok());
+        assert!(Cli::try_parse_from(["stoker", "set-description", id, "--clear"]).is_ok());
+        assert!(Cli::try_parse_from(["stoker", "set-description", id]).is_err());
+        assert!(
+            Cli::try_parse_from(["stoker", "set-description", id, "Build", "--clear"]).is_err()
+        );
+    }
+
+    #[test]
     fn timezone_set_accepts_an_omitted_or_explicit_value() {
         assert!(Cli::try_parse_from(["stoker", "config", "set", "timezone"]).is_ok());
         assert!(Cli::try_parse_from(["stoker", "config", "set", "timezone", "Asia/Tokyo"]).is_ok());
@@ -2430,10 +2479,16 @@ mod update_tests {
         let mut command = Cli::command();
         let help = command.render_help().to_string();
         for description in [
-            "add        Create a DRAFT job",
-            "config     Manage Stoker user configuration",
-            "status     Show scheduler, queue, and timezone status",
-            "queue      Lock, edit, or unlock the queue",
+            "add",
+            "Create a DRAFT job",
+            "set-description",
+            "Set or clear a job's description",
+            "config",
+            "Manage Stoker user configuration",
+            "status",
+            "Show scheduler, queue, and timezone status",
+            "queue",
+            "Lock, edit, or unlock the queue",
             "      --timezone <TIMEZONE>  Timezone used when displaying timestamps [alias: --tz]",
         ] {
             assert!(
@@ -3096,6 +3151,7 @@ mod cli_runtime_tests {
         run_command(CliCommand::Add(AddArgs {
             user: "alice".into(),
             name: "local-flow".into(),
+            description: Some("Created from add".into()),
             command: "echo hello".into(),
         }))
         .unwrap();
@@ -3103,6 +3159,7 @@ mod cli_runtime_tests {
             run_command(CliCommand::Add(AddArgs {
                 user: " ".into(),
                 name: "invalid-user".into(),
+                description: None,
                 command: "echo hello".into(),
             }))
             .is_err()
@@ -3111,12 +3168,43 @@ mod cli_runtime_tests {
             run_command(CliCommand::Add(AddArgs {
                 user: "alice".into(),
                 name: " ".into(),
+                description: None,
                 command: "echo hello".into(),
             }))
             .is_err()
         );
         let store = Store::open(&paths.database).unwrap();
         let draft = store.list_jobs(None).unwrap().into_iter().next().unwrap();
+        assert_eq!(draft.description.as_deref(), Some("Created from add"));
+        run_command(CliCommand::SetDescription(SetDescriptionArgs {
+            id: draft.id,
+            description: Some("Created through the CLI".into()),
+            clear: false,
+        }))
+        .unwrap();
+        assert_eq!(
+            Store::open(&paths.database)
+                .unwrap()
+                .get_job(draft.id)
+                .unwrap()
+                .description
+                .as_deref(),
+            Some("Created through the CLI")
+        );
+        run_command(CliCommand::SetDescription(SetDescriptionArgs {
+            id: draft.id,
+            description: None,
+            clear: true,
+        }))
+        .unwrap();
+        assert_eq!(
+            Store::open(&paths.database)
+                .unwrap()
+                .get_job(draft.id)
+                .unwrap()
+                .description,
+            None
+        );
         run_command(CliCommand::Show { id: draft.id }).unwrap();
         run_command(CliCommand::Jobs {
             user: Some("alice".into()),
@@ -3146,6 +3234,7 @@ mod cli_runtime_tests {
             .create_job(NewJob {
                 name: "queued".into(),
                 user: "alice".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into(), "queued".into()],
             })
@@ -3174,6 +3263,7 @@ mod cli_runtime_tests {
             .create_job(NewJob {
                 name: "finished".into(),
                 user: "alice".into(),
+                description: None,
                 cwd: directory.path().to_path_buf(),
                 command: vec!["echo".into(), "finished".into()],
             })

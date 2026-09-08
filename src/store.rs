@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use crate::config::normalize_path;
 use crate::domain::{
-    Job, JobState, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, NewJob, validate_job_name,
-    validate_job_user,
+    Job, JobState, MAX_JOB_DESCRIPTION_LENGTH, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, NewJob,
+    normalize_description, validate_description, validate_job_name, validate_job_user,
 };
 
 const SCHEMA: &str = r#"
@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     finished_at TEXT,
     exit_code INTEGER,
     pid INTEGER,
-    failure_detail TEXT
+    failure_detail TEXT,
+    description TEXT CHECK (description IS NULL OR length(description) <= 200),
+    description_revision INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -76,6 +78,14 @@ pub enum StoreError {
         target_order: usize,
         queued_count: usize,
     },
+    #[error(
+        "description for job {id} changed concurrently (expected revision {expected_revision}, current revision {actual_revision})"
+    )]
+    DescriptionConflict {
+        id: Uuid,
+        expected_revision: i64,
+        actual_revision: i64,
+    },
     #[error("store lock is poisoned")]
     Poisoned,
     #[error("invalid value in jobs table: {0}")]
@@ -102,6 +112,7 @@ impl Store {
         migrate_legacy_git_schema(&mut connection)?;
         migrate_command_line(&connection)?;
         migrate_queue_order(&mut connection)?;
+        migrate_description_columns(&connection)?;
         migrate_job_text_lengths(&mut connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -127,14 +138,17 @@ impl Store {
     ) -> Result<Uuid, StoreError> {
         validate_job_name(&new_job.name).map_err(StoreError::InvalidData)?;
         validate_job_user(&new_job.user).map_err(StoreError::InvalidData)?;
+        let description = normalize_description(new_job.description);
+        validate_description(description.as_deref()).map_err(StoreError::InvalidData)?;
         let id = Uuid::new_v4();
         let created_at = Utc::now();
         let command = serde_json::to_string(&new_job.command)?;
         let cwd = storage_path(&new_job.cwd);
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO jobs (id,name,user,cwd,command,command_line,state,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            "INSERT INTO jobs
+                (id,name,user,cwd,command,command_line,state,created_at,description)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 id.to_string(),
                 new_job.name,
@@ -144,6 +158,7 @@ impl Store {
                 command_line,
                 JobState::Draft.as_str(),
                 created_at.to_rfc3339(),
+                description,
             ],
         )?;
         Ok(id)
@@ -152,6 +167,46 @@ impl Store {
     pub fn get_job(&self, id: Uuid) -> Result<Job, StoreError> {
         let conn = self.lock()?;
         get_job_with(&conn, id)
+    }
+
+    /// Update a job description only when the caller still has the latest
+    /// description revision. This compare-and-swap prevents lost updates.
+    pub fn update_description(
+        &self,
+        id: Uuid,
+        description: Option<String>,
+        expected_revision: i64,
+    ) -> Result<Job, StoreError> {
+        let description = normalize_description(description);
+        validate_description(description.as_deref()).map_err(StoreError::InvalidData)?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let updated = tx.execute(
+            "UPDATE jobs
+             SET description = ?2, description_revision = description_revision + 1
+             WHERE id = ?1 AND description_revision = ?3",
+            params![id.to_string(), description, expected_revision],
+        )?;
+        if updated != 1 {
+            let actual_revision: Option<i64> = tx
+                .query_row(
+                    "SELECT description_revision FROM jobs WHERE id = ?1",
+                    [id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            return match actual_revision {
+                Some(actual_revision) => Err(StoreError::DescriptionConflict {
+                    id,
+                    expected_revision,
+                    actual_revision,
+                }),
+                None => Err(StoreError::NotFound { id }),
+            };
+        }
+        let job = get_job_with(&tx, id)?;
+        tx.commit()?;
+        Ok(job)
     }
 
     pub fn queue_locked(&self) -> Result<bool, StoreError> {
@@ -188,7 +243,8 @@ impl Store {
         let mut statement = match (owner.is_some(), state) {
             (true, Some(_)) => conn.prepare(
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
-                        committed_at,started_at,finished_at,exit_code,pid,failure_detail
+                        committed_at,started_at,finished_at,exit_code,pid,failure_detail,
+                        description,description_revision
                  FROM jobs WHERE user = ?1 AND state = ?2
                  ORDER BY CASE state WHEN 'RUNNING' THEN 0 WHEN 'QUEUED' THEN 1 ELSE 2 END,
                           CASE WHEN state = 'QUEUED' THEN queue_order END,
@@ -197,7 +253,8 @@ impl Store {
             )?,
             (false, Some(_)) => conn.prepare(
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
-                        committed_at,started_at,finished_at,exit_code,pid,failure_detail
+                        committed_at,started_at,finished_at,exit_code,pid,failure_detail,
+                        description,description_revision
                  FROM jobs WHERE state = ?1
                  ORDER BY CASE state WHEN 'RUNNING' THEN 0 WHEN 'QUEUED' THEN 1 ELSE 2 END,
                           CASE WHEN state = 'QUEUED' THEN queue_order END,
@@ -206,7 +263,8 @@ impl Store {
             )?,
             (true, None) => conn.prepare(
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
-                        committed_at,started_at,finished_at,exit_code,pid,failure_detail
+                        committed_at,started_at,finished_at,exit_code,pid,failure_detail,
+                        description,description_revision
                  FROM jobs WHERE user = ?1
                  ORDER BY CASE state WHEN 'RUNNING' THEN 0 WHEN 'QUEUED' THEN 1 ELSE 2 END,
                           CASE WHEN state = 'QUEUED' THEN queue_order END,
@@ -215,7 +273,8 @@ impl Store {
             )?,
             (false, None) => conn.prepare(
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
-                        committed_at,started_at,finished_at,exit_code,pid,failure_detail
+                        committed_at,started_at,finished_at,exit_code,pid,failure_detail,
+                        description,description_revision
                  FROM jobs
                  ORDER BY CASE state WHEN 'RUNNING' THEN 0 WHEN 'QUEUED' THEN 1 ELSE 2 END,
                           CASE WHEN state = 'QUEUED' THEN queue_order END,
@@ -248,7 +307,8 @@ impl Store {
         let jobs = {
             let mut statement = tx.prepare(
                 "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
-                        committed_at,started_at,finished_at,exit_code,pid,failure_detail
+                        committed_at,started_at,finished_at,exit_code,pid,failure_detail,
+                        description,description_revision
                  FROM jobs
                  WHERE state IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'LOST')",
             )?;
@@ -640,6 +700,23 @@ fn migrate_queue_order(connection: &mut Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn migrate_description_columns(connection: &Connection) -> Result<(), StoreError> {
+    let columns = connection
+        .prepare("PRAGMA table_info(jobs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|name| name == "description") {
+        connection.execute("ALTER TABLE jobs ADD COLUMN description TEXT", [])?;
+    }
+    if !columns.iter().any(|name| name == "description_revision") {
+        connection.execute(
+            "ALTER TABLE jobs ADD COLUMN description_revision INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 fn migrate_job_text_lengths(connection: &mut Connection) -> Result<(), StoreError> {
     let table_sql: Option<String> = connection.query_row(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'",
@@ -647,7 +724,9 @@ fn migrate_job_text_lengths(connection: &mut Connection) -> Result<(), StoreErro
         |row| row.get(0),
     )?;
     if table_sql.as_deref().is_some_and(|sql| {
-        sql.contains("CHECK (length(name) <= 128)") && sql.contains("CHECK (length(user) <= 50)")
+        sql.contains("CHECK (length(name) <= 128)")
+            && sql.contains("CHECK (length(user) <= 50)")
+            && sql.contains("CHECK (description IS NULL OR length(description) <= 200)")
     }) {
         return Ok(());
     }
@@ -655,17 +734,18 @@ fn migrate_job_text_lengths(connection: &mut Connection) -> Result<(), StoreErro
     let has_invalid_name: bool = connection.query_row(
         "SELECT EXISTS(
              SELECT 1 FROM jobs
-             WHERE length(name) > ?1 OR length(user) > ?2
+             WHERE length(name) > ?1 OR length(user) > ?2 OR length(description) > ?3
          )",
         params![
             i64::try_from(MAX_JOB_NAME_LENGTH).expect("job name limit fits i64"),
-            i64::try_from(MAX_JOB_USER_LENGTH).expect("job user limit fits i64")
+            i64::try_from(MAX_JOB_USER_LENGTH).expect("job user limit fits i64"),
+            i64::try_from(MAX_JOB_DESCRIPTION_LENGTH).expect("description limit fits i64")
         ],
         |row| row.get(0),
     )?;
     if has_invalid_name {
         return Err(StoreError::InvalidData(format!(
-            "jobs table contains a name longer than {MAX_JOB_NAME_LENGTH} characters or a user longer than {MAX_JOB_USER_LENGTH} characters"
+            "jobs table contains a name longer than {MAX_JOB_NAME_LENGTH} characters, a user longer than {MAX_JOB_USER_LENGTH} characters, or a description longer than {MAX_JOB_DESCRIPTION_LENGTH} characters"
         )));
     }
 
@@ -686,13 +766,17 @@ fn migrate_job_text_lengths(connection: &mut Connection) -> Result<(), StoreErro
             finished_at TEXT,
             exit_code INTEGER,
             pid INTEGER,
-            failure_detail TEXT
+            failure_detail TEXT,
+            description TEXT CHECK (description IS NULL OR length(description) <= 200),
+            description_revision INTEGER NOT NULL DEFAULT 0
         );
         INSERT INTO jobs_name_limit
             (id,name,user,cwd,command,command_line,state,queue_order,created_at,
-             committed_at,started_at,finished_at,exit_code,pid,failure_detail)
+             committed_at,started_at,finished_at,exit_code,pid,failure_detail,
+             description,description_revision)
         SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
-               committed_at,started_at,finished_at,exit_code,pid,failure_detail
+               committed_at,started_at,finished_at,exit_code,pid,failure_detail,
+               description,description_revision
         FROM jobs;
         DROP INDEX IF EXISTS jobs_state_queue_order_id;
         DROP INDEX IF EXISTS jobs_user_state_created_at_id;
@@ -767,7 +851,9 @@ fn migrate_legacy_git_schema(connection: &mut Connection) -> Result<(), StoreErr
             finished_at TEXT,
             exit_code INTEGER,
             pid INTEGER,
-            failure_detail TEXT
+            failure_detail TEXT,
+            description TEXT CHECK (description IS NULL OR length(description) <= 200),
+            description_revision INTEGER NOT NULL DEFAULT 0
         );
         DROP INDEX IF EXISTS jobs_state_commit_id;
         DROP INDEX IF EXISTS jobs_state_queue_order_id;",
@@ -939,7 +1025,8 @@ fn storage_path(path: &Path) -> String {
 fn get_job_with(conn: &Connection, id: Uuid) -> Result<Job, StoreError> {
     conn.query_row(
         "SELECT id,name,user,cwd,command,command_line,state,queue_order,created_at,
-                committed_at,started_at,finished_at,exit_code,pid,failure_detail
+                committed_at,started_at,finished_at,exit_code,pid,failure_detail,
+                description,description_revision
          FROM jobs WHERE id = ?1",
         [id.to_string()],
         row_to_job,
@@ -990,6 +1077,8 @@ fn row_to_job(row: &Row<'_>) -> rusqlite::Result<Job> {
             .transpose()
             .map_err(|err| to_sql_error(err.to_string()))?,
         failure_detail: row.get(14)?,
+        description: row.get(15)?,
+        description_revision: row.get(16)?,
     })
 }
 
