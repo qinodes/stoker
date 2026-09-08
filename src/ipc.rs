@@ -868,6 +868,26 @@ mod windows_client_tests {
         (directory, ServiceClient::new(paths), task)
     }
 
+    async fn client_with_responses(
+        responses: Vec<IpcResponse>,
+    ) -> (tempfile::TempDir, ServiceClient, JoinHandle<()>) {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let server = ServerOptions::new().create(paths.ipc_endpoint()).unwrap();
+        let task = tokio::spawn(async move {
+            server.connect().await.unwrap();
+            let mut framed = Framed::new(server, LengthDelimitedCodec::new());
+            let _request = framed.next().await.unwrap().unwrap();
+            for response in responses {
+                framed
+                    .send(encode_response(&response).unwrap().into())
+                    .await
+                    .unwrap();
+            }
+        });
+        (directory, ServiceClient::new(paths), task)
+    }
+
     async fn assert_response_error<T, F, Fut>(response: IpcResponse, operation: F, expected: &str)
     where
         F: FnOnce(ServiceClient) -> Fut,
@@ -922,6 +942,141 @@ mod windows_client_tests {
             IpcResponse::Ack,
             |client| async move { client.commit_user("alice".to_owned()).await },
             "invalid commit",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn client_methods_cover_status_queue_actions_and_log_streams() {
+        let id = Uuid::nil();
+        let status = ServiceStatus {
+            pid: 42,
+            active_job: None,
+            queued_jobs: 2,
+            queue_locked: false,
+        };
+
+        let (_directory, client, task) =
+            client_with_response(IpcResponse::Status(status.clone())).await;
+        assert_eq!(client.status().await.unwrap(), status);
+        task.await.unwrap();
+
+        assert_response_error(
+            IpcResponse::Ack,
+            |client| async move { client.status().await },
+            "invalid status",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Error {
+                message: "status failed".into(),
+            },
+            |client| async move { client.status().await },
+            "status failed",
+        )
+        .await;
+
+        let (_directory, client, task) = client_with_response(IpcResponse::Ack).await;
+        client.stop().await.unwrap();
+        task.await.unwrap();
+        assert_response_error(
+            IpcResponse::Status(status.clone()),
+            |client| async move { client.stop().await },
+            "invalid stop",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Error {
+                message: "stop failed".into(),
+            },
+            |client| async move { client.stop().await },
+            "stop failed",
+        )
+        .await;
+
+        for (operation, response, expected) in [
+            ("commit", IpcResponse::Ack, ""),
+            ("cancel", IpcResponse::Ack, ""),
+            ("lock", IpcResponse::Ack, ""),
+            ("unlock", IpcResponse::Ack, ""),
+        ] {
+            let (_directory, client, task) = client_with_response(response).await;
+            match operation {
+                "commit" => client.commit(id).await.unwrap(),
+                "cancel" => client.cancel(id).await.unwrap(),
+                "lock" => client.lock_queue().await.unwrap(),
+                "unlock" => client.unlock_queue().await.unwrap(),
+                _ => unreachable!("{expected}"),
+            }
+            task.await.unwrap();
+        }
+
+        assert_response_error(
+            IpcResponse::Error {
+                message: "cancel failed".into(),
+            },
+            |client| async move { client.cancel(id).await },
+            "cancel failed",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Status(status.clone()),
+            |client| async move { client.lock_queue().await },
+            "invalid lock queue",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Status(status.clone()),
+            |client| async move { client.unlock_queue().await },
+            "invalid unlock queue",
+        )
+        .await;
+
+        let (_directory, client, task) =
+            client_with_response(IpcResponse::QueuedJobs { jobs: Vec::new() }).await;
+        assert!(client.move_queued(id, 1).await.unwrap().is_empty());
+        task.await.unwrap();
+        assert_response_error(
+            IpcResponse::StaleQueueMove {
+                message: "job disappeared".into(),
+            },
+            |client| async move { client.move_queued(id, 1).await },
+            "job disappeared",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Status(status),
+            |client| async move { client.move_queued(id, 1).await },
+            "invalid move queued",
+        )
+        .await;
+
+        let (_directory, client, task) = client_with_responses(vec![
+            IpcResponse::LogChunk {
+                stream: LogStream::Stdout,
+                bytes: Vec::new(),
+            },
+            IpcResponse::LogChunk {
+                stream: LogStream::Stderr,
+                bytes: Vec::new(),
+            },
+            IpcResponse::LogEnd,
+        ])
+        .await;
+        client.follow_logs(id).await.unwrap();
+        task.await.unwrap();
+        assert_response_error(
+            IpcResponse::Error {
+                message: "log follow failed".into(),
+            },
+            |client| async move { client.follow_logs(id).await },
+            "log follow failed",
+        )
+        .await;
+        assert_response_error(
+            IpcResponse::Ack,
+            |client| async move { client.follow_logs(id).await },
+            "invalid log response",
         )
         .await;
     }

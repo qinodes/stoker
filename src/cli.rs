@@ -1889,10 +1889,7 @@ fn print_job(job: &Job, timezone: &ResolvedTimezone) {
     println!("id: {}", job.id);
     println!("name: {}", job.name);
     println!("user: {}", job.user);
-    println!(
-        "description: {}",
-        job.description.as_deref().unwrap_or("-")
-    );
+    println!("description: {}", job.description.as_deref().unwrap_or("-"));
     println!("working_directory: {}", job.cwd.display());
     println!("working_directory_status: {working_directory_status}");
     println!("command: {command}");

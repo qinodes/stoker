@@ -95,6 +95,61 @@ async fn terminate_tree_stops_a_long_running_process() {
     assert_ne!(process.wait().await.unwrap().code(), Some(0));
 }
 
+#[tokio::test]
+async fn cancelling_wait_terminates_the_managed_process() {
+    let paths = process_paths();
+    #[cfg(unix)]
+    let (program, args) = (
+        OsString::from("sh"),
+        vec![OsString::from("-c"), OsString::from("sleep 30")],
+    );
+    #[cfg(windows)]
+    let (program, args) = (
+        OsString::from("cmd"),
+        vec![
+            OsString::from("/C"),
+            OsString::from("ping 127.0.0.1 -n 31 > NUL"),
+        ],
+    );
+    let process = controller()
+        .spawn(ProcessSpec {
+            program,
+            args,
+            cwd: std::env::current_dir().unwrap(),
+            stdout_log: paths.stdout,
+            stderr_log: paths.stderr,
+        })
+        .await
+        .unwrap();
+    let (cancel, receiver) = tokio::sync::oneshot::channel();
+    cancel.send(()).unwrap();
+
+    assert_ne!(
+        process.wait_with_cancel(receiver).await.unwrap().code(),
+        Some(0)
+    );
+}
+
+#[tokio::test]
+async fn spawning_a_missing_program_reports_an_error() {
+    let paths = process_paths();
+    let result = controller()
+        .spawn(ProcessSpec {
+            program: OsString::from("stoker-test-program-that-does-not-exist"),
+            args: Vec::new(),
+            cwd: std::env::current_dir().unwrap(),
+            stdout_log: paths.stdout,
+            stderr_log: paths.stderr,
+        })
+        .await;
+    let error = match result {
+        Ok(_) => panic!("missing program unexpectedly started"),
+        Err(error) => error,
+    };
+
+    assert!(error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error().is_some());
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn terminate_tree_stops_descendants_too() {

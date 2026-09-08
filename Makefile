@@ -30,13 +30,13 @@ format-check:
 	cargo fmt --all -- --check
 
 lint:
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --locked --all-targets --all-features -- -D warnings
 
 test:
 	cargo test --locked --all-targets
 
 cargo-check:
-	cargo check --all-targets --all-features
+	cargo check --locked --all-targets --all-features
 
 coverage:
 	cargo llvm-cov --locked --all-features --workspace --html
@@ -47,7 +47,7 @@ coverage-install:
 	cargo +stable install cargo-llvm-cov --locked
 
 build:
-	cargo build --release
+	cargo build --locked --release
 
 stop-test-process:
 ifeq ($(OS),Windows_NT)
