@@ -6,19 +6,18 @@ release.
 The release flow is:
 
 ```text
-check -> push formal/vX.Y.Z -> CI -> merge to main -> tag -> release -> Release workflow -> publish
+check -> push release/vX.Y.Z -> CI + coverage -> preview tag -> Preview Release -> final tag -> promote artifact -> optional publish
 ```
 
 ## Prerequisites
 
-- Work on a formal release branch named `formal/vX.Y.Z`, such as
-  `formal/v1.3.0`.
+- Work on a release branch named `release/vX.Y.Z`, such as
+  `release/v2.0.0`.
 - Choose the next SemVer version and update it in `Cargo.toml`; verify that
   `Cargo.lock` and user-visible version references agree.
-- Commit the release changes and push the formal release branch before merging
-  it into `main`.
-- Wait for the CI workflow to pass on the formal release branch before merging
-  it into `main`.
+- Commit the release changes and push the release branch.
+- Wait for both CI and coverage to pass on the exact release branch commit that
+  will receive the tag.
 - Configure your crates.io token once with `cargo login`.
 - Use a version that has not already been published to crates.io.
 
@@ -39,43 +38,61 @@ that concurrency and resource-competition issues can be detected. If you need
 to diagnose a test that is sensitive to shared resources, rerun it with
 `cargo test -- --test-threads=1`. Do not continue if any check fails.
 
-## 2. Push the formal release branch and wait for CI
+## 2. Push the release branch
 
-Commit the intended release changes on the formal release branch, then push it. For a
-`1.3.0` release, the branch name is `formal/v1.3.0`:
+Commit the intended release changes on the release branch, then push it. For a
+`2.0.0` release, the branch name is `release/v2.0.0`:
 
 ```bash
-make git-formal-push
+make git-release-push
 ```
 
-Wait for the CI workflow to pass on GitHub before continuing. The CI workflow
-is configured to run for formal release branches matching `formal/vX.Y.Z`; Markdown-only
-changes remain ignored. `make git-formal-push` detects the current branch,
-verifies that it exactly matches `formal/vX.Y.Z`, and pushes that branch to
-`origin`. It stops with an error if the branch is detached or has a different
-name.
+The push triggers the full CI workflow and Rust coverage workflow for the exact
+release branch commit. Markdown-only and YAML-only changes are filtered out.
+`make git-release-push` verifies that the current branch exactly matches
+`release/vX.Y.Z`, that its version matches the package version, and then pushes
+that branch to `origin`.
 
-## 3. Merge the formal release branch into `main`
+## 3. Build a preview artifact
 
-After CI passes, merge the formal release branch into `main`. Confirm that the merge
-contains the exact commit that passed CI before creating the release tag.
-
-## 4. Create the release tag
+After CI and coverage pass, create a numbered preview tag on the exact commit
+that will be released and push it:
 
 ```bash
-make tag
+make preview-tag PREVIEW=1
+make preview PREVIEW=1
+```
+
+The `Preview Release` workflow rebuilds and verifies the committed frontend
+resources, builds the platform matrix, packages the archives and installers,
+verifies `SHA256SUMS`, and stores the complete release artifact. It does not
+publish a GitHub Release. The preview number is local bookkeeping: if a new
+source commit is needed, use a new preview number (for example `PREVIEW=2`)
+after committing and pushing that new release-branch commit.
+
+The preview tag format is `preview/vX.Y.Z-N`, such as
+`preview/v2.0.0-1`. The generated installers still contain the stable release
+version `X.Y.Z`, so the artifact can be promoted unchanged.
+
+## 4. Create the final release tag
+
+Wait for the Preview Release workflow to pass. Then create the final tag on the
+same commit:
+
+```bash
+make tag PREVIEW=1
 ```
 
 `make tag` reads the package version from `Cargo.toml` and creates an annotated
-Git tag with the corresponding `v` prefix, such as `v1.2.1`, on the current
-commit. Run it on `main` after the formal release branch has been merged, and
-verify that the current commit contains the formal release branch commit that
-passed CI. The
-command does not update `Cargo.toml` or create a release commit. An explicit
+Git tag with the corresponding `v` prefix, such as `v2.0.0`, on the current
+commit. It only accepts `main` or a matching `release/vX.Y.Z` branch, requires a
+clean working tree, refuses to overwrite an existing tag, and refuses to create
+the final tag unless the matching preview tag exists on the current commit.
+The command does not update `Cargo.toml` or create a release commit. An explicit
 `VERSION=x.y.z` override is supported when needed, but normally no version
 argument is required.
 
-## 5. Push the release tag
+## 5. Push and promote the release artifact
 
 ```bash
 make release
@@ -84,13 +101,16 @@ make release
 This pushes only the annotated release tag to `origin`.
 
 After the tag is pushed, GitHub Actions runs
-`.github/workflows/release.yml`. It builds packages for Windows, Linux, macOS
-Apple Silicon. It attaches archives, platform binaries, and
-`SHA256SUMS` to a GitHub Release for the tag. It also attaches the
-`stoker-install.ps1` and `stoker-install.sh` installers used by the one-line
-installation commands in the README files. The release workflow embeds the
-tag version in those installers, so versioned installer URLs remain pinned to
-that release.
+`.github/workflows/release.yml`. It locates the successful preview artifact for
+the final tag's exact commit, verifies its files and checksums, and attaches the
+artifact contents to a GitHub Release for the tag. It does not compile again,
+run tests, run coverage, or publish to crates.io. This is the build-once,
+promote-artifact path, so correcting a release-workflow publishing problem does
+not require rebuilding or moving the final tag.
+
+If the final release workflow needs to be retried, use its `workflow_dispatch`
+entry in GitHub Actions and enter `vX.Y.Z`. It reuses the preview artifact for
+that tag's commit; do not delete and recreate the final tag.
 
 ## 6. Publish to crates.io
 
@@ -110,18 +130,19 @@ cannot be published again with different contents.
 ## Complete example
 
 ```bash
-git switch -c formal/v1.2.1
-make version VERSION=1.2.1
+git switch -c release/v2.0.0
+make version VERSION=2.0.0
 make check
 git add Cargo.toml Cargo.lock
-git commit -m "release: prepare v1.2.1"
-make git-formal-push
-# Wait for CI to pass, then merge formal/v1.2.1 into main.
-git switch main
-git pull --ff-only origin main
-make tag
+git commit -m "release: prepare v2.0.0"
+make git-release-push
+# Wait for CI and coverage to pass on release/v2.0.0.
+make preview-tag PREVIEW=1
+make preview PREVIEW=1
+# Wait for Preview Release to pass.
+make tag PREVIEW=1
 make release
-# Wait for the Release workflow to pass on GitHub.
+# Wait for the Release workflow to promote the existing artifact.
 make publish
 ```
 

@@ -3,100 +3,150 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish from its preview artifact
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  actions: read
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
-  build:
-    name: Build ${{ matrix.platform }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux-x86_64
-            target: x86_64-unknown-linux-gnu
-            asset: stoker-linux-x86_64.tar.gz
-            binary_asset: stoker-linux-x86_64
-            binary: stoker
-            format: tar
-          - os: windows-latest
-            platform: windows-x86_64
-            target: x86_64-pc-windows-msvc
-            asset: stoker-windows-x86_64.zip
-            binary_asset: stoker-windows-x86_64.exe
-            binary: stoker.exe
-            format: zip
-          - os: macos-latest
-            platform: macos-arm64
-            target: aarch64-apple-darwin
-            asset: stoker-macos-arm64.tar.gz
-            binary_asset: stoker-macos-arm64
-            binary: stoker
-            format: tar
+  verify:
+    name: Verify release tag and preview artifact
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      tag_sha: ${{ steps.metadata.outputs.tag_sha }}
+      release_version: ${{ steps.metadata.outputs.release_version }}
+      preview_run_id: ${{ steps.preview.outputs.preview_run_id }}
+      preview_artifact_name: ${{ steps.preview.outputs.preview_artifact_name }}
     steps:
-      - name: Check out source
+      - name: Check out release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
-      - name: Install Rust
+      - name: Verify release metadata
+        id: metadata
         shell: bash
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
-          rustup target add "${{ matrix.target }}"
-
-      - name: Build
-        run: cargo build --locked --release --target "${{ matrix.target }}"
-
-      - name: Package
-        shell: bash
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
         run: |
           set -euo pipefail
-          mkdir -p dist package
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" package/
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.binary_asset }}"
-          cp LICENSE README.md package/
-          if [[ "${{ matrix.format }}" == "zip" ]]; then
-            (cd package && 7z a "../dist/${{ matrix.asset }}" .)
-          else
-            tar -C package -czf "dist/${{ matrix.asset }}" .
+          if [[ ! "${TAG}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Unsupported release tag: ${TAG}" >&2
+            exit 1
           fi
 
-      - name: Upload package
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 7
+          release_version="${BASH_REMATCH[1]}"
+          package_version="$(sh scripts/get-version.sh)"
+          if [[ "${package_version}" != "${release_version}" ]]; then
+            echo "Release tag ${TAG} does not match package version ${package_version}." >&2
+            exit 1
+          fi
+
+          tag_sha="$(git rev-parse "${TAG}^{commit}")"
+          if [[ "${tag_sha}" != "$(git rev-parse HEAD)" ]]; then
+            echo "Checked out commit does not match release tag ${TAG}." >&2
+            exit 1
+          fi
+
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "tag_sha=${tag_sha}" >> "${GITHUB_OUTPUT}"
+          echo "release_version=${release_version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Find successful preview artifact for this commit
+        id: preview
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_SHA: ${{ steps.metadata.outputs.tag_sha }}
+        run: |
+          set -euo pipefail
+          artifact_name="preview-release-${TAG_SHA}"
+          preview_run_id="$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/actions/workflows/preview.yml/runs?head_sha=${TAG_SHA}&status=success&per_page=100" \
+            --jq '.workflow_runs | sort_by(.created_at) | last | .id // empty')"
+          if [[ -z "${preview_run_id}" ]]; then
+            echo "No successful preview workflow found for commit ${TAG_SHA}." >&2
+            exit 1
+          fi
+
+          artifact_count="$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${preview_run_id}/artifacts?per_page=100" \
+            --jq "[.artifacts[] | select(.name == \"${artifact_name}\" and .expired == false)] | length")"
+          if [[ "${artifact_count}" != "1" ]]; then
+            echo "Expected one unexpired ${artifact_name} artifact in preview run ${preview_run_id}, found ${artifact_count}." >&2
+            exit 1
+          fi
+
+          echo "preview_run_id=${preview_run_id}" >> "${GITHUB_OUTPUT}"
+          echo "preview_artifact_name=${artifact_name}" >> "${GITHUB_OUTPUT}"
 
   publish:
     name: Publish GitHub Release
-    needs: build
+    needs: verify
+    permissions:
+      actions: read
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Download packages
+      - name: Download immutable preview release artifact
         uses: actions/download-artifact@v4
         with:
+          name: ${{ needs.verify.outputs.preview_artifact_name }}
           path: dist
-          merge-multiple: true
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ needs.verify.outputs.preview_run_id }}
 
-      - name: Create release and upload packages
+      - name: Verify promoted release artifact
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.verify.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          required_files=(
+            stoker-linux-x86_64
+            stoker-linux-x86_64.tar.gz
+            stoker-windows-x86_64.exe
+            stoker-windows-x86_64.zip
+            stoker-macos-arm64
+            stoker-macos-arm64.tar.gz
+            stoker-install.ps1
+            stoker-install.sh
+            SHA256SUMS
+          )
+          for file in "${required_files[@]}"; do
+            test -s "dist/${file}"
+          done
+          grep -Fq "releases/download/v${RELEASE_VERSION}" dist/stoker-install.ps1
+          grep -Fq "releases/download/v${RELEASE_VERSION}" dist/stoker-install.sh
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: Create or update GitHub Release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
         run: |
-          release_version="${GITHUB_REF_NAME#v}"
-          sed "s/__STOKER_RELEASE_VERSION__/${release_version}/g" scripts/install.ps1 > dist/stoker-install.ps1
-          sed "s/__STOKER_RELEASE_VERSION__/${release_version}/g" scripts/install.sh > dist/stoker-install.sh
-          (cd dist && sha256sum stoker-*) > dist/SHA256SUMS
-          gh release create "${GITHUB_REF_NAME}" dist/* \
-            --repo "${GITHUB_REPOSITORY}" \
-            --verify-tag \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+          set -euo pipefail
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" dist/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+          else
+            gh release create "${RELEASE_TAG}" dist/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --verify-tag \
+              --title "${RELEASE_TAG}" \
+              --generate-notes
+          fi
