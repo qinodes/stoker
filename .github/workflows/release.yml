@@ -128,8 +128,8 @@ jobs:
           for file in "${required_files[@]}"; do
             test -s "dist/${file}"
           done
-          grep -Fq "releases/download/v${RELEASE_VERSION}" dist/stoker-install.ps1
-          grep -Fq "releases/download/v${RELEASE_VERSION}" dist/stoker-install.sh
+          grep -Fq "\$releaseVersion = '${RELEASE_VERSION}'" dist/stoker-install.ps1
+          grep -Fq "release_version='${RELEASE_VERSION}'" dist/stoker-install.sh
           (cd dist && sha256sum -c SHA256SUMS)
 
       - name: Create or update GitHub Release
