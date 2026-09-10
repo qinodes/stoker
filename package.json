@@ -8,12 +8,13 @@
   "scripts": {
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test:web:unit": "node --test web/tests/unit/api-client.test.js web/tests/unit/controller.test.js web/tests/unit/formatters.test.js web/tests/unit/state.test.js",
+    "test:web:unit": "node --experimental-strip-types --test web/tests/unit/api-client.test.ts web/tests/unit/formatters.test.ts web/tests/unit/state.test.ts web/tests/unit/polling.test.ts",
     "test:web:browser": "playwright test",
     "test:web": "npm run test:web:unit && npm run test:web:browser"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
+    "@types/node": "24.13.4",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",

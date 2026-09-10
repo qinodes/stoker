@@ -699,7 +699,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn axum_server_serves_modules_and_shutdown_cleans_metadata() {
+    async fn axum_server_serves_embedded_assets_and_shutdown_cleans_metadata() {
         let directory = tempfile::tempdir().unwrap();
         let paths = test_paths(directory.path());
         paths.ensure().unwrap();
@@ -710,13 +710,13 @@ mod tests {
                 .unwrap();
         });
         let metadata = wait_for_metadata(&paths).await;
-        let module = raw_request(
+        let bundle = raw_request(
             metadata.port,
-            "GET /modules/controller.js HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            "GET /app.js HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
         )
         .await;
-        assert!(module.starts_with(b"HTTP/1.1 200 OK"));
-        assert!(String::from_utf8_lossy(&module).contains("createApiClient"));
+        assert!(bundle.starts_with(b"HTTP/1.1 200 OK"));
+        assert!(String::from_utf8_lossy(&bundle).contains("createRoot"));
 
         let shutdown = raw_request(
             metadata.port,

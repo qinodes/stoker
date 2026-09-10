@@ -5,6 +5,19 @@ export const SNAPSHOTS_PAGE_SIZE = 5;
 export const DIRECTORY_CACHE_TTL_MS = 20_000;
 export const DIRECTORY_CACHE_LIMIT = 64;
 
+export interface RequestSequence {
+  next: () => number;
+  isCurrent: (request: number) => boolean;
+}
+
+export function createRequestSequence(): RequestSequence {
+  let latest = 0;
+  return {
+    next: () => ++latest,
+    isCurrent: (request: number) => request === latest,
+  };
+}
+
 export interface DirectoryCacheEntry {
   value: WorkspaceState["filesystem"]["current"];
   storedAt: number;

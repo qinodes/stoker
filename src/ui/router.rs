@@ -60,8 +60,6 @@ pub(super) fn build_router(state: ApiState) -> Router {
         .route("/styles.css", get(assets::styles_css))
         .route("/assets/logo.svg", get(assets::logo_svg))
         .route("/assets/logo-mark.png", get(assets::logo_mark_png))
-        .route("/modules/{*path}", get(assets::module))
-        .route("/styles/{*path}", get(assets::style))
         .route("/__stoker/shutdown", post(system::shutdown))
         .nest("/api/v1", api)
         .fallback(assets::not_found)
@@ -196,7 +194,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_assets_and_module_entrypoint_load_with_correct_types() {
+    async fn embedded_assets_and_react_entrypoint_load_with_correct_types() {
         let directory = tempfile::tempdir().unwrap();
         let paths = test_paths(directory.path());
         paths.ensure().unwrap();
@@ -213,6 +211,13 @@ mod tests {
             assert_eq!(response.status(), StatusCode::OK, "{path}");
             assert_eq!(response.headers()[header::CONTENT_TYPE], content_type);
             assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        }
+        for path in ["/modules/controller.js", "/styles/tokens.css"] {
+            let response = build_router(state_for(&paths, false, None))
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
         }
     }
 

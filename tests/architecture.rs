@@ -361,27 +361,28 @@ fn ui_stage_seven_keeps_axum_framework_and_io_at_adapter_edges() {
 }
 
 #[test]
-fn browser_frontend_has_module_and_stylesheet_ownership_boundaries() {
+fn browser_frontend_has_react_typescript_and_stylesheet_ownership() {
     let web = Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
     let index = fs::read_to_string(web.join("index.html")).unwrap();
     assert!(index.contains("/src/main.tsx"));
+    assert!(!web.join("app.js").exists());
+    assert!(!web.join("modules").exists());
     assert!(web.join("dist/index.html").is_file());
     assert!(web.join("dist/app.js").is_file());
     assert!(web.join("dist/styles.css").is_file());
-    let entry = fs::read_to_string(web.join("app.js")).unwrap();
-    assert!(entry.contains("modules/controller.js"));
-    assert!(!entry.contains("const state"));
     for file in [
-        "modules/api-client.js",
-        "modules/components.js",
-        "modules/controller.js",
-        "modules/formatters.js",
-        "modules/state.js",
-        "modules/views/configuration.js",
-        "modules/views/jobs.js",
-        "modules/views/logs.js",
-        "modules/views/overview.js",
-        "modules/views/queue.js",
+        "src/api.ts",
+        "src/components.tsx",
+        "src/context.tsx",
+        "src/formatters.ts",
+        "src/main.tsx",
+        "src/pages/Configuration.tsx",
+        "src/pages/Jobs.tsx",
+        "src/pages/Logs.tsx",
+        "src/pages/Overview.tsx",
+        "src/pages/Queue.tsx",
+        "src/state.ts",
+        "src/types.ts",
         "styles/tokens.css",
         "styles/base.css",
         "styles/layout.css",

@@ -2,18 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  escapeHtml,
+  classForState,
   formatDate,
   isTerminalState,
   limitUnicode,
   routeTitle,
   shortId,
-} from "../../modules/formatters.js";
+} from "../../src/formatters.ts";
+import type { Route } from "../../src/types.ts";
 
-test("formatters escape untrusted content and preserve Unicode boundaries", () => {
-  assert.equal(escapeHtml('<script a="b">&'), "&lt;script a=&quot;b&quot;&gt;&amp;");
+test("formatters preserve Unicode boundaries and state classes", () => {
   assert.equal(limitUnicode("A🔥B", 2), "A🔥");
   assert.equal(shortId("1234567890"), "12345678…");
+  assert.equal(classForState("RUNNING"), "state-running");
+  assert.equal(classForState(null), "state-");
 });
 
 test("date formatting handles missing, invalid, and invalid timezone input", () => {
@@ -24,7 +26,7 @@ test("date formatting handles missing, invalid, and invalid timezone input", () 
 
 test("route and terminal state vocabulary is stable", () => {
   assert.equal(routeTitle("configuration"), "Configuration");
-  assert.equal(routeTitle("unknown"), "Overview");
+  assert.equal(routeTitle("unknown" as Route), "Overview");
   assert.equal(isTerminalState("LOST"), true);
   assert.equal(isTerminalState("RUNNING"), false);
 });

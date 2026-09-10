@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createApiClient, type ApiClient } from "./api";
-import { cacheDirectory, cachedDirectory, createState, JOBS_PAGE_SIZE, SNAPSHOTS_PAGE_SIZE, pageInfo, type DirectoryCacheEntry } from "./state";
+import { cacheDirectory, cachedDirectory, createRequestSequence, createState, JOBS_PAGE_SIZE, SNAPSHOTS_PAGE_SIZE, pageInfo, type DirectoryCacheEntry } from "./state";
 import type { Job, JobDetailResponse, JobDraft, JobsResponse, LogsResponse, Route, SettingsResponse, StatusResponse, UiConfig, WorkspaceState } from "./types";
 
 const ROUTES: Route[] = ["overview", "jobs", "queue", "logs", "configuration"];
@@ -73,7 +73,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const initialRoute = (location.hash.slice(1) as Route) || "overview";
   const [state, setState] = useState(() => createState(ROUTES.includes(initialRoute) ? initialRoute : "overview"));
   const stateRef = useRef(state);
-  const sequence = useRef(0);
+  const sequence = useRef(createRequestSequence());
   const detailRequest = useRef(0);
   const directoryCache = useRef(new Map<string, DirectoryCacheEntry>());
   const [jobFormOpen, setJobFormOpen] = useState(false);
@@ -112,7 +112,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [api]);
 
   const loadData = useCallback(async () => {
-    const request = ++sequence.current;
+    const request = sequence.current.next();
     const current = stateRef.current;
     setState((value) => ({ ...value, loading: true, error: null }));
     try {
@@ -124,7 +124,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         api.get<WorkspaceState["queue"]>("/api/v1/queue"),
         api.get<SettingsResponse>("/api/v1/config"),
       ]);
-      if (request !== sequence.current) return;
+      if (!sequence.current.isCurrent(request)) return;
       setState((value) => {
         const selectedJob = value.selectedJob ? jobs.jobs.find((job) => job.id === value.selectedJob?.id) || value.selectedJob : null;
         return {
@@ -143,7 +143,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const logJobId = stateRef.current.logs.jobId;
       if (logJobId) await loadLogs(logJobId);
     } catch (error) {
-      if (request !== sequence.current) return;
+      if (!sequence.current.isCurrent(request)) return;
       const message = error instanceof Error ? error.message : String(error);
       setState((value) => ({ ...value, loading: false, error: message }));
       if (current.loaded) showToast(message, true);

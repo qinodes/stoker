@@ -231,6 +231,18 @@ test("browser journey covers create, detail, description, queue, logs, and confi
   await expect(page.locator(".config-summary strong")).toHaveText("UTC");
 });
 
+test("job owner suggestions close when the form is clicked elsewhere", async ({ page }) => {
+  await mockBackend(page);
+  await page.goto("/#jobs");
+  await page.locator('[data-action="new-job"]').first().click();
+  await page.locator("#job-user").click();
+  await expect(page.locator("#job-user-suggestions")).toHaveClass(/visible/);
+
+  await page.locator("#job-name").click();
+  await expect(page.locator("#job-user-suggestions")).not.toHaveClass(/visible/);
+  await expect(page.locator("#job-user")).toHaveAttribute("aria-expanded", "false");
+});
+
 test("queue keeps scrolling inside the job list on desktop", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 800 });
   await mockBackend(page);
@@ -343,3 +355,4 @@ function configuration(model) {
 function typedError(route, statusCode, code, message) {
   return route.fulfill({ status: statusCode, json: { error: message, code, message, details: null } });
 }
+
