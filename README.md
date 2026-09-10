@@ -31,18 +31,14 @@ Stoker uses a local SQLite database for job state and logs. No Redis, PostgreSQL
   <img src="assets/ui-demo.png" alt="Stoker web UI">
 </p>
 
-The Web UI can create and review DRAFT jobs, edit descriptions, commit or cancel jobs, manage the queue, read logs, and manage timezone snapshots. Start the scheduler separately when jobs should run.
+The Web UI can create and review DRAFT jobs, edit descriptions, commit or cancel jobs, manage the queue, read logs, and manage timezone snapshots.
 
 ```bash
 stoker start
 stoker ui start --open
 ```
 
-Both start commands detach after startup. The scheduler and UI keep running if you close the terminal; use `stoker stop` and `stoker ui stop` to stop them. They do not restart automatically after a computer restart.
-
 Use `stoker ui status` to show the address and `stoker ui stop` to stop the UI server. By default it listens only on `127.0.0.1:8765`.
-
-The shipped binary contains the production React 19 + TypeScript Web UI bundle, so end users do not need Node.js or npm. Contributors changing the frontend can run `npm ci`, then `npm run build` and `npm run typecheck`; `make check` runs both steps automatically before the Rust checks.
 
 To allow access from the local network, bind an explicit non-loopback address:
 

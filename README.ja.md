@@ -31,14 +31,12 @@ Stoker は Job の状態とログをローカルの SQLite に保存します。
   <img src="assets/ui-demo.png" alt="Stoker Web UI デモ">
 </p>
 
-Web UI では、DRAFT Job の作成と確認、説明の編集、Job の commit／cancel、Queue の管理、ログの表示、タイムゾーンと設定スナップショットの管理ができます。Job を実際に実行する場合は、Scheduler も別途起動してください。
+Web UI では、DRAFT Job の作成と確認、説明の編集、Job の commit／cancel、Queue の管理、ログの表示、タイムゾーンと設定スナップショットの管理ができます。
 
 ```bash
 stoker start
 stoker ui start --open
 ```
-
-`stoker start` と `stoker ui start` は、起動完了後に現在の terminal から切り離されます。terminal を閉じても Scheduler と UI は動作を続けます。停止するには、それぞれ `stoker stop` と `stoker ui stop` を使用してください。コンピューターの再起動後に自動起動はしません。
 
 アドレスの確認には `stoker ui status`、UI server の停止には `stoker ui stop` を使用します。デフォルトでは `127.0.0.1:8765` のみで待ち受けます。
 

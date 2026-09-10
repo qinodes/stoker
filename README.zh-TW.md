@@ -31,18 +31,14 @@ Stoker 使用本機 SQLite 保存 Job 狀態與日誌，不需要 Redis、Postgr
   <img src="assets/ui-demo.png" alt="Stoker Web UI 展示">
 </p>
 
-Web UI 可以建立與查看 DRAFT Job、修改描述、commit 或取消 Job、管理 Queue、讀取 logs，以及管理時區與設定快照。若要實際執行 Job，請另外啟動 Scheduler。
+Web UI 可以建立與查看 DRAFT Job、修改描述、commit 或取消 Job、管理 Queue、讀取 logs，以及管理時區與設定快照。
 
 ```bash
 stoker start
 stoker ui start --open
 ```
 
-`stoker start` 與 `stoker ui start` 啟動完成後都會脫離目前的終端機。關閉終端機不會停止 Scheduler 或 UI；請分別使用 `stoker stop` 與 `stoker ui stop` 停止。電腦重新開機後不會自動重啟。
-
 使用 `stoker ui status` 查看位址，使用 `stoker ui stop` 停止 UI server。預設只監聽 `127.0.0.1:8765`。
-
-發佈的 binary 已內嵌 React 19 + TypeScript 的 production Web UI bundle，一般使用者不需要另外安裝 Node.js 或 npm。若要修改前端，開發者可先執行 `npm ci`，再執行 `npm run build` 與 `npm run typecheck`；`make check` 也會在 Rust 檢查前自動執行這兩個步驟。
 
 若要允許區域網路存取，請明確綁定非 loopback 位址：
 
