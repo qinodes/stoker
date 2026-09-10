@@ -14,7 +14,6 @@ pub struct UiMetadata {
     pub pid: u32,
     pub host: IpAddr,
     pub port: u16,
-    pub auth_required: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -94,7 +93,6 @@ impl From<Job> for JobDto {
 
 #[derive(Debug, Serialize)]
 pub(super) struct UiConfigResponse {
-    pub auth_required: bool,
     pub version: &'static str,
     pub max_job_name_length: usize,
     pub max_job_user_length: usize,

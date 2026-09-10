@@ -105,7 +105,6 @@ fn documented_public_facades_compile_for_an_external_consumer() {
         pid: 7,
         host: "127.0.0.1".parse().unwrap(),
         port: stoker::ui::default_port(),
-        auth_required: false,
     };
     assert_eq!(metadata.port, 8765);
     let _config = StokerConfig::default();

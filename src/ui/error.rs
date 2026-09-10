@@ -13,7 +13,6 @@ use crate::application::{self, ApplicationError, ApplicationErrorCode, Conflict}
 #[serde(rename_all = "snake_case")]
 pub(super) enum ErrorCode {
     InvalidInput,
-    Unauthorized,
     Forbidden,
     NotFound,
     Conflict,
@@ -59,14 +58,6 @@ impl ApiError {
 
     pub(super) fn invalid_input(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, ErrorCode::InvalidInput, message)
-    }
-
-    pub(super) fn unauthorized() -> Self {
-        Self::new(
-            StatusCode::UNAUTHORIZED,
-            ErrorCode::Unauthorized,
-            "UI token required",
-        )
     }
 
     pub(super) fn forbidden(message: impl Into<String>) -> Self {
@@ -349,7 +340,6 @@ mod tests {
     fn adapter_constructors_produce_stable_status_code_and_details() {
         let cases = [
             ApiError::invalid_input("invalid"),
-            ApiError::unauthorized(),
             ApiError::forbidden("origin"),
             ApiError::not_found("missing"),
             ApiError::method_not_allowed(),
@@ -359,7 +349,6 @@ mod tests {
         ];
         let expected = [
             (StatusCode::BAD_REQUEST, ErrorCode::InvalidInput),
-            (StatusCode::UNAUTHORIZED, ErrorCode::Unauthorized),
             (StatusCode::FORBIDDEN, ErrorCode::Forbidden),
             (StatusCode::NOT_FOUND, ErrorCode::NotFound),
             (StatusCode::METHOD_NOT_ALLOWED, ErrorCode::MethodNotAllowed),

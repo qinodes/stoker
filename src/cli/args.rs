@@ -167,7 +167,7 @@ pub struct UiStartArgs {
     #[arg(
         long,
         default_value = "127.0.0.1",
-        help = "Address to bind; LAN access requires an explicit non-loopback address"
+        help = "Address to bind; non-loopback addresses expose the UI to the network"
     )]
     pub host: IpAddr,
     #[arg(long, default_value_t = crate::ui::default_port(), help = "TCP port for the browser UI")]

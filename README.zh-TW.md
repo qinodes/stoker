@@ -46,7 +46,7 @@ stoker ui start --open
 stoker ui start --host 0.0.0.0 --port 8765
 ```
 
-啟用 LAN 存取時，Stoker 會印出 access token。請只分享給同一網路中的可信任使用者；訪客須在瀏覽器提示中輸入 token。使用 `--open` 時，Stoker 會自動將 token 傳給本機瀏覽器。
+區域網路模式不使用額外的 token 驗證；請只在你信任的網路中綁定非 loopback 位址。
 
 ## 安裝
 

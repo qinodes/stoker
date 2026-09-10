@@ -60,10 +60,6 @@ impl StokerPaths {
         self.root.join("ui.json")
     }
 
-    pub fn ui_token(&self) -> PathBuf {
-        self.root.join("ui.token")
-    }
-
     pub fn ui_log(&self) -> PathBuf {
         self.root.join("ui.log")
     }

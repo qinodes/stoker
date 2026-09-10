@@ -13,7 +13,7 @@ use super::state::ApiState;
 pub(super) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 pub(super) fn build_router(state: ApiState) -> Router {
-    let protected = Router::new()
+    let api_routes = Router::new()
         .route("/status", get(status::status))
         .route("/jobs", get(jobs::list).post(jobs::create))
         .route("/jobs/{id}", get(jobs::detail))
@@ -37,15 +37,11 @@ pub(super) fn build_router(state: ApiState) -> Router {
         )
         .route("/config/restore", post(configuration::restore_snapshot))
         .fallback(system::api_not_found)
-        .method_not_allowed_fallback(system::method_not_allowed)
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_authorization,
-        ));
+        .method_not_allowed_fallback(system::method_not_allowed);
 
     let api = Router::new()
         .route("/ui/config", get(system::ui_config))
-        .merge(protected)
+        .merge(api_routes)
         .fallback(system::api_not_found)
         .method_not_allowed_fallback(system::method_not_allowed)
         .layer(middleware::from_fn_with_state(
@@ -90,7 +86,6 @@ mod tests {
     use crate::config::StokerPaths;
 
     use super::*;
-    use crate::ui::UiMetadata;
 
     #[derive(Debug, Deserialize)]
     struct HttpRouteFixture {
@@ -101,12 +96,6 @@ mod tests {
         json_body: Option<String>,
         #[serde(default)]
         raw_body: Option<String>,
-        #[serde(default)]
-        auth_required: bool,
-        #[serde(default)]
-        token: Option<String>,
-        #[serde(default)]
-        authorization: Option<String>,
         #[serde(default)]
         origin: Option<String>,
         expected_status: u16,
@@ -122,14 +111,10 @@ mod tests {
             serde_json::from_str(include_str!("../../tests/fixtures/http/v1/routes.json")).unwrap();
 
         for fixture in fixtures {
-            let response = build_router(state_for(
-                &paths,
-                fixture.auth_required,
-                fixture.token.as_deref(),
-            ))
-            .oneshot(fixture_request(&fixture, directory.path()))
-            .await
-            .unwrap();
+            let response = build_router(state_for(&paths))
+                .oneshot(fixture_request(&fixture, directory.path()))
+                .await
+                .unwrap();
             assert_eq!(
                 response.status().as_u16(),
                 fixture.expected_status,
@@ -166,7 +151,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let paths = test_paths(directory.path());
         paths.ensure().unwrap();
-        let response = build_router(state_for(&paths, false, None))
+        let response = build_router(state_for(&paths))
             .oneshot(
                 Request::post("/api/v1/jobs")
                     .header(header::CONTENT_TYPE, "application/json")
@@ -182,7 +167,7 @@ mod tests {
         let value: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["code"], "payload_too_large");
 
-        let response = build_router(state_for(&paths, false, None))
+        let response = build_router(state_for(&paths))
             .oneshot(
                 Request::post("/api/v1/jobs")
                     .body(Body::from("{}"))
@@ -204,7 +189,7 @@ mod tests {
             ("/styles.css", "text/css; charset=utf-8"),
             ("/assets/logo-mark.png", "image/png"),
         ] {
-            let response = build_router(state_for(&paths, false, None))
+            let response = build_router(state_for(&paths))
                 .oneshot(Request::get(path).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
@@ -213,7 +198,7 @@ mod tests {
             assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         }
         for path in ["/modules/controller.js", "/styles/tokens.css"] {
-            let response = build_router(state_for(&paths, false, None))
+            let response = build_router(state_for(&paths))
                 .oneshot(Request::get(path).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
@@ -226,7 +211,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let paths = test_paths(directory.path());
         paths.ensure().unwrap();
-        let state = state_for(&paths, false, None);
+        let state = state_for(&paths);
         let created = json_response(
             build_router(state.clone())
                 .oneshot(json_request(
@@ -328,7 +313,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let paths = test_paths(directory.path());
         paths.ensure().unwrap();
-        let state = state_for(&paths, false, None);
+        let state = state_for(&paths);
         let first = state
             .store
             .create_job(NewJob {
@@ -402,7 +387,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let paths = test_paths(directory.path());
         paths.ensure().unwrap();
-        let state = state_for(&paths, false, None);
+        let state = state_for(&paths);
         let set = json_response(
             build_router(state.clone())
                 .oneshot(json_request(
@@ -469,9 +454,6 @@ mod tests {
         if fixture.json_body.is_some() {
             request = request.header(header::CONTENT_TYPE, "application/json");
         }
-        if let Some(value) = &fixture.authorization {
-            request = request.header(header::AUTHORIZATION, value);
-        }
         if let Some(value) = &fixture.origin {
             request = request.header(header::ORIGIN, value);
         }
@@ -507,26 +489,11 @@ mod tests {
             .collect()
     }
 
-    pub(super) fn state_for(
-        paths: &StokerPaths,
-        auth_required: bool,
-        token: Option<&str>,
-    ) -> ApiState {
+    pub(super) fn state_for(paths: &StokerPaths) -> ApiState {
         ApiState::new(
             paths.clone(),
             crate::Store::open(&paths.database).unwrap(),
             ServiceClient::new(paths.clone()),
-            UiMetadata {
-                pid: 7,
-                host: if auth_required {
-                    "0.0.0.0".parse().unwrap()
-                } else {
-                    "127.0.0.1".parse().unwrap()
-                },
-                port: 8765,
-                auth_required,
-            },
-            token.map(str::to_owned),
         )
     }
 

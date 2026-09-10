@@ -34,7 +34,6 @@ export interface Job {
 
 export interface UiConfig {
   version?: string;
-  auth_required?: boolean;
   max_job_name_length?: number;
   max_job_user_length?: number;
   max_job_description_length?: number;

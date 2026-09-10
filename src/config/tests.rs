@@ -25,7 +25,6 @@ fn path_construction_has_no_filesystem_side_effects_and_bootstrap_is_explicit() 
     assert_eq!(paths.snapshot_dir(), root.join("snapshot"));
     assert_eq!(paths.service_log(), root.join("service.log"));
     assert_eq!(paths.ui_metadata(), root.join("ui.json"));
-    assert_eq!(paths.ui_token(), root.join("ui.token"));
     assert_eq!(paths.ui_log(), root.join("ui.log"));
     assert!(!paths.ipc_endpoint().is_empty());
     assert!(paths.list_config_snapshots().unwrap().is_empty());

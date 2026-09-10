@@ -10,7 +10,6 @@ interface MockModel {
 }
 
 interface MockBackendOptions {
-  requireToken?: boolean;
   onRequest?: (path: string, method: string) => void;
 }
 
@@ -55,7 +54,7 @@ const baseJob = (overrides: Partial<Job> = {}): Job => ({
   ...overrides,
 });
 
-async function mockBackend(page: Page, { requireToken = false, onRequest = () => {} }: MockBackendOptions = {}): Promise<MockModel> {
+async function mockBackend(page: Page, { onRequest = () => {} }: MockBackendOptions = {}): Promise<MockModel> {
   const seed = baseJob({ id: "10000000-0000-4000-8000-000000000001" });
   const model: MockModel = {
     jobs: [seed],
@@ -73,19 +72,10 @@ async function mockBackend(page: Page, { requireToken = false, onRequest = () =>
     onRequest(path, method);
     if (path === "/api/v1/ui/config") {
       return route.fulfill({ json: {
-        auth_required: requireToken,
         version: "1.3.1-test",
         max_job_name_length: 128,
         max_job_user_length: 50,
         max_job_description_length: 200,
-      } });
-    }
-    if (requireToken && request.headers().authorization !== "Bearer browser-secret") {
-      return route.fulfill({ status: 401, json: {
-        error: "legacy text",
-        code: "unauthorized",
-        message: "token required",
-        details: null,
       } });
     }
     if (path === "/api/v1/status") return route.fulfill({ json: status(model) });
@@ -358,13 +348,11 @@ test("v1.3.1 layout contract and two-second refresh preserve active input", asyn
   await expect(page.locator("#job-name")).toHaveValue("unsaved draft");
 });
 
-test("LAN auth opens token dialog and retries with bearer credentials", async ({ page }) => {
-  await mockBackend(page, { requireToken: true });
+test("LAN mode loads without an authentication prompt", async ({ page }) => {
+  await mockBackend(page);
   await page.goto("/");
-  await expect(page.locator("#token-dialog")).toBeVisible();
-  await page.locator("#token-input").fill("browser-secret");
-  await page.locator("#token-form").getByRole("button", { name: "Connect" }).click();
   await expect(page.getByRole("heading", { name: "See what’s running and what’s next." })).toBeVisible();
+  await expect(page.locator("dialog[open]")).toHaveCount(0);
 });
 
 function requestJson<T>(request: Request): T {

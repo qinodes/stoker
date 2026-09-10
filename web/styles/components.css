@@ -48,9 +48,7 @@
 
 .button:disabled { cursor: not-allowed; opacity: .46; transform: none; }
 
-.token-dialog { width: min(430px, calc(100vw - 30px)); padding: 0; border: 0; border-radius: 16px; background: transparent; color: var(--text); }
 
-.token-dialog::backdrop { background: rgba(4, 8, 14, .72); backdrop-filter: blur(5px); }
 
 .confirm-dialog { width: min(455px, calc(100vw - 30px)); padding: 0; border: 0; border-radius: 16px; background: transparent; color: var(--text); }
 

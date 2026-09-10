@@ -46,8 +46,6 @@ export interface WorkspaceActions {
   unsetTimezone: () => Promise<void>;
   createSnapshot: () => Promise<void>;
   restoreSnapshot: (path: string) => Promise<void>;
-  connectToken: (token: string) => Promise<void>;
-  dismissToken: () => void;
 }
 
 export interface WorkspaceContextValue {
@@ -56,7 +54,6 @@ export interface WorkspaceContextValue {
   jobFormOpen: boolean;
   jobDetailOpen: boolean;
   detailEditing: boolean;
-  tokenOpen: boolean;
   confirmation: Confirmation | null;
   toasts: Array<{ id: number; message: string; error: boolean }>;
 }
@@ -79,7 +76,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [jobFormOpen, setJobFormOpen] = useState(false);
   const [jobDetailOpen, setJobDetailOpen] = useState(false);
   const [detailEditing, setDetailEditing] = useState(false);
-  const [tokenOpen, setTokenOpen] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const resolver = useRef<((value: boolean) => void) | null>(null);
   const [toasts, setToasts] = useState<Array<{ id: number; message: string; error: boolean }>>([]);
@@ -94,7 +90,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 4200);
   }, []);
 
-  if (!apiRef.current) apiRef.current = createApiClient({ onUnauthorized: () => setTokenOpen(true) });
+  if (!apiRef.current) apiRef.current = createApiClient();
   const api = apiRef.current;
 
   const loadLogs = useCallback(async (jobId: string) => {
@@ -272,11 +268,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const unsetTimezone = useCallback(async () => { const result = await mutate<SettingsResponse>("/api/v1/config/timezone", "DELETE", null, "System timezone enabled."); if (result) setState((current) => ({ ...current, configurationDraft: null })); }, [mutate]);
   const createSnapshot = useCallback(async () => { await mutate("/api/v1/config/snapshot", "POST", null, "Configuration snapshot created."); }, [mutate]);
   const restoreSnapshot = useCallback(async (path: string) => { if (await requestConfirmation({ kicker: "Configuration snapshot", title: "Restore this snapshot?", message: "The current configuration will be preserved before restore.", acceptLabel: "Restore snapshot", destructive: false })) await mutate("/api/v1/config/restore", "POST", { path }, "Configuration restored."); }, [mutate, requestConfirmation]);
-  const connectToken = useCallback(async (token: string) => { if (!token.trim()) return; sessionStorage.setItem("stoker-ui-token", token.trim()); setTokenOpen(false); await loadData(); }, [loadData]);
-  const dismissToken = useCallback(() => setTokenOpen(false), []);
-
-  const actions = useMemo<WorkspaceActions>(() => ({ loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, connectToken, dismissToken }), [loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, connectToken, dismissToken]);
-  return <WorkspaceContext.Provider value={{ state, actions, jobFormOpen, jobDetailOpen, detailEditing, tokenOpen, confirmation, toasts }}>{children}</WorkspaceContext.Provider>;
+  const actions = useMemo<WorkspaceActions>(() => ({ loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot }), [loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot]);
+  return <WorkspaceContext.Provider value={{ state, actions, jobFormOpen, jobDetailOpen, detailEditing, confirmation, toasts }}>{children}</WorkspaceContext.Provider>;
 }
 
 export { JOBS_PAGE_SIZE, SNAPSHOTS_PAGE_SIZE, pageInfo };

@@ -46,7 +46,7 @@ To allow access from the local network, bind an explicit non-loopback address:
 stoker ui start --host 0.0.0.0 --port 8765
 ```
 
-Stoker prints an access token when LAN access is enabled. Share it only with trusted users on that network; visitors enter it in the browser prompt. `--open` passes the token to the local browser automatically.
+LAN mode does not require an additional token; bind a non-loopback address only on a network you trust.
 
 ## Installation
 

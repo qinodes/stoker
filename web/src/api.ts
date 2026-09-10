@@ -14,10 +14,6 @@ export class ApiError extends Error {
 
 export interface ApiClientOptions {
   fetchImpl?: typeof fetch;
-  session?: Storage;
-  browserLocation?: Location;
-  browserHistory?: History;
-  onUnauthorized?: (error: ApiError) => void;
 }
 
 export interface ApiClient {
@@ -28,25 +24,9 @@ export interface ApiClient {
 
 export function createApiClient({
   fetchImpl = globalThis.fetch.bind(globalThis),
-  session = globalThis.sessionStorage,
-  browserLocation = globalThis.location,
-  browserHistory = globalThis.history,
-  onUnauthorized = () => undefined,
 }: ApiClientOptions = {}): ApiClient {
-  function token(): string {
-    const hash = new URLSearchParams(browserLocation?.hash?.slice(1) || "");
-    const fragmentToken = hash.get("token");
-    if (fragmentToken) {
-      session?.setItem("stoker-ui-token", fragmentToken);
-      browserHistory?.replaceState(null, "", `${browserLocation.pathname}${browserLocation.search}#overview`);
-    }
-    return session?.getItem("stoker-ui-token") || "";
-  }
-
   async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-    const accessToken = token();
     const headers = new Headers(options.headers);
-    if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
     if (options.body !== undefined && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
     const response = await fetchImpl(path, { ...options, headers, cache: "no-store" });
     if (response.ok) {
@@ -64,7 +44,6 @@ export function createApiClient({
       message: payload?.message || payload?.error || `Request failed (${response.status})`,
       details: payload?.details,
     });
-    if (error.code === "unauthorized") onUnauthorized(error);
     throw error;
   }
 

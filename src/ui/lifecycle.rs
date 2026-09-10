@@ -7,7 +7,6 @@ use std::time::Duration;
 use anyhow::Context;
 use crossterm::style::Color;
 use tokio::net::TcpListener;
-use uuid::Uuid;
 
 use crate::Store;
 use crate::config::StokerPaths;
@@ -20,7 +19,6 @@ use super::router::build_router;
 use super::state::ApiState;
 
 pub(super) const DEFAULT_PORT: u16 = 8765;
-const UI_TOKEN_ENV: &str = "STOKER_UI_TOKEN";
 
 /// Start a detached UI process and wait until its listener and metadata agree.
 pub fn start(paths: StokerPaths, host: IpAddr, port: u16, open: bool) -> anyhow::Result<()> {
@@ -36,8 +34,6 @@ pub fn start(paths: StokerPaths, host: IpAddr, port: u16, open: bool) -> anyhow:
     }
 
     remove_if_exists(&paths.ui_metadata())?;
-    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    write_token(&paths, &token)?;
     let log = OpenOptions::new()
         .create(true)
         .append(true)
@@ -54,7 +50,6 @@ pub fn start(paths: StokerPaths, host: IpAddr, port: u16, open: bool) -> anyhow:
             "--port",
             &port.to_string(),
         ])
-        .env(UI_TOKEN_ENV, &token)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(log_err));
@@ -71,7 +66,7 @@ pub fn start(paths: StokerPaths, host: IpAddr, port: u16, open: bool) -> anyhow:
     };
     let metadata = wait_for_ui_start(&mut gateway)?;
     let url = ui_url(&metadata);
-    print_start_message(&metadata, &url, &token, open)
+    print_start_message(&metadata, &url, open)
 }
 
 pub fn status(paths: StokerPaths) -> anyhow::Result<()> {
@@ -88,14 +83,6 @@ pub fn status(paths: StokerPaths) -> anyhow::Result<()> {
     println!("PID: {}", metadata.pid);
     println!("URL: {}", ui_url(&metadata));
     println!("Bind: {}", metadata.host);
-    println!(
-        "Authentication: {}",
-        if metadata.auth_required {
-            "token required"
-        } else {
-            "local only"
-        }
-    );
     Ok(())
 }
 
@@ -105,15 +92,12 @@ pub fn stop(paths: StokerPaths) -> anyhow::Result<()> {
         println!("Stoker UI is not running.");
         return Ok(());
     };
-    let token = read_token(&paths)?;
     if probe_host(connect_host(metadata.host), metadata.port).is_err() {
         remove_if_exists(&paths.ui_metadata())?;
         print_notice("Stoker UI was not reachable; removed stale metadata.");
         return Ok(());
     }
-    let request = format!(
-        "POST /__stoker/shutdown HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
-    );
+    let request = "POST /__stoker/shutdown HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".to_owned();
     let response = request_blocking(
         connect_host(metadata.host),
         metadata.port,
@@ -149,16 +133,9 @@ pub(super) async fn run_async(paths: StokerPaths, host: IpAddr, port: u16) -> an
         pid: std::process::id(),
         host,
         port: actual.port(),
-        auth_required: !host.is_loopback(),
     };
     write_metadata(&paths, &metadata)?;
-    let state = ApiState::new(
-        paths.clone(),
-        store,
-        ServiceClient::new(paths.clone()),
-        metadata,
-        std::env::var(UI_TOKEN_ENV).ok(),
-    );
+    let state = ApiState::new(paths.clone(), store, ServiceClient::new(paths.clone()));
     let shutdown = state.shutdown.clone();
     let result = axum::serve(listener, build_router(state))
         .with_graceful_shutdown(async move { shutdown.notified().await })
@@ -189,26 +166,6 @@ fn write_metadata(paths: &StokerPaths, metadata: &UiMetadata) -> anyhow::Result<
     fs::rename(&temporary, &path)
         .with_context(|| format!("install UI metadata {}", path.display()))?;
     Ok(())
-}
-
-fn write_token(paths: &StokerPaths, token: &str) -> anyhow::Result<()> {
-    let path = paths.ui_token();
-    let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&path)
-        .with_context(|| format!("open UI token {}", path.display()))?;
-    file.write_all(token.as_bytes())?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    Ok(())
-}
-
-fn read_token(paths: &StokerPaths) -> anyhow::Result<String> {
-    fs::read_to_string(paths.ui_token())
-        .with_context(|| format!("read UI token {}", paths.ui_token().display()))
-        .map(|token| token.trim().to_owned())
 }
 
 fn remove_if_exists(path: &Path) -> anyhow::Result<()> {
@@ -384,26 +341,12 @@ fn wait_for_ui_stop<G: UiStopGateway>(gateway: &mut G) -> anyhow::Result<()> {
     }
 }
 
-fn print_start_message(
-    metadata: &UiMetadata,
-    url: &str,
-    token: &str,
-    open: bool,
-) -> anyhow::Result<()> {
+fn print_start_message(metadata: &UiMetadata, url: &str, open: bool) -> anyhow::Result<()> {
     print_success("Stoker UI started.");
     println!("URL: {url}");
     println!("PID: {}", metadata.pid);
-    if metadata.auth_required {
-        println!("LAN token: {token}");
-        println!("Share the token only with trusted users on this network.");
-    }
     if open {
-        let browser_url = if metadata.auth_required {
-            format!("{url}#token={token}")
-        } else {
-            url.to_owned()
-        };
-        open_browser(&browser_url)?;
+        open_browser(url)?;
     }
     Ok(())
 }
@@ -473,7 +416,6 @@ mod tests {
                     pid: 42,
                     host: "127.0.0.1".parse().unwrap(),
                     port: 8765,
-                    auth_required: false,
                 }),
                 metadata_error: None,
                 child_exit: None,
@@ -611,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_token_and_urls_round_trip() {
+    fn metadata_and_urls_round_trip() {
         let directory = tempfile::tempdir().unwrap();
         let paths = test_paths(directory.path());
         paths.ensure().unwrap();
@@ -620,12 +562,9 @@ mod tests {
             pid: 42,
             host: "::".parse().unwrap(),
             port: 9000,
-            auth_required: true,
         };
         write_metadata(&paths, &metadata).unwrap();
         assert_eq!(read_metadata(&paths).unwrap(), Some(metadata.clone()));
-        write_token(&paths, " secret ").unwrap();
-        assert_eq!(read_token(&paths).unwrap(), "secret");
         assert_eq!(ui_url(&metadata), "http://[::1]:9000");
         assert_eq!(
             connect_host("0.0.0.0".parse().unwrap()),
@@ -655,7 +594,6 @@ mod tests {
                 pid: 99,
                 host: "127.0.0.1".parse().unwrap(),
                 port,
-                auth_required: false,
             },
         )
         .unwrap();
@@ -667,7 +605,6 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(10));
         }
-        write_token(&paths, "stale-token").unwrap();
         status(paths.clone()).unwrap();
         stop(paths.clone()).unwrap();
         assert!(read_metadata(&paths).unwrap().is_none());
@@ -677,10 +614,8 @@ mod tests {
                 pid: 1,
                 host: "127.0.0.1".parse().unwrap(),
                 port: 8765,
-                auth_required: false,
             },
             "http://127.0.0.1:8765",
-            "unused",
             false,
         )
         .unwrap();
@@ -689,10 +624,8 @@ mod tests {
                 pid: 2,
                 host: "0.0.0.0".parse().unwrap(),
                 port: 8765,
-                auth_required: true,
             },
             "http://127.0.0.1:8765",
-            "secret",
             false,
         )
         .unwrap();
@@ -733,7 +666,6 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let paths = test_paths(directory.path());
         paths.ensure().unwrap();
-        write_token(&paths, "loopback-token").unwrap();
         let server_paths = paths.clone();
         let server = tokio::spawn(async move {
             run_async(server_paths, "127.0.0.1".parse().unwrap(), 0)

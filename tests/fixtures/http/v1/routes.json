@@ -1,5 +1,5 @@
 [
-  {"name":"ui config is public","method":"GET","target":"/api/v1/ui/config","expected_status":200,"expected_fields":["auth_required","version","max_job_name_length","max_job_user_length","max_job_description_length"]},
+  {"name":"ui config is public","method":"GET","target":"/api/v1/ui/config","expected_status":200,"expected_fields":["version","max_job_name_length","max_job_user_length","max_job_description_length"]},
   {"name":"status","method":"GET","target":"/api/v1/status","expected_status":200,"expected_fields":["scheduler","counts","queue_locked","timezone","generated_at"]},
   {"name":"jobs","method":"GET","target":"/api/v1/jobs","expected_status":200,"expected_fields":["jobs","timezone"]},
   {"name":"queue","method":"GET","target":"/api/v1/queue","expected_status":200,"expected_fields":["jobs","locked"]},
@@ -16,7 +16,6 @@
   {"name":"known route rejects wrong method","method":"POST","target":"/api/v1/status","expected_status":405,"expected_fields":["error"]},
   {"name":"unknown route","method":"GET","target":"/api/v1/not-a-route","expected_status":404,"expected_fields":["error"]},
   {"name":"json endpoint requires content type","method":"POST","target":"/api/v1/jobs","raw_body":"{}","expected_status":415,"expected_fields":["error"]},
-  {"name":"lan api requires bearer token","method":"GET","target":"/api/v1/status","auth_required":true,"token":"secret-token","expected_status":401,"expected_fields":["error"]},
-  {"name":"lan api accepts bearer token","method":"GET","target":"/api/v1/status","auth_required":true,"token":"secret-token","authorization":"Bearer secret-token","expected_status":200,"expected_fields":["scheduler","counts","queue_locked","timezone","generated_at"]},
-  {"name":"lan api rejects foreign origin","method":"GET","target":"/api/v1/status","auth_required":true,"token":"secret-token","authorization":"Bearer secret-token","origin":"https://example.invalid","expected_status":403,"expected_fields":["error"]}
+  {"name":"lan api is open to trusted network","method":"GET","target":"/api/v1/status","origin":"http://localhost","expected_status":200,"expected_fields":["scheduler","counts","queue_locked","timezone","generated_at"]},
+  {"name":"api rejects foreign origin","method":"GET","target":"/api/v1/status","origin":"https://example.invalid","expected_status":403,"expected_fields":["error"]}
 ]

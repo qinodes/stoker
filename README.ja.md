@@ -46,7 +46,7 @@ stoker ui start --open
 stoker ui start --host 0.0.0.0 --port 8765
 ```
 
-LAN アクセスを有効にすると、Stoker は access token を表示します。同じネットワーク上の信頼できるユーザーとのみ共有し、ブラウザーの入力画面で token を入力してください。`--open` を使うと、ローカルブラウザーには token が自動的に渡されます。
+LAN モードでは追加の token 認証を行いません。信頼できるネットワークでのみ loopback 以外のアドレスにバインドしてください。
 
 ## インストール
 
