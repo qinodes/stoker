@@ -1,6 +1,6 @@
 import { createApiClient } from "./api-client.js";
 import { toast } from "./components.js";
-import { routeTitle } from "./formatters.js";
+import { escapeAttribute, escapeHtml, routeTitle } from "./formatters.js";
 import {
   applyLoad,
   beginLoad,
@@ -26,6 +26,7 @@ export function bootstrap() {
 
   function render() {
     if (!state.loaded) return;
+    const focus = captureFocus();
     state.route = ROUTES.includes(state.route) ? state.route : "overview";
     elements.app.dataset.view = state.route;
     document.querySelectorAll("[data-route]").forEach((item) => item.classList.toggle("active", item.dataset.route === state.route));
@@ -33,9 +34,10 @@ export function bootstrap() {
     const views = { overview: renderOverview, jobs: renderJobs, queue: renderQueue, logs: renderLogs, configuration: renderConfiguration };
     elements.app.innerHTML = views[state.route](state);
     updateChrome(state);
+    restoreFocus(focus);
   }
 
-  async function loadData({ renderAfter = true } = {}) {
+  async function loadData({ forceRender = false } = {}) {
     const sequence = beginLoad(state);
     if (!state.loaded) elements.app.innerHTML = '<div class="page-loading"><span class="spinner"></span><span>Loading workspace…</span></div>';
     try {
@@ -55,8 +57,11 @@ export function bootstrap() {
         state.selectedJob = state.jobs.find((job) => job.id === state.selectedJob.id) || state.selectedJob;
         if (elements.jobDetailDialog.open && !detailEditing) renderDetail();
       }
-      if (renderAfter && !isEditing()) render();
-      else updateChrome(state);
+      if (forceRender || !isInteractiveEditing(elements, detailEditing)) render();
+      else {
+        updateChrome(state);
+        refreshLiveTimes(state.timezone?.name);
+      }
     } catch (error) {
       if (!failLoad(state, sequence, error)) return;
       updateConnection(false);
@@ -129,6 +134,7 @@ export function bootstrap() {
       const detail = await api.get(`/api/v1/jobs/${id}`);
       if (requestId !== state.detailRequestId) return;
       state.selectedJob = detail.job;
+      state.selectedJobDetail = detail;
       detailEditing = false;
       renderDetail();
     } catch (error) {
@@ -165,15 +171,24 @@ export function bootstrap() {
     else if (action === "clean-jobs" && await confirmAction("Maintenance", "Clean terminal jobs?", "This removes terminal job history and its run artifacts.", "Clean jobs", true)) await mutate("/api/v1/clean", "POST", null, "Terminal job history cleaned.");
     else if (target.dataset.jobOpen) await openJobDetail(target.dataset.jobOpen);
     else if (target.dataset.pageKind) {
-      state.pagination[target.dataset.pageKind] = Number(target.dataset.page);
+      state.pagination[target.dataset.pageKind] = Number(target.dataset.pageNumber || target.dataset.page);
       render();
     } else if (target.dataset.queueLock) await mutate(`/api/v1/queue/${target.dataset.queueLock === "true" ? "lock" : "unlock"}`, "POST");
     else if (target.dataset.queueMove) await mutate(`/api/v1/queue/${target.dataset.queueMove}/move`, "POST", { target_order: Number(target.dataset.targetOrder) });
     else if (target.dataset.logStream) {
       state.logs.stream = target.dataset.logStream;
       render();
+    } else if (target.dataset.timezone) {
+      const input = document.getElementById("timezone-input");
+      input.value = target.dataset.timezone;
+      state.configurationDraft = input.value;
+      updateTimezonePicker(state);
+      input.focus({ preventScroll: true });
     } else if (action === "create-snapshot") await mutate("/api/v1/config/snapshot", "POST", null, "Configuration snapshot created.");
-    else if (action === "unset-timezone") await mutate("/api/v1/config/timezone", "DELETE", null, "System timezone enabled.");
+    else if (action === "unset-timezone") {
+      state.configurationDraft = null;
+      await mutate("/api/v1/config/timezone", "DELETE", null, "System timezone enabled.");
+    }
     else if (target.dataset.restorePath && await confirmAction("Configuration snapshot", "Restore this snapshot?", "The current configuration will be preserved before restore.", "Restore snapshot")) await mutate("/api/v1/config/restore", "POST", { path: target.dataset.restorePath });
   });
 
@@ -185,12 +200,15 @@ export function bootstrap() {
     } else if (event.target.id === "log-job-search") {
       state.logs.search = event.target.value;
       render();
+    } else if (event.target.id === "timezone-input") {
+      state.configurationDraft = event.target.value;
+      updateTimezonePicker(state);
     }
   });
 
   elements.app.addEventListener("change", async (event) => {
-    if (event.target.id === "job-owner-filter") state.filters.user = event.target.value;
-    else if (event.target.id === "job-state-filter") state.filters.state = event.target.value;
+    if (event.target.id === "user-filter" || event.target.id === "job-owner-filter") state.filters.user = event.target.value;
+    else if (event.target.id === "state-filter" || event.target.id === "job-state-filter") state.filters.state = event.target.value;
     else if (event.target.id === "log-job-select") {
       state.logs.jobId = event.target.value;
       await loadLogs();
@@ -203,15 +221,38 @@ export function bootstrap() {
   elements.app.addEventListener("submit", async (event) => {
     if (event.target.id !== "timezone-form") return;
     event.preventDefault();
-    await mutate("/api/v1/config/timezone", "PUT", { value: document.getElementById("timezone-input").value });
+    const result = await mutate("/api/v1/config/timezone", "PUT", { value: document.getElementById("timezone-input").value });
+    if (result) {
+      state.configurationDraft = null;
+      await loadData({ forceRender: true });
+    }
   });
 
-  elements.jobDialogContent.addEventListener("input", captureDraft);
+  elements.jobDialogContent.addEventListener("input", (event) => {
+    captureDraft();
+    if (event.target.id === "job-description") {
+      const count = document.getElementById("job-description-count");
+      if (count) count.textContent = `${[...event.target.value].length}/${state.config?.max_job_description_length || 200}`;
+    } else if (event.target.id === "job-user") {
+      updateOwnerSuggestions(state);
+    }
+  });
+  elements.jobDialogContent.addEventListener("focusin", (event) => {
+    if (event.target.id === "job-user") updateOwnerSuggestions(state);
+  });
   elements.jobDialogContent.addEventListener("click", async (event) => {
     const target = event.target.closest("button");
     if (!target) return;
     captureDraft();
     if (target.dataset.action === "close-job-form") elements.jobDialog.close();
+    else if (target.dataset.jobUser) {
+      state.jobDraft.user = target.dataset.jobUser;
+      const input = document.getElementById("job-user");
+      input.value = state.jobDraft.user;
+      document.getElementById("job-user-suggestions").classList.remove("visible");
+      input.setAttribute("aria-expanded", "false");
+      input.focus({ preventScroll: true });
+    }
     else if (target.dataset.action === "browse-directory") await loadDirectory(state.jobDraft.cwd || state.filesystem.roots?.default_path);
     else if (target.dataset.action === "open-directory") await loadDirectory(document.getElementById("fs-path")?.value);
     else if (target.dataset.directory) await loadDirectory(target.dataset.directory);
@@ -223,7 +264,7 @@ export function bootstrap() {
   });
 
   elements.jobDialogContent.addEventListener("submit", async (event) => {
-    if (event.target.id !== "job-form") return;
+    if (event.target.id !== "new-job-form") return;
     event.preventDefault();
     captureDraft();
     const created = await mutate("/api/v1/jobs", "POST", state.jobDraft, "Job created as DRAFT.");
@@ -237,6 +278,10 @@ export function bootstrap() {
     const target = event.target.closest("button");
     if (!target) return;
     if (target.dataset.action === "close-job-detail") elements.jobDetailDialog.close();
+    else if (target.dataset.action === "copy-job-id") {
+      await navigator.clipboard.writeText(target.dataset.jobId);
+      target.classList.add("copied");
+    }
     else if (target.dataset.action === "edit-description") {
       detailEditing = !detailEditing;
       renderDetail();
@@ -263,6 +308,16 @@ export function bootstrap() {
       detailEditing = false;
       renderDetail();
     }
+  });
+
+  // The drawers occupy the right side of the viewport. A click on the native
+  // dialog element itself means the user clicked its backdrop; clicks inside
+  // the shell bubble from a child and must leave the drawer open.
+  elements.jobDialog.addEventListener("click", (event) => {
+    if (event.target === elements.jobDialog) elements.jobDialog.close();
+  });
+  elements.jobDetailDialog.addEventListener("click", (event) => {
+    if (event.target === elements.jobDetailDialog) elements.jobDetailDialog.close();
   });
 
   document.getElementById("refresh-button").addEventListener("click", () => loadData());
@@ -321,7 +376,7 @@ export function bootstrap() {
 
   loadData();
   setInterval(() => {
-    if (document.visibilityState === "visible") loadData({ renderAfter: !isEditing() });
+    if (document.visibilityState === "visible") loadData();
   }, 2000);
 }
 
@@ -361,8 +416,86 @@ function updateConnection(online) {
   document.getElementById("connection-detail").textContent = online ? "State synced just now" : "Retry to reconnect";
 }
 
-function isEditing() {
-  return ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
+export function isInteractiveEditing(elements, detailEditing = false) {
+  const tagName = document.activeElement?.tagName;
+  return ["INPUT", "SELECT", "TEXTAREA"].includes(tagName)
+    || elements.jobDialog.open
+    || elements.confirmDialog.open
+    || detailEditing;
+}
+
+function refreshLiveTimes(timezone) {
+  document.querySelectorAll("time.live-time").forEach((element) => {
+    const value = element.getAttribute("datetime");
+    if (!value) return;
+    const date = new Date(value);
+    if (Number.isNaN(date.valueOf())) return;
+    const options = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
+    if (timezone) options.timeZone = timezone;
+    try {
+      element.textContent = new Intl.DateTimeFormat(undefined, options).format(date);
+    } catch {
+      delete options.timeZone;
+      element.textContent = new Intl.DateTimeFormat(undefined, options).format(date);
+    }
+  });
+}
+
+function updateTimezonePicker(state) {
+  const input = document.getElementById("timezone-input");
+  const feedback = document.getElementById("timezone-feedback");
+  const submit = document.getElementById("timezone-set");
+  const suggestions = document.getElementById("timezone-suggestions");
+  if (!input || !feedback || !submit || !suggestions) return;
+  const value = input.value.trim();
+  const saved = state.settings?.config?.timezone || "";
+  const timezones = state.settings?.timezones || [];
+  const exact = timezones.includes(value);
+  const changed = value !== saved;
+  submit.disabled = !exact || !changed;
+  feedback.className = `form-feedback ${exact ? "valid" : value ? "invalid" : ""}`;
+  feedback.textContent = exact && changed ? "✓ Valid timezone. Ready to save." : exact ? "Current timezone is already selected." : value ? "Choose a timezone from the suggestions." : "Start typing to search available timezones.";
+  const query = value.toLowerCase();
+  const matches = query ? timezones.filter((zone) => zone.toLowerCase().includes(query)).slice(0, 8) : [];
+  suggestions.innerHTML = matches.map((zone) => `<button class="timezone-option" type="button" role="option" data-timezone="${escapeAttribute(zone)}">${escapeHtml(zone)}</button>`).join("");
+  const visible = matches.length > 0 && document.activeElement === input;
+  suggestions.classList.toggle("visible", visible);
+  input.setAttribute("aria-expanded", String(visible));
+}
+
+function updateOwnerSuggestions(state) {
+  const input = document.getElementById("job-user");
+  const suggestions = document.getElementById("job-user-suggestions");
+  if (!input || !suggestions) return;
+  const query = input.value.trim().toLowerCase();
+  const owners = [...new Set(state.jobs.map((job) => job.user).filter(Boolean))]
+    .filter((owner) => !query || owner.toLowerCase().includes(query))
+    .sort()
+    .slice(0, 50);
+  suggestions.innerHTML = owners.length ? `<div class="job-suggestions-label">Known owners · ${owners.length}</div>${owners.map((owner) => `<button class="job-suggestion" type="button" role="option" data-job-user="${escapeAttribute(owner)}"><span class="suggestion-avatar">${escapeHtml(owner.slice(0, 1).toUpperCase())}</span><span>${escapeHtml(owner)}</span></button>`).join("")}` : "";
+  const visible = owners.length > 0 && document.activeElement === input;
+  suggestions.classList.toggle("visible", visible);
+  input.setAttribute("aria-expanded", String(visible));
+}
+
+function captureFocus() {
+  const focused = document.activeElement;
+  return focused && focused.id ? {
+    id: focused.id,
+    start: typeof focused.selectionStart === "number" ? focused.selectionStart : null,
+    end: typeof focused.selectionEnd === "number" ? focused.selectionEnd : null,
+  } : null;
+}
+
+function restoreFocus(snapshot) {
+  if (!snapshot) return;
+  const input = document.getElementById(snapshot.id);
+  if (!input) return;
+  input.focus({ preventScroll: true });
+  if (snapshot.start !== null && snapshot.end !== null && typeof input.setSelectionRange === "function") {
+    const end = Math.min(snapshot.end, input.value.length);
+    input.setSelectionRange(Math.min(snapshot.start, end), end);
+  }
 }
 
 function escapeText(value) {

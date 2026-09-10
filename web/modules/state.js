@@ -23,6 +23,8 @@ export function createState(route = "overview") {
     jobDraft: { user: "", name: "", cwd: "", command: "", description: "" },
     filesystem: { roots: null, current: null, inputPath: "", loading: false, error: "", requestId: 0 },
     selectedJob: null,
+    selectedJobDetail: null,
+    configurationDraft: null,
     detailRequestId: 0,
     directoryCache: new Map(),
   };

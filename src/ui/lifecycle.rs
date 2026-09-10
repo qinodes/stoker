@@ -13,6 +13,7 @@ use crate::Store;
 use crate::config::StokerPaths;
 use crate::ipc::ServiceClient;
 use crate::output;
+use crate::process::configure_detached;
 
 use super::dto::UiMetadata;
 use super::router::build_router;
@@ -44,7 +45,8 @@ pub fn start(paths: StokerPaths, host: IpAddr, port: u16, open: bool) -> anyhow:
         .context("open Stoker UI log")?;
     let log_err = log.try_clone().context("duplicate Stoker UI log")?;
     let executable = std::env::current_exe().context("locate stoker executable")?;
-    let child = std::process::Command::new(executable)
+    let mut command = std::process::Command::new(executable);
+    command
         .args([
             "ui-run",
             "--host",
@@ -55,9 +57,9 @@ pub fn start(paths: StokerPaths, host: IpAddr, port: u16, open: bool) -> anyhow:
         .env(UI_TOKEN_ENV, &token)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
-        .stderr(std::process::Stdio::from(log_err))
-        .spawn()
-        .context("start Stoker UI server")?;
+        .stderr(std::process::Stdio::from(log_err));
+    configure_detached(&mut command);
+    let child = command.spawn().context("start Stoker UI server")?;
 
     let mut gateway = SystemUiStartupGateway {
         paths,

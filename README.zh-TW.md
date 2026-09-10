@@ -38,6 +38,8 @@ stoker start
 stoker ui start --open
 ```
 
+`stoker start` 與 `stoker ui start` 啟動完成後都會脫離目前的終端機。關閉終端機不會停止 Scheduler 或 UI；請分別使用 `stoker stop` 與 `stoker ui stop` 停止。電腦重新開機後不會自動重啟。
+
 使用 `stoker ui status` 查看位址，使用 `stoker ui stop` 停止 UI server。預設只監聽 `127.0.0.1:8765`。
 
 若要允許區域網路存取，請明確綁定非 loopback 位址：

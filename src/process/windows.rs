@@ -19,8 +19,9 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CREATE_SUSPENDED, CreateProcessW, GetExitCodeProcess, INFINITE, PROCESS_INFORMATION,
-    ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessW, GetExitCodeProcess, INFINITE,
+    PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess,
+    WaitForSingleObject,
 };
 
 use super::{ManagedProcess, ProcessSpec, finish_pipes, spawn_pipe_writer};
@@ -73,7 +74,7 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
             null(),
             null(),
             1,
-            CREATE_SUSPENDED,
+            creation_flags(),
             null(),
             current_directory.as_ptr(),
             &startup,
@@ -136,6 +137,14 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
         stderr_task: Some(stderr_task),
         terminated: false,
     }))
+}
+
+fn creation_flags() -> u32 {
+    // Scheduler jobs are background work. Once the scheduler itself is
+    // detached, console programs such as cmd.exe must not allocate a transient
+    // console window for every job. Keep creation suspended so the process can
+    // still be assigned to its Job Object before it starts executing.
+    CREATE_SUSPENDED | CREATE_NO_WINDOW
 }
 
 fn create_output_pipe() -> io::Result<(HANDLE, HANDLE)> {
@@ -291,8 +300,9 @@ impl WindowsManagedProcess {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_line, quote_arg, wide_path};
+    use super::{command_line, creation_flags, quote_arg, wide_path};
     use std::ffi::OsStr;
+    use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
 
     fn utf16(value: Vec<u16>) -> String {
         String::from_utf16(&value).expect("valid UTF-16")
@@ -304,6 +314,11 @@ mod tests {
             wide_path(OsStr::new("C:\\work")),
             vec![67, 58, 92, 119, 111, 114, 107, 0]
         );
+    }
+
+    #[test]
+    fn scheduler_jobs_start_suspended_without_a_console_window() {
+        assert_eq!(creation_flags(), CREATE_SUSPENDED | CREATE_NO_WINDOW);
     }
 
     #[test]

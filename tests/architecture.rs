@@ -396,6 +396,21 @@ fn browser_frontend_has_module_and_stylesheet_ownership_boundaries() {
 }
 
 #[test]
+fn long_running_start_commands_use_the_shared_detachment_policy() {
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let scheduler = fs::read_to_string(source_root.join("cli/lifecycle/service.rs")).unwrap();
+    let ui = fs::read_to_string(source_root.join("ui/lifecycle.rs")).unwrap();
+    let process = fs::read_to_string(source_root.join("process/mod.rs")).unwrap();
+
+    assert!(scheduler.contains("configure_detached(&mut command)"));
+    assert!(ui.contains("configure_detached(&mut command)"));
+    assert!(
+        process.contains("command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)")
+    );
+    assert!(process.contains("nix::unistd::setsid()"));
+}
+
+#[test]
 fn cli_stage_six_modules_keep_io_and_framework_dependencies_at_the_edges() {
     let cli_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/cli");
 

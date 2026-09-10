@@ -13,12 +13,13 @@ export function emptyState(icon, title, message = "") {
 }
 
 export function jobRow(job, timezone) {
-  return `<tr class="job-row" data-job-open="${escapeAttribute(job.id)}" tabindex="0"><td><div class="job-name"><strong>${escapeHtml(job.name)}</strong><small>${escapeHtml(shortId(job.id))}</small></div></td><td>${escapeHtml(job.user)}</td><td class="path-cell" title="${escapeAttribute(job.cwd)}">${escapeHtml(job.cwd)}</td><td>${stateBadge(job.state)}</td><td class="mono">${job.queue_order ?? "—"}</td><td>${liveTime(job.created_at, timezone)}</td></tr>`;
+  return `<tr class="job-row" data-job-open="${escapeAttribute(job.id)}" tabindex="0" aria-label="Open details for ${escapeAttribute(job.name)}"><td><div class="job-name"><strong>${escapeHtml(job.name)}</strong><small>${escapeHtml(shortId(job.id))}</small></div></td><td>${escapeHtml(job.user)}</td><td class="path-cell" title="${escapeAttribute(job.cwd)}">${escapeHtml(job.cwd)}</td><td>${stateBadge(job.state)}</td><td class="mono">${job.queue_order ?? "—"}</td><td>${liveTime(job.created_at, timezone)}</td></tr>`;
 }
 
 export function pagination(kind, page) {
-  if (page.totalItems <= page.items.length && page.page === 1) return "";
-  return `<div class="list-pagination"><span>${page.totalItems ? `${page.start + 1}–${page.end} of ${page.totalItems}` : "0 items"}</span><div><button class="button small secondary" data-page-kind="${kind}" data-page="${page.page - 1}" ${page.page <= 1 ? "disabled" : ""}>Previous</button> <button class="button small secondary" data-page-kind="${kind}" data-page="${page.page + 1}" ${page.page >= page.totalPages ? "disabled" : ""}>Next</button></div></div>`;
+  if (page.totalPages <= 1 && kind !== "jobs") return "";
+  const from = page.totalItems ? page.start + 1 : 0;
+  return `<nav class="list-pagination" aria-label="${escapeAttribute(kind)} pagination"><span>Showing ${from}–${page.end} of ${page.totalItems}</span><div class="list-pagination-controls"><button class="button small secondary" type="button" data-page-kind="${kind}" data-page-number="${page.page - 1}" ${page.page === 1 ? "disabled" : ""}>Previous</button><span>Page ${page.page} of ${page.totalPages}</span><button class="button small secondary" type="button" data-page-kind="${kind}" data-page-number="${page.page + 1}" ${page.page === page.totalPages ? "disabled" : ""}>Next</button></div></nav>`;
 }
 
 export function toast(message, error = false) {

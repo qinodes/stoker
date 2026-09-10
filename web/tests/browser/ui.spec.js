@@ -21,7 +21,7 @@ const baseJob = (overrides = {}) => ({
   ...overrides,
 });
 
-function mockBackend(page, { requireToken = false } = {}) {
+async function mockBackend(page, { requireToken = false, onRequest = () => {} } = {}) {
   const seed = baseJob({ id: "10000000-0000-4000-8000-000000000001" });
   const model = {
     jobs: [seed],
@@ -31,11 +31,12 @@ function mockBackend(page, { requireToken = false } = {}) {
     snapshots: [],
   };
 
-  return page.route("**/api/v1/**", async (route) => {
+  await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
+    onRequest(path, method);
     if (path === "/api/v1/ui/config") {
       return route.fulfill({ json: {
         auth_required: requireToken,
@@ -154,6 +155,7 @@ function mockBackend(page, { requireToken = false } = {}) {
     if (path === "/api/v1/clean") return route.fulfill({ json: { removed: 0 } });
     return typedError(route, 404, "not_found", `unmocked ${method} ${path}`);
   });
+  return model;
 }
 
 test("bundled browser creates and reads a job through the real Axum application stack", async ({ page, request }) => {
@@ -164,7 +166,8 @@ test("bundled browser creates and reads a job through the real Axum application 
   const name = `browser-real-${Date.now()}`;
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Execution at a glance" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "See what’s running and what’s next." })).toBeVisible();
+  await page.locator('[data-route="jobs"]').click();
   await page.locator('[data-action="new-job"]').first().click();
   await expect(page.locator("#job-dialog")).toBeVisible();
   await page.locator("#job-user").fill("browser-e2e");
@@ -172,27 +175,30 @@ test("bundled browser creates and reads a job through the real Axum application 
   await page.locator("#job-cwd").fill(roots.default_path);
   await page.locator("#job-command").fill("echo browser-real");
   await page.locator("#job-description").fill("real browser to application journey");
-  await page.locator("#job-form").getByRole("button", { name: "Create job" }).click();
+  await page.locator("#new-job-form").getByRole("button", { name: "Create draft" }).click();
   await expect(page.getByText("Job created as DRAFT.")).toBeVisible();
 
   await page.locator('[data-route="jobs"]').click();
   await page.getByText(name).first().click();
   await expect(page.locator("#job-detail-title")).toHaveText(name);
   await expect(page.getByText("real browser to application journey")).toBeVisible();
+  await page.mouse.click(20, 400);
+  await expect(page.locator("#job-detail-dialog")).not.toBeVisible();
 });
 
 test("browser journey covers create, detail, description, queue, logs, and config", async ({ page }) => {
   await mockBackend(page);
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Execution at a glance" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "See what’s running and what’s next." })).toBeVisible();
 
+  await page.locator('[data-route="jobs"]').click();
   await page.locator('[data-action="new-job"]').first().click();
   await page.locator("#job-user").fill("alice");
   await page.locator("#job-name").fill("browser-job");
   await page.locator("#job-cwd").fill("/workspace");
   await page.locator("#job-command").fill("echo browser");
   await page.locator("#job-description").fill("created in browser");
-  await page.locator("#job-form").getByRole("button", { name: "Create job" }).click();
+  await page.locator("#new-job-form").getByRole("button", { name: "Create draft" }).click();
   await expect(page.getByText("Job created as DRAFT.")).toBeVisible();
 
   await page.locator('[data-route="jobs"]').click();
@@ -200,7 +206,7 @@ test("browser journey covers create, detail, description, queue, logs, and confi
   await expect(page.locator("#job-detail-title")).toHaveText("browser-job");
   await page.locator('[data-action="edit-description"]').click();
   await page.locator("#description-input").fill("updated in browser");
-  await page.locator("#description-form").getByRole("button", { name: "Save description" }).click();
+  await page.locator("#description-form").getByRole("button", { name: "Save" }).click();
   await expect(page.getByText("updated in browser")).toBeVisible();
   await page.locator('[data-job-action="commit"]').click();
   await page.locator("#confirm-accept").click();
@@ -216,12 +222,51 @@ test("browser journey covers create, detail, description, queue, logs, and confi
 
   await page.locator('[data-route="configuration"]').click();
   await page.locator("#timezone-input").fill("Asia/Tokyo");
-  await page.locator("#timezone-form").getByRole("button", { name: "Save timezone" }).click();
-  await expect(page.getByText("Effective: Asia/Tokyo")).toBeVisible();
+  await page.locator('[data-timezone="Asia/Tokyo"]').click();
+  await page.locator("#timezone-form").getByRole("button", { name: "Set timezone" }).click();
+  await expect(page.locator(".config-summary strong")).toHaveText("Asia/Tokyo");
   await page.locator('[data-action="create-snapshot"]').click();
   await page.locator("[data-restore-path]").click();
   await page.locator("#confirm-accept").click();
-  await expect(page.getByText("Effective: UTC")).toBeVisible();
+  await expect(page.locator(".config-summary strong")).toHaveText("UTC");
+});
+
+test("v1.3.1 layout contract and two-second refresh preserve active input", async ({ page }) => {
+  let statusRequests = 0;
+  let releaseNextPoll;
+  const nextPoll = new Promise((resolve) => { releaseNextPoll = resolve; });
+  await mockBackend(page, {
+    onRequest(path) {
+      if (path === "/api/v1/status" && ++statusRequests >= 2) releaseNextPoll();
+    },
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "See what’s running and what’s next." })).toBeVisible();
+
+  const visualContract = await page.evaluate(() => ({
+    background: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+    sidebarWidth: document.querySelector(".sidebar").getBoundingClientRect().width,
+    columns: getComputedStyle(document.querySelector(".app-shell")).gridTemplateColumns,
+  }));
+  expect(visualContract.background).toBe("#0b1018");
+  expect(visualContract.sidebarWidth).toBe(248);
+  expect(visualContract.columns.startsWith("248px ")).toBeTruthy();
+
+  await page.locator('[data-route="jobs"]').click();
+  await expect(page.getByRole("heading", { name: "All jobs" })).toBeVisible();
+  const search = page.locator("#job-search");
+  await search.pressSequentially("seed", { delay: 10 });
+  await expect(search).toHaveValue("seed");
+  await nextPoll;
+  await expect(search).toHaveValue("seed");
+  await expect(search).toBeFocused();
+
+  const formPoll = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/v1/status");
+  await page.locator('[data-action="new-job"]').click();
+  await page.locator("#job-name").fill("unsaved draft");
+  await formPoll;
+  await expect(page.locator("#job-dialog")).toBeVisible();
+  await expect(page.locator("#job-name")).toHaveValue("unsaved draft");
 });
 
 test("LAN auth opens token dialog and retries with bearer credentials", async ({ page }) => {
@@ -230,7 +275,7 @@ test("LAN auth opens token dialog and retries with bearer credentials", async ({
   await expect(page.locator("#token-dialog")).toBeVisible();
   await page.locator("#token-input").fill("browser-secret");
   await page.locator("#token-form").getByRole("button", { name: "Connect" }).click();
-  await expect(page.getByRole("heading", { name: "Execution at a glance" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "See what’s running and what’s next." })).toBeVisible();
 });
 
 function timezone(model) {

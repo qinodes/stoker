@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 
+use crate::process::configure_detached;
 use crate::service::Service;
 use crate::{ServiceClient, StokerPaths, is_service_unavailable};
 
@@ -117,13 +118,14 @@ pub(crate) fn start(paths: &StokerPaths) -> anyhow::Result<()> {
         .context("open scheduler service log")?;
     let log_err = log.try_clone().context("duplicate scheduler service log")?;
     let executable = std::env::current_exe().context("locate stoker executable")?;
-    let child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .arg("service-run")
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err))
-        .spawn()
-        .context("start scheduler service")?;
+        .stderr(Stdio::from(log_err));
+    configure_detached(&mut command);
+    let child = command.spawn().context("start scheduler service")?;
 
     let mut gateway = SystemStartupGateway {
         paths: paths.clone(),

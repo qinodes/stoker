@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
-use std::process::ExitStatus;
+use std::process::{Command, ExitStatus};
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -69,6 +69,36 @@ impl ProcessController for DefaultProcessController {
 /// A descriptive alias for callers that prefer to name the concrete system
 /// implementation rather than the controller trait.
 pub type SystemProcessController = DefaultProcessController;
+
+/// Configure a long-running helper so it is independent from the terminal
+/// which launched `stoker start` or `stoker ui start`.
+pub(crate) fn configure_detached(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        // A new process group prevents console control events from being
+        // inherited, while DETACHED_PROCESS removes the console association.
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // SAFETY: setsid is an async-signal-safe syscall and no allocation or
+        // shared-state access occurs in the post-fork child hook.
+        unsafe {
+            command.pre_exec(|| {
+                nix::unistd::setsid()
+                    .map(|_| ())
+                    .map_err(std::io::Error::from)
+            });
+        }
+    }
+}
 
 pub(crate) fn spawn_pipe_writer<R>(reader: R, path: PathBuf) -> JoinHandle<io::Result<()>>
 where

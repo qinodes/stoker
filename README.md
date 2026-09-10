@@ -38,6 +38,8 @@ stoker start
 stoker ui start --open
 ```
 
+Both start commands detach after startup. The scheduler and UI keep running if you close the terminal; use `stoker stop` and `stoker ui stop` to stop them. They do not restart automatically after a computer restart.
+
 Use `stoker ui status` to show the address and `stoker ui stop` to stop the UI server. By default it listens only on `127.0.0.1:8765`.
 
 To allow access from the local network, bind an explicit non-loopback address:

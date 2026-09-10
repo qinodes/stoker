@@ -38,6 +38,8 @@ stoker start
 stoker ui start --open
 ```
 
+`stoker start` と `stoker ui start` は、起動完了後に現在の terminal から切り離されます。terminal を閉じても Scheduler と UI は動作を続けます。停止するには、それぞれ `stoker stop` と `stoker ui stop` を使用してください。コンピューターの再起動後に自動起動はしません。
+
 アドレスの確認には `stoker ui status`、UI server の停止には `stoker ui stop` を使用します。デフォルトでは `127.0.0.1:8765` のみで待ち受けます。
 
 ローカルネットワークからアクセスできるようにする場合は、loopback 以外のアドレスを明示的に指定します。
