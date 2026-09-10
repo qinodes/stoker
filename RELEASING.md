@@ -63,6 +63,16 @@ make preview-tag PREVIEW=1
 make preview PREVIEW=1
 ```
 
+`PREVIEW` is the preview attempt number, and the same number must be used for
+both commands and for the later final-tag commands. For example, if the first
+preview (`preview/v2.0.0-1`) failed after a new commit, use `PREVIEW=2` for the
+new preview, not `PREVIEW=1` again:
+
+```bash
+make preview-tag PREVIEW=2
+make preview PREVIEW=2
+```
+
 The `Preview Release` workflow rebuilds and verifies the committed frontend
 resources, builds the platform matrix, packages the archives and installers,
 verifies `SHA256SUMS`, and stores the complete release artifact. It does not
@@ -77,28 +87,28 @@ version `X.Y.Z`, so the artifact can be promoted unchanged.
 ## 4. Create the final release tag
 
 Wait for the Preview Release workflow to pass. Then create the final tag on the
-same commit:
+same commit. Use the number of the preview that actually passed:
 
 ```bash
-make tag PREVIEW=1
+make tag PREVIEW=2
 ```
 
-`make tag` reads the package version from `Cargo.toml` and creates an annotated
-Git tag with the corresponding `v` prefix, such as `v2.0.0`, on the current
-commit. It only accepts `main` or a matching `release/vX.Y.Z` branch, requires a
-clean working tree, refuses to overwrite an existing tag, and refuses to create
-the final tag unless the matching preview tag exists on the current commit.
-The command does not update `Cargo.toml` or create a release commit. An explicit
-`VERSION=x.y.z` override is supported when needed, but normally no version
-argument is required.
+`make tag` only creates the final annotated tag locally; it does not push it.
+It reads the package version from `Cargo.toml`, requires a clean working tree,
+and refuses to create the final tag unless `preview/vX.Y.Z-N` (with the same
+`PREVIEW=N`) exists on the current commit. The command does not update
+`Cargo.toml` or create a release commit. An explicit `VERSION=x.y.z` override
+is supported when needed, but normally no version argument is required.
 
 ## 5. Push and promote the release artifact
 
 ```bash
-make release
+make release PREVIEW=2
 ```
 
-This pushes only the annotated release tag to `origin`.
+This pushes only the annotated release tag (for example `v2.0.0`) to `origin`.
+`make release` does not create the tag; run `make tag PREVIEW=N` first. The
+`PREVIEW=N` value must refer to the preview workflow that passed.
 
 After the tag is pushed, GitHub Actions runs
 `.github/workflows/release.yml`. It locates the successful preview artifact for
@@ -141,7 +151,7 @@ make preview-tag PREVIEW=1
 make preview PREVIEW=1
 # Wait for Preview Release to pass.
 make tag PREVIEW=1
-make release
+make release PREVIEW=1
 # Wait for the Release workflow to promote the existing artifact.
 make publish
 ```
