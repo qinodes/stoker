@@ -363,6 +363,11 @@ fn ui_stage_seven_keeps_axum_framework_and_io_at_adapter_edges() {
 #[test]
 fn browser_frontend_has_module_and_stylesheet_ownership_boundaries() {
     let web = Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
+    let index = fs::read_to_string(web.join("index.html")).unwrap();
+    assert!(index.contains("/src/main.tsx"));
+    assert!(web.join("dist/index.html").is_file());
+    assert!(web.join("dist/app.js").is_file());
+    assert!(web.join("dist/styles.css").is_file());
     let entry = fs::read_to_string(web.join("app.js")).unwrap();
     assert!(entry.contains("modules/controller.js"));
     assert!(!entry.contains("const state"));

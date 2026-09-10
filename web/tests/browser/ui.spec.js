@@ -231,6 +231,36 @@ test("browser journey covers create, detail, description, queue, logs, and confi
   await expect(page.locator(".config-summary strong")).toHaveText("UTC");
 });
 
+test("queue keeps scrolling inside the job list on desktop", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await mockBackend(page);
+  await page.goto("/#queue");
+  await expect(page.getByRole("heading", { name: "Execution queue" })).toBeVisible();
+
+  await page.locator(".queue-order-table tbody").evaluate((tbody) => {
+    const row = tbody.querySelector("tr");
+    if (!row) throw new Error("Expected a queue row");
+    for (let index = 0; index < 20; index += 1) tbody.append(row.cloneNode(true));
+  });
+
+  const overflow = await page.evaluate(() => {
+    const main = document.querySelector(".main-content");
+    const queue = document.querySelector(".queue-table");
+    if (!(main instanceof HTMLElement) || !(queue instanceof HTMLElement)) {
+      throw new Error("Expected queue layout elements");
+    }
+    return {
+      mainClientHeight: main.clientHeight,
+      mainScrollHeight: main.scrollHeight,
+      queueClientHeight: queue.clientHeight,
+      queueScrollHeight: queue.scrollHeight,
+    };
+  });
+
+  expect(overflow.mainScrollHeight).toBe(overflow.mainClientHeight);
+  expect(overflow.queueScrollHeight).toBeGreaterThan(overflow.queueClientHeight);
+});
+
 test("v1.3.1 layout contract and two-second refresh preserve active input", async ({ page }) => {
   let statusRequests = 0;
   let releaseNextPoll;

@@ -14,7 +14,6 @@ import { renderJobDetail, renderJobForm, renderJobs } from "./views/jobs.js";
 import { renderLogs } from "./views/logs.js";
 import { renderOverview } from "./views/overview.js";
 import { renderQueue } from "./views/queue.js";
-
 const ROUTES = ["overview", "jobs", "queue", "logs", "configuration"];
 
 export function bootstrap() {
@@ -23,7 +22,6 @@ export function bootstrap() {
   const api = createApiClient({ onUnauthorized: () => showTokenDialog(state, elements) });
   let confirmationResolver = null;
   let detailEditing = false;
-
   function render() {
     if (!state.loaded) return;
     const focus = captureFocus();
@@ -36,7 +34,6 @@ export function bootstrap() {
     updateChrome(state);
     restoreFocus(focus);
   }
-
   async function loadData({ forceRender = false } = {}) {
     const sequence = beginLoad(state);
     if (!state.loaded) elements.app.innerHTML = '<div class="page-loading"><span class="spinner"></span><span>Loading workspace…</span></div>';
@@ -71,7 +68,6 @@ export function bootstrap() {
       }
     }
   }
-
   async function mutate(path, method, body = null, message = "Change saved to the server.") {
     try {
       const result = await api.send(path, method, body);
@@ -84,7 +80,6 @@ export function bootstrap() {
       return null;
     }
   }
-
   async function openJobForm() {
     try {
       state.filesystem.roots ||= await api.get("/api/v1/fs/roots");

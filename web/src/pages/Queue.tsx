@@ -1,0 +1,14 @@
+import { EmptyState, PageHeading, StateBadge } from "../components";
+import { shortId } from "../formatters";
+import { useWorkspace } from "../context";
+
+export function Queue() {
+  const { state, actions } = useWorkspace();
+  const jobs = state.queue.jobs || [];
+  const locked = Boolean(state.queue.locked);
+  return <>
+    <PageHeading eyebrow="Workspace / Queue" title="Execution queue" description="Lock the global queue before changing its order. Every move is checked against the server’s latest state." actions={<><button className="button secondary" data-action="refresh" onClick={() => void actions.loadData()}>Refresh queue <span aria-hidden="true">↻</span></button><button className="button primary" data-queue-lock="true" disabled={locked} onClick={() => void actions.queueLock(true)}>Lock queue</button><button className="button secondary" data-queue-lock="false" disabled={!locked} onClick={() => void actions.queueLock(false)}>Unlock queue</button></>} />
+    {locked ? <div className="queue-lock-banner"><div><strong>Queue is locked</strong><small>This global lock is visible to every connected client. Use the arrows below to adjust order.</small></div><span aria-hidden="true">🔒</span></div> : <div className="queue-unlock-banner"><div><strong>Queue is unlocked</strong><small>Lock the queue to enable reorder controls and prevent the scheduler from claiming work during edits.</small></div><span aria-hidden="true">↕</span></div>}
+    <section className="panel"><div className="panel-header"><div className="panel-title"><div><h2>{jobs.length} queued job{jobs.length === 1 ? "" : "s"}</h2><p>Ordered by queue position · server state</p></div></div></div><div className="queue-table"><table className="data-table queue-order-table"><thead><tr><th>#</th><th>Job name</th><th>Owner</th><th>Path</th><th>State</th><th>Move</th></tr></thead><tbody>{jobs.length ? jobs.map((job, index) => <tr key={job.id}><td className="mono">{index + 1}</td><td><div className="job-name"><strong>{job.name}</strong><small>{shortId(job.id)}</small></div></td><td>{job.user}</td><td className="path-cell" title={job.cwd}>{job.cwd}</td><td><StateBadge value={job.state} /></td><td><div className="move-controls"><button className="move-button" type="button" data-queue-move={job.id} data-target-order={index} aria-label={`Move ${job.name} up`} disabled={!locked || index === 0} onClick={() => void actions.moveQueueJob(job.id, index)}>↑</button><button className="move-button" type="button" data-queue-move={job.id} data-target-order={index + 2} aria-label={`Move ${job.name} down`} disabled={!locked || index === jobs.length - 1} onClick={() => void actions.moveQueueJob(job.id, index + 2)}>↓</button></div></td></tr>) : <tr><td colSpan={6}><EmptyState icon="○" title="The queue is clear. Commit a DRAFT job from the Jobs view or CLI." /></td></tr>}</tbody></table></div></section>
+  </>;
+}

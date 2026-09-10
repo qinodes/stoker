@@ -1258,7 +1258,9 @@ mod cli_runtime_tests {
 
     #[test]
     fn command_dispatch_reaches_local_config_queue_and_job_flows() {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let directory = tempfile::tempdir().unwrap();
+        let _home = use_home(directory.path());
         let paths = StokerPaths {
             root: directory.path().to_path_buf(),
             database: directory.path().join("stoker.db"),

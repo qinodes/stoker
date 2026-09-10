@@ -10,6 +10,10 @@
   .app-shell { height: 100vh; min-height: 0; overflow: hidden; }
   .sidebar { height: 100vh; min-height: 0; overflow-y: auto; }
   .main-content { height: 100vh; min-height: 0; overflow: auto; }
+  .main-content[data-view="queue"] { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+  .page[data-view="queue"] { display: flex; min-height: 0; height: 100%; flex-direction: column; overflow: hidden; }
+  .page[data-view="queue"] > .panel { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; }
+  .page[data-view="queue"] .queue-table { min-height: 0; max-height: none; flex: 1 1 auto; }
   .topbar { position: sticky; top: 0; z-index: 6; }
 }
 

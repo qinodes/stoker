@@ -1,8 +1,8 @@
-@import url("/styles/tokens.css");
-@import url("/styles/base.css");
-@import url("/styles/layout.css");
-@import url("/styles/components.css");
-@import url("/styles/overview.css");
-@import url("/styles/data-views.css");
-@import url("/styles/job-dialogs.css");
-@import url("/styles/responsive.css");
+@import url("./styles/tokens.css");
+@import url("./styles/base.css");
+@import url("./styles/layout.css");
+@import url("./styles/components.css");
+@import url("./styles/overview.css");
+@import url("./styles/data-views.css");
+@import url("./styles/job-dialogs.css");
+@import url("./styles/responsive.css");

@@ -6,11 +6,22 @@
     "node": ">=24 <25"
   },
   "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
     "test:web:unit": "node --test web/tests/unit/api-client.test.js web/tests/unit/controller.test.js web/tests/unit/formatters.test.js web/tests/unit/state.test.js",
     "test:web:browser": "playwright test",
     "test:web": "npm run test:web:unit && npm run test:web:browser"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0"
+    "@playwright/test": "1.63.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   }
 }

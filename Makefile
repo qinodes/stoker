@@ -1,4 +1,4 @@
-.PHONY: format format-check lint test cargo-check web-install web-test web-browser-test coverage coverage-install build stop-test-process dev-restart check version tag git-formal-push release publish
+.PHONY: format format-check lint test cargo-check web-install web-build web-test web-browser-test coverage coverage-install build stop-test-process dev-restart check version tag git-formal-push release publish
 
 VERSION ?=
 TAG = v$(VERSION)
@@ -41,6 +41,10 @@ cargo-check:
 web-install:
 	npm ci
 
+web-build:
+	npm run build
+	npm run typecheck
+
 web-test:
 	npm run test:web:unit
 
@@ -67,13 +71,20 @@ endif
 
 # Development helper for restarting the locally installed Stoker binary.
 dev-restart:
-	stoker ui stop && stoker stop
-	cargo install --path .
+	-stoker ui stop
+	-stoker stop
+ifeq ($(OS),Windows_NT)
+	powershell -NoProfile -NonInteractive -Command "$$target = [System.IO.Path]::GetFullPath((Get-Command stoker.exe -ErrorAction Stop).Source); $$processes = @(Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'stoker.exe' -and $$_.ExecutablePath -eq $$target }); $$processes | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }; $$deadline = (Get-Date).AddSeconds(10); do { $$remaining = @(Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'stoker.exe' -and $$_.ExecutablePath -eq $$target }); if ($$remaining.Count -eq 0) { break }; Start-Sleep -Milliseconds 100 } while ((Get-Date) -lt $$deadline); if ($$remaining.Count -gt 0) { Write-Error ('Could not stop Stoker processes before install: ' + (($$remaining | Select-Object -ExpandProperty ProcessId) -join ', ')); exit 1 }"
+else
+	-pkill -f -- "$$(command -v stoker)"
+endif
+	cargo install --path . --locked
 	stoker start && stoker ui start
 
 check:
 	$(MAKE) stop-test-process
 	$(MAKE) format-check
+	$(MAKE) web-build
 	$(MAKE) cargo-check
 	$(MAKE) lint
 	$(MAKE) test

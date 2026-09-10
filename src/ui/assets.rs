@@ -3,9 +3,12 @@ use axum::extract::Path;
 use axum::http::{Response, StatusCode, header};
 use axum::response::IntoResponse;
 
-const INDEX_HTML: &[u8] = include_bytes!("../../web/index.html");
-const APP_JS: &[u8] = include_bytes!("../../web/app.js");
-const STYLES_CSS: &[u8] = include_bytes!("../../web/styles.css");
+// The React/TypeScript production bundle is checked in under web/dist so a
+// normal `cargo install` does not require Node.js. `npm run build` refreshes
+// these deterministic assets during development and CI.
+const INDEX_HTML: &[u8] = include_bytes!("../../web/dist/index.html");
+const APP_JS: &[u8] = include_bytes!("../../web/dist/app.js");
+const STYLES_CSS: &[u8] = include_bytes!("../../web/dist/styles.css");
 const LOGO_SVG: &[u8] = include_bytes!("../../assets/logo.svg");
 const LOGO_MARK_PNG: &[u8] = include_bytes!("../../assets/logo-mark.png");
 const API_CLIENT_JS: &[u8] = include_bytes!("../../web/modules/api-client.js");

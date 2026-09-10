@@ -42,6 +42,8 @@ stoker ui start --open
 
 使用 `stoker ui status` 查看位址，使用 `stoker ui stop` 停止 UI server。預設只監聽 `127.0.0.1:8765`。
 
+發佈的 binary 已內嵌 React 19 + TypeScript 的 production Web UI bundle，一般使用者不需要另外安裝 Node.js 或 npm。若要修改前端，開發者可先執行 `npm ci`，再執行 `npm run build` 與 `npm run typecheck`；`make check` 也會在 Rust 檢查前自動執行這兩個步驟。
+
 若要允許區域網路存取，請明確綁定非 loopback 位址：
 
 ```bash
