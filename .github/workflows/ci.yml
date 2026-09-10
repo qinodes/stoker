@@ -43,6 +43,15 @@ jobs:
           rustup default stable
           rustup component add rustfmt clippy
 
+      - name: Install Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install frontend test dependencies
+        run: npm ci
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -51,6 +60,9 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run frontend unit tests
+        run: npm run test:web:unit
 
   test:
     name: Test (${{ matrix.os }})
@@ -72,6 +84,17 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
 
+      - name: Install Node.js LTS
+        if: runner.os == 'Windows' || runner.os == 'Linux'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install frontend test dependencies
+        if: runner.os == 'Windows' || runner.os == 'Linux'
+        run: npm ci
+
       - name: Install GNU Make
         if: runner.os == 'Windows'
         shell: pwsh
@@ -88,3 +111,31 @@ jobs:
       - name: Build release binary
         if: runner.os == 'macOS'
         run: cargo build --locked --release
+
+  browser-smoke:
+    name: Browser smoke (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install frontend test dependencies
+        run: npm ci
+
+      - name: Install Chromium runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser smoke tests
+        run: npm run test:web:browser

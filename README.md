@@ -31,7 +31,22 @@ Stoker uses a local SQLite database for job state and logs. No Redis, PostgreSQL
   <img src="assets/ui-demo.png" alt="Stoker web UI">
 </p>
 
-> Job submission with `stoker add` is not available in the Web UI; use the CLI to submit jobs.
+The Web UI can create and review DRAFT jobs, edit descriptions, commit or cancel jobs, manage the queue, read logs, and manage timezone snapshots. Start the scheduler separately when jobs should run.
+
+```bash
+stoker start
+stoker ui start --open
+```
+
+Use `stoker ui status` to show the address and `stoker ui stop` to stop the UI server. By default it listens only on `127.0.0.1:8765`.
+
+To allow access from the local network, bind an explicit non-loopback address:
+
+```bash
+stoker ui start --host 0.0.0.0 --port 8765
+```
+
+Stoker prints an access token when LAN access is enabled. Share it only with trusted users on that network; visitors enter it in the browser prompt. `--open` passes the token to the local browser automatically.
 
 ## Installation
 

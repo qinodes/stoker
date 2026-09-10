@@ -1,0 +1,13 @@
+{
+  "status": {"version": 3, "request": "Status"},
+  "stop": {"version": 3, "request": "Stop"},
+  "commit": {"version": 3, "request": {"Commit": {"id": "00000000-0000-0000-0000-000000000000"}}},
+  "commit_many": {"version": 3, "request": {"CommitMany": {"ids": ["00000000-0000-0000-0000-000000000000"]}}},
+  "commit_all": {"version": 3, "request": "CommitAll"},
+  "commit_user": {"version": 3, "request": {"CommitUser": {"user": "alice"}}},
+  "cancel": {"version": 3, "request": {"Cancel": {"id": "00000000-0000-0000-0000-000000000000"}}},
+  "follow_logs": {"version": 3, "request": {"FollowLogs": {"id": "00000000-0000-0000-0000-000000000000"}}},
+  "lock_queue": {"version": 3, "request": "LockQueue"},
+  "unlock_queue": {"version": 3, "request": "UnlockQueue"},
+  "move_queued": {"version": 3, "request": {"MoveQueued": {"id": "00000000-0000-0000-0000-000000000000", "target_order": 2}}}
+}

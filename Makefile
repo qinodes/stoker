@@ -1,4 +1,4 @@
-.PHONY: format format-check lint test cargo-check coverage coverage-install build stop-test-process dev-restart check version tag git-formal-push release publish
+.PHONY: format format-check lint test cargo-check web-install web-test web-browser-test coverage coverage-install build stop-test-process dev-restart check version tag git-formal-push release publish
 
 VERSION ?=
 TAG = v$(VERSION)
@@ -38,6 +38,15 @@ test:
 cargo-check:
 	cargo check --locked --all-targets --all-features
 
+web-install:
+	npm ci
+
+web-test:
+	npm run test:web:unit
+
+web-browser-test:
+	npm run test:web:browser
+
 coverage:
 	cargo llvm-cov --locked --all-features --workspace --html
 	@echo "Coverage report: $(CURDIR)/target/llvm-cov/html/index.html"
@@ -68,6 +77,7 @@ check:
 	$(MAKE) cargo-check
 	$(MAKE) lint
 	$(MAKE) test
+	$(MAKE) web-test
 	$(MAKE) build
 
 version:

@@ -1,0 +1,91 @@
+{
+  "ack": {"version": 4, "response": "Ack"},
+  "job": {
+    "version": 4,
+    "response": {
+      "Job": {
+        "job": {
+          "id": "00000000-0000-0000-0000-000000000000",
+          "name": "queued-job",
+          "user": "alice",
+          "cwd": "workspace",
+          "command": ["echo", "hello"],
+          "command_line": "echo hello",
+          "state": "QUEUED",
+          "queue_order": 1,
+          "created_at": "2026-01-02T03:04:05Z",
+          "committed_at": "2026-01-02T03:05:05Z",
+          "started_at": null,
+          "finished_at": null,
+          "exit_code": null,
+          "pid": null,
+          "failure_detail": null,
+          "description": "fixture",
+          "description_revision": 4
+        }
+      }
+    }
+  },
+  "jobs": {
+    "version": 4,
+    "response": {
+      "Jobs": {
+        "jobs": [
+          {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "name": "queued-job",
+            "user": "alice",
+            "cwd": "workspace",
+            "command": ["echo", "hello"],
+            "command_line": "echo hello",
+            "state": "QUEUED",
+            "queue_order": 1,
+            "created_at": "2026-01-02T03:04:05Z",
+            "committed_at": "2026-01-02T03:05:05Z",
+            "started_at": null,
+            "finished_at": null,
+            "exit_code": null,
+            "pid": null,
+            "failure_detail": null,
+            "description": "fixture",
+            "description_revision": 4
+          }
+        ]
+      }
+    }
+  },
+  "queue": {
+    "version": 4,
+    "response": {
+      "Queue": {
+        "jobs": [
+          {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "name": "queued-job",
+            "user": "alice",
+            "cwd": "workspace",
+            "command": ["echo", "hello"],
+            "command_line": "echo hello",
+            "state": "QUEUED",
+            "queue_order": 1,
+            "created_at": "2026-01-02T03:04:05Z",
+            "committed_at": "2026-01-02T03:05:05Z",
+            "started_at": null,
+            "finished_at": null,
+            "exit_code": null,
+            "pid": null,
+            "failure_detail": null,
+            "description": "fixture",
+            "description_revision": 4
+          }
+        ],
+        "locked": true
+      }
+    }
+  },
+  "status": {"version": 4, "response": {"Status": {"pid": 42, "active_job": null, "queued_jobs": 3, "queue_locked": true}}},
+  "stdout_chunk": {"version": 4, "response": {"LogChunk": {"stream": "Stdout", "bytes": [104, 105, 10]}}},
+  "stderr_chunk": {"version": 4, "response": {"LogChunk": {"stream": "Stderr", "bytes": [101, 114, 114, 10]}}},
+  "log_end": {"version": 4, "response": "LogEnd"},
+  "error": {"version": 4, "response": {"Error": {"code": "internal", "message": "fixture failure"}}}
+}

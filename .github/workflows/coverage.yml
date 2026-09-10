@@ -31,6 +31,17 @@ jobs:
       - name: Generate coverage report
         run: cargo llvm-cov --locked --all-features --workspace --lcov --output-path lcov.info
 
+      - name: Publish coverage baseline
+        shell: bash
+        run: |
+          cargo llvm-cov report --summary-only | tee coverage-summary.txt
+          {
+            echo '## LLVM coverage summary'
+            echo '```text'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:

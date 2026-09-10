@@ -1,0 +1,78 @@
+.scheduler-pill { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; border: 1px solid rgba(243, 198, 107, .22); border-radius: 99px; background: rgba(243, 198, 107, .08); color: var(--yellow); font-size: 11px; font-weight: 700; }
+
+.scheduler-pill.running { border-color: rgba(117, 214, 163, .22); background: rgba(117, 214, 163, .08); color: var(--green); }
+
+.icon-button, .avatar-button { display: grid; place-items: center; border: 1px solid var(--border); cursor: pointer; transition: background .2s ease, border-color .2s ease, transform .2s ease; }
+
+.icon-button { width: 32px; height: 32px; border-radius: 9px; background: var(--surface); color: var(--text-muted); font-size: 20px; }
+
+.icon-button:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text); transform: rotate(18deg); }
+
+.avatar-button { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(140deg, #7060bc, #bd775d); color: white; font-size: 12px; font-weight: 800; }
+
+.page { width: min(1440px, 100%); margin: 0 auto; padding: 42px 44px 64px; }
+
+.page[data-view="jobs"], .page[data-view="queue"] { padding-top: 24px; padding-bottom: 24px; }
+
+.page[data-view="jobs"] .page-heading, .page[data-view="queue"] .page-heading { margin-bottom: 20px; }
+
+.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 30px; }
+
+.eyebrow, .section-kicker { color: var(--ember); font-size: 10px; font-weight: 800; letter-spacing: .17em; text-transform: uppercase; }
+
+.page-heading h1 { margin: 9px 0 8px; font-size: clamp(27px, 4vw, 36px); font-weight: 750; letter-spacing: -.045em; line-height: 1.08; }
+
+.page-heading p { max-width: 580px; margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+
+.page-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 0 15px; border: 1px solid transparent; border-radius: 9px; cursor: pointer; font-size: 12px; font-weight: 750; transition: background .2s ease, border-color .2s ease, transform .2s ease; }
+
+.button:hover { transform: translateY(-1px); }
+
+.button.primary { background: var(--ember); color: #24160b; box-shadow: 0 8px 18px rgba(244, 163, 79, .13); }
+
+.button.primary:hover { background: var(--ember-soft); }
+
+.button.secondary { border-color: var(--border); background: var(--surface); color: var(--text-muted); }
+
+.button.secondary:hover { border-color: var(--border-strong); color: var(--text); }
+
+.button.danger { border-color: rgba(251, 136, 126, .3); background: rgba(251, 136, 126, .08); color: var(--red); }
+
+.button.danger:hover { border-color: rgba(251, 136, 126, .55); background: rgba(251, 136, 126, .14); }
+
+.button.ghost { border-color: transparent; background: transparent; color: var(--cyan); }
+
+.button.small { min-height: 31px; padding: 0 10px; font-size: 10px; }
+
+.button:disabled { cursor: not-allowed; opacity: .46; transform: none; }
+
+.token-dialog { width: min(430px, calc(100vw - 30px)); padding: 0; border: 0; border-radius: 16px; background: transparent; color: var(--text); }
+
+.token-dialog::backdrop { background: rgba(4, 8, 14, .72); backdrop-filter: blur(5px); }
+
+.confirm-dialog { width: min(455px, calc(100vw - 30px)); padding: 0; border: 0; border-radius: 16px; background: transparent; color: var(--text); }
+
+.confirm-dialog::backdrop { background: rgba(4, 8, 14, .72); backdrop-filter: blur(5px); }
+
+.confirm-card { padding: 25px; }
+
+.confirm-card h2 { margin-top: 9px; }
+
+.confirm-card p { max-width: 360px; }
+
+.dialog-card { padding: 25px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--surface-raised); box-shadow: var(--shadow); }
+
+.dialog-card h2 { margin: 8px 0 9px; font-size: 21px; letter-spacing: -.03em; }
+
+.dialog-card p { margin: 0 0 18px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+
+.dialog-card label { display: block; margin-bottom: 7px; color: var(--text-muted); font-size: 11px; font-weight: 700; }
+
+.dialog-card input { width: 100%; height: 42px; padding: 0 11px; border: 1px solid var(--border); border-radius: 8px; outline: none; background: var(--bg-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes slide-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }

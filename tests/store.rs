@@ -165,25 +165,9 @@ fn database_schema_enforces_job_name_length_for_existing_databases() {
     let db_path = directory.path().join("stoker.db");
     let connection = Connection::open(&db_path).unwrap();
     connection
-        .execute_batch(
-            "CREATE TABLE jobs (
-                id TEXT PRIMARY KEY NOT NULL,
-                name TEXT NOT NULL,
-                user TEXT NOT NULL,
-                cwd TEXT NOT NULL,
-                command TEXT NOT NULL,
-                command_line TEXT,
-                state TEXT NOT NULL,
-                queue_order INTEGER,
-                created_at TEXT NOT NULL,
-                committed_at TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                exit_code INTEGER,
-                pid INTEGER,
-                failure_detail TEXT
-            )",
-        )
+        .execute_batch(include_str!(
+            "fixtures/database/current_without_constraints.sql"
+        ))
         .unwrap();
     drop(connection);
 
@@ -660,26 +644,9 @@ fn legacy_database_migrates_queued_jobs_to_queue_order() {
     {
         let connection = Connection::open(&db_path).unwrap();
         connection
-            .execute_batch(
-                "CREATE TABLE jobs (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    name TEXT NOT NULL,
-                    user TEXT NOT NULL,
-                    repository TEXT NOT NULL,
-                    git_commit TEXT NOT NULL,
-                    cwd TEXT NOT NULL,
-                    command TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    committed_at TEXT,
-                    started_at TEXT,
-                    finished_at TEXT,
-                    exit_code INTEGER,
-                    pid INTEGER,
-                    execution_dir TEXT,
-                    failure_detail TEXT
-                )",
-            )
+            .execute_batch(include_str!(
+                "fixtures/database/legacy_git_without_queue_order.sql"
+            ))
             .unwrap();
         let repository = dir.path().join("repo");
         for (id, name, cwd, committed_at) in [
@@ -739,24 +706,9 @@ fn current_database_without_command_line_gets_migrated() {
     let db_path = dir.path().join("stoker.db");
     Connection::open(&db_path)
         .unwrap()
-        .execute_batch(
-            "CREATE TABLE jobs (
-                id TEXT PRIMARY KEY NOT NULL,
-                name TEXT NOT NULL,
-                user TEXT NOT NULL,
-                cwd TEXT NOT NULL,
-                command TEXT NOT NULL,
-                state TEXT NOT NULL,
-                queue_order INTEGER,
-                created_at TEXT NOT NULL,
-                committed_at TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                exit_code INTEGER,
-                pid INTEGER,
-                failure_detail TEXT
-            )",
-        )
+        .execute_batch(include_str!(
+            "fixtures/database/current_without_command_line.sql"
+        ))
         .unwrap();
 
     let store = Store::open(&db_path).unwrap();
@@ -1001,27 +953,9 @@ fn legacy_schema_with_queue_order_preserves_existing_orders() {
     let id = Uuid::new_v4();
     let connection = Connection::open(&db_path).unwrap();
     connection
-        .execute_batch(
-            "CREATE TABLE jobs (
-                id TEXT PRIMARY KEY NOT NULL,
-                name TEXT NOT NULL,
-                user TEXT NOT NULL,
-                repository TEXT NOT NULL,
-                git_commit TEXT NOT NULL,
-                cwd TEXT NOT NULL,
-                command TEXT NOT NULL,
-                state TEXT NOT NULL,
-                queue_order INTEGER,
-                created_at TEXT NOT NULL,
-                committed_at TEXT,
-                started_at TEXT,
-                finished_at TEXT,
-                exit_code INTEGER,
-                pid INTEGER,
-                execution_dir TEXT,
-                failure_detail TEXT
-            )",
-        )
+        .execute_batch(include_str!(
+            "fixtures/database/legacy_git_with_queue_order.sql"
+        ))
         .unwrap();
     connection
         .execute(

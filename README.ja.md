@@ -31,7 +31,22 @@ Stoker は Job の状態とログをローカルの SQLite に保存します。
   <img src="assets/ui-demo.png" alt="Stoker Web UI デモ">
 </p>
 
-> Web UI では現在 `stoker add` を実行できません。Job の登録には CLI を使用してください。
+Web UI では、DRAFT Job の作成と確認、説明の編集、Job の commit／cancel、Queue の管理、ログの表示、タイムゾーンと設定スナップショットの管理ができます。Job を実際に実行する場合は、Scheduler も別途起動してください。
+
+```bash
+stoker start
+stoker ui start --open
+```
+
+アドレスの確認には `stoker ui status`、UI server の停止には `stoker ui stop` を使用します。デフォルトでは `127.0.0.1:8765` のみで待ち受けます。
+
+ローカルネットワークからアクセスできるようにする場合は、loopback 以外のアドレスを明示的に指定します。
+
+```bash
+stoker ui start --host 0.0.0.0 --port 8765
+```
+
+LAN アクセスを有効にすると、Stoker は access token を表示します。同じネットワーク上の信頼できるユーザーとのみ共有し、ブラウザーの入力画面で token を入力してください。`--open` を使うと、ローカルブラウザーには token が自動的に渡されます。
 
 ## インストール
 

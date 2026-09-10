@@ -31,7 +31,22 @@ Stoker 使用本機 SQLite 保存 Job 狀態與日誌，不需要 Redis、Postgr
   <img src="assets/ui-demo.png" alt="Stoker Web UI 展示">
 </p>
 
-> Web UI 目前無法執行 `stoker add`；請使用 CLI 提交 Job。
+Web UI 可以建立與查看 DRAFT Job、修改描述、commit 或取消 Job、管理 Queue、讀取 logs，以及管理時區與設定快照。若要實際執行 Job，請另外啟動 Scheduler。
+
+```bash
+stoker start
+stoker ui start --open
+```
+
+使用 `stoker ui status` 查看位址，使用 `stoker ui stop` 停止 UI server。預設只監聽 `127.0.0.1:8765`。
+
+若要允許區域網路存取，請明確綁定非 loopback 位址：
+
+```bash
+stoker ui start --host 0.0.0.0 --port 8765
+```
+
+啟用 LAN 存取時，Stoker 會印出 access token。請只分享給同一網路中的可信任使用者；訪客須在瀏覽器提示中輸入 token。使用 `--open` 時，Stoker 會自動將 token 傳給本機瀏覽器。
 
 ## 安裝
 

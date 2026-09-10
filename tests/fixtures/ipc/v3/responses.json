@@ -1,0 +1,38 @@
+{
+  "ack": {"version": 3, "response": "Ack"},
+  "job_count": {"version": 3, "response": {"JobCount": {"count": 2}}},
+  "queued_jobs": {
+    "version": 3,
+    "response": {
+      "QueuedJobs": {
+        "jobs": [
+          {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "name": "queued-job",
+            "user": "alice",
+            "cwd": "workspace",
+            "command": ["echo", "hello"],
+            "command_line": "echo hello",
+            "state": "QUEUED",
+            "queue_order": 1,
+            "created_at": "2026-01-02T03:04:05Z",
+            "committed_at": "2026-01-02T03:05:05Z",
+            "started_at": null,
+            "finished_at": null,
+            "exit_code": null,
+            "pid": null,
+            "failure_detail": null,
+            "description": "fixture",
+            "description_revision": 4
+          }
+        ]
+      }
+    }
+  },
+  "stale_queue_move": {"version": 3, "response": {"StaleQueueMove": {"message": "selected job was removed"}}},
+  "status": {"version": 3, "response": {"Status": {"pid": 42, "active_job": null, "queued_jobs": 3, "queue_locked": true}}},
+  "stdout_chunk": {"version": 3, "response": {"LogChunk": {"stream": "Stdout", "bytes": [104, 105, 10]}}},
+  "stderr_chunk": {"version": 3, "response": {"LogChunk": {"stream": "Stderr", "bytes": [101, 114, 114, 10]}}},
+  "log_end": {"version": 3, "response": "LogEnd"},
+  "error": {"version": 3, "response": {"Error": {"message": "fixture failure"}}}
+}

@@ -1,425 +1,15 @@
-use std::io::{self, Write};
+//! Interactive queue editor compatibility façade.
 
-use anyhow::Context;
-use crossterm::cursor::{Hide, MoveTo, Show};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::execute;
-use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
-use uuid::Uuid;
+mod render;
+mod state;
+mod terminal;
 
-use crate::Job;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EditorIntent {
-    None,
-    Exit,
-    Move { id: Uuid, target_order: usize },
-}
-
-#[derive(Debug)]
-pub(crate) enum EditorMoveError {
-    Stale,
-    Callback(anyhow::Error),
-}
-
-impl From<anyhow::Error> for EditorMoveError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::Callback(error)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EditorMode {
-    Browse,
-    Move { id: Uuid, original_order: usize },
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct EditorState {
-    jobs: Vec<Job>,
-    selected: usize,
-    mode: EditorMode,
-}
-
-impl EditorState {
-    pub(crate) fn new(mut jobs: Vec<Job>) -> Self {
-        jobs.sort_by_key(|job| job.queue_order.unwrap_or(i64::MAX));
-        Self {
-            jobs,
-            selected: 0,
-            mode: EditorMode::Browse,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn jobs(&self) -> &[Job] {
-        &self.jobs
-    }
-
-    #[cfg(test)]
-    pub(crate) fn selected_index(&self) -> usize {
-        self.selected
-    }
-
-    #[cfg(test)]
-    pub(crate) fn mode(&self) -> EditorMode {
-        self.mode
-    }
-
-    pub(crate) fn replace_jobs(&mut self, mut jobs: Vec<Job>) {
-        let selected_id = self.jobs.get(self.selected).map(|job| job.id);
-        jobs.sort_by_key(|job| job.queue_order.unwrap_or(i64::MAX));
-        self.jobs = jobs;
-        self.selected = selected_id
-            .and_then(|id| self.jobs.iter().position(|job| job.id == id))
-            .unwrap_or_else(|| self.selected.min(self.jobs.len().saturating_sub(1)));
-        if self.jobs.is_empty() {
-            self.selected = 0;
-        }
-        self.mode = EditorMode::Browse;
-    }
-
-    pub(crate) fn replace_jobs_after_move(
-        &mut self,
-        mut jobs: Vec<Job>,
-        id: Uuid,
-        original_order: usize,
-    ) {
-        jobs.sort_by_key(|job| job.queue_order.unwrap_or(i64::MAX));
-        self.jobs = jobs;
-        self.selected = self
-            .jobs
-            .iter()
-            .position(|job| job.id == id)
-            .unwrap_or_else(|| self.selected.min(self.jobs.len().saturating_sub(1)));
-        if self.jobs.is_empty() {
-            self.selected = 0;
-        }
-        self.mode = EditorMode::Move { id, original_order };
-    }
-
-    pub(crate) fn reduce(&mut self, key: KeyEvent) -> EditorIntent {
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return EditorIntent::Exit;
-        }
-        match self.mode {
-            EditorMode::Browse => self.reduce_browse(key),
-            EditorMode::Move { id, original_order } => self.reduce_move(key, id, original_order),
-        }
-    }
-
-    fn reduce_browse(&mut self, key: KeyEvent) -> EditorIntent {
-        match key.code {
-            KeyCode::Up => {
-                self.selected = self.selected.saturating_sub(1);
-                EditorIntent::None
-            }
-            KeyCode::Down => {
-                if !self.jobs.is_empty() {
-                    self.selected = (self.selected + 1).min(self.jobs.len() - 1);
-                }
-                EditorIntent::None
-            }
-            KeyCode::Enter if !self.jobs.is_empty() => {
-                let id = self.jobs[self.selected].id;
-                self.mode = EditorMode::Move {
-                    id,
-                    original_order: self.selected + 1,
-                };
-                EditorIntent::None
-            }
-            KeyCode::Char('q') | KeyCode::Esc => EditorIntent::Exit,
-            _ => EditorIntent::None,
-        }
-    }
-
-    fn reduce_move(&mut self, key: KeyEvent, id: Uuid, original_order: usize) -> EditorIntent {
-        let Some(current) = self.jobs.iter().position(|job| job.id == id) else {
-            self.mode = EditorMode::Browse;
-            return EditorIntent::None;
-        };
-        match key.code {
-            KeyCode::Up if current > 0 => {
-                self.jobs.swap(current, current - 1);
-                self.selected = current - 1;
-                self.normalize_orders();
-                EditorIntent::Move {
-                    id,
-                    target_order: self.selected + 1,
-                }
-            }
-            KeyCode::Down if current + 1 < self.jobs.len() => {
-                self.jobs.swap(current, current + 1);
-                self.selected = current + 1;
-                self.normalize_orders();
-                EditorIntent::Move {
-                    id,
-                    target_order: self.selected + 1,
-                }
-            }
-            KeyCode::Enter => {
-                self.selected = current;
-                self.mode = EditorMode::Browse;
-                EditorIntent::None
-            }
-            KeyCode::Char('q') | KeyCode::Esc => {
-                let target = original_order
-                    .saturating_sub(1)
-                    .min(self.jobs.len().saturating_sub(1));
-                let job = self.jobs.remove(current);
-                self.jobs.insert(target, job);
-                self.selected = target;
-                self.normalize_orders();
-                self.mode = EditorMode::Browse;
-                EditorIntent::Move {
-                    id,
-                    target_order: target + 1,
-                }
-            }
-            _ => EditorIntent::None,
-        }
-    }
-
-    fn normalize_orders(&mut self) {
-        for (index, job) in self.jobs.iter_mut().enumerate() {
-            job.queue_order = Some((index + 1) as i64);
-        }
-    }
-}
-
-pub(crate) trait TerminalBackend {
-    fn enable_raw_mode(&mut self) -> anyhow::Result<()>;
-    fn disable_raw_mode(&mut self) -> anyhow::Result<()>;
-    fn enter_alternate_screen(&mut self) -> anyhow::Result<()>;
-    fn leave_alternate_screen(&mut self) -> anyhow::Result<()>;
-    fn hide_cursor(&mut self) -> anyhow::Result<()>;
-    fn show_cursor(&mut self) -> anyhow::Result<()>;
-    fn clear(&mut self) -> anyhow::Result<()>;
-    fn write(&mut self, output: &str) -> anyhow::Result<()>;
-    fn read_key(&mut self) -> anyhow::Result<KeyEvent>;
-}
-
-struct CrosstermTerminal {
-    stdout: io::Stdout,
-}
-
-impl CrosstermTerminal {
-    fn new() -> Self {
-        Self {
-            stdout: io::stdout(),
-        }
-    }
-}
-
-impl TerminalBackend for CrosstermTerminal {
-    fn enable_raw_mode(&mut self) -> anyhow::Result<()> {
-        terminal::enable_raw_mode().context("enable terminal raw mode")?;
-        Ok(())
-    }
-
-    fn disable_raw_mode(&mut self) -> anyhow::Result<()> {
-        terminal::disable_raw_mode().context("disable terminal raw mode")?;
-        Ok(())
-    }
-
-    fn enter_alternate_screen(&mut self) -> anyhow::Result<()> {
-        execute!(self.stdout, EnterAlternateScreen).context("enter alternate screen")?;
-        Ok(())
-    }
-
-    fn leave_alternate_screen(&mut self) -> anyhow::Result<()> {
-        execute!(self.stdout, LeaveAlternateScreen).context("leave alternate screen")?;
-        Ok(())
-    }
-
-    fn hide_cursor(&mut self) -> anyhow::Result<()> {
-        execute!(self.stdout, Hide).context("hide cursor")?;
-        Ok(())
-    }
-
-    fn show_cursor(&mut self) -> anyhow::Result<()> {
-        execute!(self.stdout, Show).context("show cursor")?;
-        Ok(())
-    }
-
-    fn clear(&mut self) -> anyhow::Result<()> {
-        execute!(self.stdout, Clear(ClearType::All), MoveTo(0, 0)).context("clear terminal")?;
-        Ok(())
-    }
-
-    fn write(&mut self, output: &str) -> anyhow::Result<()> {
-        self.stdout
-            .write_all(output.as_bytes())
-            .context("write terminal")?;
-        self.stdout.flush().context("flush terminal")?;
-        Ok(())
-    }
-
-    fn read_key(&mut self) -> anyhow::Result<KeyEvent> {
-        loop {
-            if let Event::Key(key) = event::read().context("read terminal input")? {
-                return Ok(key);
-            }
-        }
-    }
-}
-
-struct Cleanup<'a, T: TerminalBackend> {
-    terminal: &'a mut T,
-}
-
-impl<'a, T: TerminalBackend> Cleanup<'a, T> {
-    fn new(terminal: &'a mut T) -> Self {
-        Self { terminal }
-    }
-
-    fn terminal(&mut self) -> &mut T {
-        self.terminal
-    }
-}
-
-impl<T: TerminalBackend> Drop for Cleanup<'_, T> {
-    fn drop(&mut self) {
-        let _ = self.terminal.show_cursor();
-        let _ = self.terminal.leave_alternate_screen();
-        let _ = self.terminal.disable_raw_mode();
-    }
-}
-
-pub(crate) fn run_queue_editor<F, R, E>(
-    initial_jobs: Vec<Job>,
-    move_job: F,
-    reload_jobs: R,
-) -> anyhow::Result<()>
-where
-    F: FnMut(Uuid, usize) -> Result<Vec<Job>, E>,
-    E: Into<EditorMoveError>,
-    R: FnMut() -> anyhow::Result<Vec<Job>>,
-{
-    let mut terminal = CrosstermTerminal::new();
-    run_queue_editor_with_terminal(&mut terminal, initial_jobs, move_job, reload_jobs)
-}
-
-fn run_queue_editor_with_terminal<T, F, R, E>(
-    terminal: &mut T,
-    initial_jobs: Vec<Job>,
-    mut move_job: F,
-    mut reload_jobs: R,
-) -> anyhow::Result<()>
-where
-    T: TerminalBackend,
-    F: FnMut(Uuid, usize) -> Result<Vec<Job>, E>,
-    E: Into<EditorMoveError>,
-    R: FnMut() -> anyhow::Result<Vec<Job>>,
-{
-    terminal.enable_raw_mode()?;
-    let mut cleanup = Cleanup::new(terminal);
-    cleanup.terminal().enter_alternate_screen()?;
-    cleanup.terminal().hide_cursor()?;
-
-    run_editor_loop(
-        cleanup.terminal(),
-        initial_jobs,
-        &mut move_job,
-        &mut reload_jobs,
-    )
-}
-
-fn run_editor_loop<T, F, R, E>(
-    terminal: &mut T,
-    initial_jobs: Vec<Job>,
-    move_job: &mut F,
-    reload_jobs: &mut R,
-) -> anyhow::Result<()>
-where
-    T: TerminalBackend,
-    F: FnMut(Uuid, usize) -> Result<Vec<Job>, E>,
-    E: Into<EditorMoveError>,
-    R: FnMut() -> anyhow::Result<Vec<Job>>,
-{
-    let mut state = EditorState::new(initial_jobs);
-    let mut notice = None;
-    loop {
-        render(terminal, &state, notice)?;
-        notice = None;
-        if state.jobs.is_empty() {
-            return Ok(());
-        }
-        let key = terminal.read_key()?;
-        if key.kind == KeyEventKind::Release {
-            continue;
-        }
-        let intent = state.reduce(key);
-        match intent {
-            EditorIntent::None => {}
-            EditorIntent::Exit => return Ok(()),
-            EditorIntent::Move { id, target_order } => {
-                let mode_after_reduce = state.mode;
-                let result: Result<Vec<Job>, EditorMoveError> =
-                    move_job(id, target_order).map_err(Into::into);
-                match result {
-                    Ok(jobs) => match mode_after_reduce {
-                        EditorMode::Move { id, original_order } => {
-                            state.replace_jobs_after_move(jobs, id, original_order);
-                        }
-                        EditorMode::Browse => state.replace_jobs(jobs),
-                    },
-                    Err(EditorMoveError::Stale) => {
-                        notice = Some("Selected job was removed; reloading queued jobs.");
-                        state.replace_jobs(reload_jobs()?);
-                    }
-                    Err(EditorMoveError::Callback(error)) => return Err(error),
-                }
-            }
-        }
-    }
-}
-
-fn render<T: TerminalBackend>(
-    terminal: &mut T,
-    state: &EditorState,
-    notice: Option<&str>,
-) -> anyhow::Result<()> {
-    terminal.clear()?;
-    let mut output = String::new();
-    if let Some(notice) = notice {
-        output.push_str(notice);
-        output.push('\n');
-        output.push('\n');
-    }
-    match state.mode {
-        EditorMode::Browse => {
-            output.push_str(&format!(
-                "Queue locked || {} jobs waiting\n",
-                state.jobs.len()
-            ));
-            output
-                .push_str("↑/↓ select a job || Enter move selected job || q/Esc leave editor\n\n");
-        }
-        EditorMode::Move { id, .. } => {
-            let name = state
-                .jobs
-                .iter()
-                .find(|job| job.id == id)
-                .map(|job| job.name.as_str())
-                .unwrap_or("(removed)");
-            output.push_str(&format!("Moving: {name}\n"));
-            output.push_str("↑/↓ adjust position || Enter keep move || q/Esc undo this move\n\n");
-        }
-    }
-    for (index, job) in state.jobs.iter().enumerate() {
-        let marker = if index == state.selected { '>' } else { ' ' };
-        let short_id = job.id.to_string();
-        let short_id = &short_id[..8];
-        output.push_str(&format!(
-            "{marker} {:>2}. {:<24} {:<16} {short_id}\n",
-            index + 1,
-            job.name,
-            job.user
-        ));
-    }
-    terminal.write(&output)
-}
+pub(crate) use state::EditorMoveError;
+#[cfg(test)]
+use state::{EditorIntent, EditorMode, EditorState};
+pub(crate) use terminal::run_queue_editor;
+#[cfg(test)]
+use terminal::{TerminalBackend, run_queue_editor_with_terminal};
 
 #[cfg(test)]
 mod tests {
@@ -690,6 +280,7 @@ mod tests {
         events: VecDeque<KeyEvent>,
         calls: Vec<&'static str>,
         output: String,
+        fail_on: Option<&'static str>,
     }
 
     impl RecordingTerminal {
@@ -698,7 +289,22 @@ mod tests {
                 events: events.into_iter().collect(),
                 calls: Vec::new(),
                 output: String::new(),
+                fail_on: None,
             }
+        }
+
+        fn failing(stage: &'static str) -> Self {
+            let mut terminal = Self::with_events([key(KeyCode::Char('q'))]);
+            terminal.fail_on = Some(stage);
+            terminal
+        }
+
+        fn record(&mut self, stage: &'static str) -> anyhow::Result<()> {
+            self.calls.push(stage);
+            if self.fail_on == Some(stage) {
+                anyhow::bail!("simulated {stage} failure");
+            }
+            Ok(())
         }
 
         fn assert_cleaned_up(&self) {
@@ -710,47 +316,41 @@ mod tests {
 
     impl TerminalBackend for RecordingTerminal {
         fn enable_raw_mode(&mut self) -> anyhow::Result<()> {
-            self.calls.push("enable_raw_mode");
-            Ok(())
+            self.record("enable_raw_mode")
         }
 
         fn disable_raw_mode(&mut self) -> anyhow::Result<()> {
-            self.calls.push("disable_raw_mode");
-            Ok(())
+            self.record("disable_raw_mode")
         }
 
         fn enter_alternate_screen(&mut self) -> anyhow::Result<()> {
-            self.calls.push("enter_alternate_screen");
-            Ok(())
+            self.record("enter_alternate_screen")
         }
 
         fn leave_alternate_screen(&mut self) -> anyhow::Result<()> {
-            self.calls.push("leave_alternate_screen");
-            Ok(())
+            self.record("leave_alternate_screen")
         }
 
         fn hide_cursor(&mut self) -> anyhow::Result<()> {
-            self.calls.push("hide_cursor");
-            Ok(())
+            self.record("hide_cursor")
         }
 
         fn show_cursor(&mut self) -> anyhow::Result<()> {
-            self.calls.push("show_cursor");
-            Ok(())
+            self.record("show_cursor")
         }
 
         fn clear(&mut self) -> anyhow::Result<()> {
-            self.calls.push("clear");
-            Ok(())
+            self.record("clear")
         }
 
         fn write(&mut self, _output: &str) -> anyhow::Result<()> {
-            self.calls.push("write");
+            self.record("write")?;
             self.output.push_str(_output);
             Ok(())
         }
 
         fn read_key(&mut self) -> anyhow::Result<KeyEvent> {
+            self.record("read_key")?;
             self.events
                 .pop_front()
                 .ok_or_else(|| anyhow::anyhow!("no event"))
@@ -770,6 +370,63 @@ mod tests {
         .unwrap();
 
         terminal.assert_cleaned_up();
+    }
+
+    #[test]
+    fn setup_and_loop_failures_restore_terminal_after_raw_mode_is_enabled() {
+        for stage in [
+            "enter_alternate_screen",
+            "hide_cursor",
+            "clear",
+            "write",
+            "read_key",
+        ] {
+            let mut terminal = RecordingTerminal::failing(stage);
+
+            let error = run_queue_editor_with_input(
+                &mut terminal,
+                vec![job("first", 1)],
+                |_id, _target| -> Result<Vec<Job>, anyhow::Error> { unreachable!() },
+                || -> anyhow::Result<Vec<Job>> { unreachable!() },
+            )
+            .unwrap_err();
+
+            assert!(error.to_string().contains(stage));
+            terminal.assert_cleaned_up();
+        }
+    }
+
+    #[test]
+    fn cleanup_attempts_every_restore_step_even_if_one_fails() {
+        for stage in ["show_cursor", "leave_alternate_screen", "disable_raw_mode"] {
+            let mut terminal = RecordingTerminal::failing(stage);
+
+            run_queue_editor_with_input(
+                &mut terminal,
+                vec![job("first", 1)],
+                |_id, _target| -> Result<Vec<Job>, anyhow::Error> { unreachable!() },
+                || -> anyhow::Result<Vec<Job>> { unreachable!() },
+            )
+            .unwrap();
+
+            terminal.assert_cleaned_up();
+        }
+    }
+
+    #[test]
+    fn raw_mode_failure_does_not_run_cleanup_for_state_that_was_not_entered() {
+        let mut terminal = RecordingTerminal::failing("enable_raw_mode");
+
+        let error = run_queue_editor_with_input(
+            &mut terminal,
+            vec![job("first", 1)],
+            |_id, _target| -> Result<Vec<Job>, anyhow::Error> { unreachable!() },
+            || -> anyhow::Result<Vec<Job>> { unreachable!() },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("enable_raw_mode"));
+        assert_eq!(terminal.calls, vec!["enable_raw_mode"]);
     }
 
     #[test]
