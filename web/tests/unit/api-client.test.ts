@@ -3,34 +3,59 @@ import test from "node:test";
 
 import { ApiError, createApiClient } from "../../src/api.ts";
 
-function response(status: number, payload: unknown) {
-  return {
+function response(status: number, payload: unknown): Response {
+  const body = JSON.stringify(payload);
+  return new Response(body === undefined ? "" : body, {
     status,
-    ok: status >= 200 && status < 300,
-    json: async () => payload,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function session(values = new Map<string, string>()): Storage {
+  return {
+    get length() { return values.size; },
+    clear() { values.clear(); },
+    getItem(key) { return values.get(key) ?? null; },
+    key(index) { return [...values.keys()][index] ?? null; },
+    removeItem(key) { values.delete(key); },
+    setItem(key, value) { values.set(key, value); },
+  };
+}
+
+function location(hash = ""): Location {
+  return { hash, pathname: "/", search: "" } as unknown as Location;
+}
+
+function history(): History {
+  return {
+    length: 0,
+    scrollRestoration: "auto",
+    state: null,
+    back() {},
+    forward() {},
+    go() {},
+    pushState(_data: unknown, _unused: string, _url?: string | URL | null) {},
+    replaceState(_data: unknown, _unused: string, _url?: string | URL | null) {},
   };
 }
 
 test("client stores fragment token and sends it as a bearer header", async () => {
   const values = new Map<string, string>();
-  const session = {
-    getItem: (key: string) => values.get(key) || null,
-    setItem: (key: string, value: string) => values.set(key, value),
-  };
-  let received: any;
+  let received: RequestInit | undefined;
   const client = createApiClient({
     fetchImpl: async (_path, options) => {
       received = options;
       return response(200, { ok: true });
     },
-    session,
-    browserLocation: { hash: "#token=secret", pathname: "/", search: "" } as Location,
-    browserHistory: { replaceState() {} } as History,
+    session: session(values),
+    browserLocation: location("#token=secret"),
+    browserHistory: history(),
   });
 
   assert.deepEqual(await client.get("/api/v1/status"), { ok: true });
   assert.equal(values.get("stoker-ui-token"), "secret");
-  assert.equal(received.headers.get("Authorization"), "Bearer secret");
+  assert.ok(received);
+  assert.equal(new Headers(received.headers).get("Authorization"), "Bearer secret");
   assert.equal(received.cache, "no-store");
 });
 
@@ -43,9 +68,9 @@ test("client branches on typed unauthorized code instead of message text", async
       message: "wording may change",
       details: { retry: true },
     }),
-    session: { getItem: () => null, setItem() {} },
-    browserLocation: { hash: "", pathname: "/", search: "" } as Location,
-    browserHistory: { replaceState() {} } as History,
+    session: session(),
+    browserLocation: location(),
+    browserHistory: history(),
     onUnauthorized: () => { unauthorized += 1; },
   });
 
@@ -60,10 +85,10 @@ test("client branches on typed unauthorized code instead of message text", async
 
 test("client maps non-JSON failures to a stable fallback", async () => {
   const client = createApiClient({
-    fetchImpl: async () => ({ status: 502, ok: false, json: async () => { throw new Error("not json"); } }),
-    session: { getItem: () => null, setItem() {} },
-    browserLocation: { hash: "", pathname: "/", search: "" } as Location,
-    browserHistory: { replaceState() {} } as History,
+    fetchImpl: async () => new Response("not json", { status: 502 }),
+    session: session(),
+    browserLocation: location(),
+    browserHistory: history(),
   });
   await assert.rejects(client.get("/api"), /Request failed \(502\)/);
 });

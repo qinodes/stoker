@@ -1,6 +1,40 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page, type Route as PlaywrightRoute, type Request } from "@playwright/test";
+import type { Job, RootsResponse, SettingsResponse, Snapshot, StatusResponse, TimezoneInfo } from "../../src/types.ts";
 
-const baseJob = (overrides = {}) => ({
+interface MockModel {
+  jobs: Job[];
+  queue: Job[];
+  locked: boolean;
+  timezone: string;
+  snapshots: Snapshot[];
+}
+
+interface MockBackendOptions {
+  requireToken?: boolean;
+  onRequest?: (path: string, method: string) => void;
+}
+
+interface JobCreateRequest {
+  name: string;
+  user: string;
+  cwd: string;
+  command: string;
+  description: string | null;
+}
+
+interface DescriptionRequest {
+  description: string | null;
+}
+
+interface QueueMoveRequest {
+  target_order: number;
+}
+
+interface TimezoneRequest {
+  value: string;
+}
+
+const baseJob = (overrides: Partial<Job> = {}): Job => ({
   id: overrides.id || crypto.randomUUID(),
   name: "seed-job",
   user: "tester",
@@ -21,9 +55,9 @@ const baseJob = (overrides = {}) => ({
   ...overrides,
 });
 
-async function mockBackend(page, { requireToken = false, onRequest = () => {} } = {}) {
+async function mockBackend(page: Page, { requireToken = false, onRequest = () => {} }: MockBackendOptions = {}): Promise<MockModel> {
   const seed = baseJob({ id: "10000000-0000-4000-8000-000000000001" });
-  const model = {
+  const model: MockModel = {
     jobs: [seed],
     queue: [seed],
     locked: false,
@@ -31,7 +65,7 @@ async function mockBackend(page, { requireToken = false, onRequest = () => {} } 
     snapshots: [],
   };
 
-  await page.route("**/api/v1/**", async (route) => {
+  await page.route("**/api/v1/**", async (route: PlaywrightRoute) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
@@ -59,7 +93,7 @@ async function mockBackend(page, { requireToken = false, onRequest = () => {} } 
       return route.fulfill({ json: { jobs: model.jobs, timezone: timezone(model) } });
     }
     if (path === "/api/v1/jobs" && method === "POST") {
-      const body = request.postDataJSON();
+      const body = requestJson<JobCreateRequest>(request);
       const job = baseJob({
         id: "20000000-0000-4000-8000-000000000002",
         name: body.name,
@@ -94,9 +128,9 @@ async function mockBackend(page, { requireToken = false, onRequest = () => {} } 
       const action = jobMatch[2];
       if (!action) return route.fulfill({ json: { job, working_directory_status: "planned", display_timezone: model.timezone } });
       if (action === "description") {
-        const body = request.postDataJSON();
+        const body = requestJson<DescriptionRequest>(request);
         job.description = body.description;
-        job.description_revision += 1;
+        job.description_revision = (job.description_revision ?? 0) + 1;
         return route.fulfill({ json: { job } });
       }
       if (action === "commit") {
@@ -132,12 +166,12 @@ async function mockBackend(page, { requireToken = false, onRequest = () => {} } 
     if (moveMatch) {
       const index = model.queue.findIndex((job) => job.id === moveMatch[1]);
       const [job] = model.queue.splice(index, 1);
-      model.queue.splice(request.postDataJSON().target_order - 1, 0, job);
+      model.queue.splice(requestJson<QueueMoveRequest>(request).target_order - 1, 0, job);
       model.queue.forEach((entry, order) => { entry.queue_order = order + 1; });
       return route.fulfill({ json: { jobs: model.queue, locked: model.locked } });
     }
     if (path === "/api/v1/config/timezone" && method === "PUT") {
-      model.timezone = request.postDataJSON().value;
+      model.timezone = requestJson<TimezoneRequest>(request).value;
       return route.fulfill({ json: configuration(model) });
     }
     if (path === "/api/v1/config/timezone" && method === "DELETE") {
@@ -161,12 +195,17 @@ async function mockBackend(page, { requireToken = false, onRequest = () => {} } 
 test("bundled browser creates and reads a job through the real Axum application stack", async ({ page, request }) => {
   const rootsResponse = await request.get("/api/v1/fs/roots");
   expect(rootsResponse.ok()).toBeTruthy();
-  const roots = await rootsResponse.json();
+  const roots = await rootsResponse.json() as RootsResponse;
   expect(roots.default_path).toBeTruthy();
   const name = `browser-real-${Date.now()}`;
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "See what’s running and what’s next." })).toBeVisible();
+  await expect(page).toHaveTitle("Stoker");
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute("href", "/assets/logo-mark.png");
+  const favicon = await request.get("/assets/logo-mark.png");
+  expect(favicon.ok()).toBeTruthy();
+  expect(favicon.headers()["content-type"]).toContain("image/png");
   await page.locator('[data-route="jobs"]').click();
   await page.locator('[data-action="new-job"]').first().click();
   await expect(page.locator("#job-dialog")).toBeVisible();
@@ -275,21 +314,29 @@ test("queue keeps scrolling inside the job list on desktop", async ({ page }) =>
 
 test("v1.3.1 layout contract and two-second refresh preserve active input", async ({ page }) => {
   let statusRequests = 0;
-  let releaseNextPoll;
-  const nextPoll = new Promise((resolve) => { releaseNextPoll = resolve; });
+  let releaseNextPoll: () => void = () => undefined;
+  const nextPoll = new Promise<void>((resolve) => { releaseNextPoll = resolve; });
   await mockBackend(page, {
-    onRequest(path) {
+    onRequest(path: string) {
       if (path === "/api/v1/status" && ++statusRequests >= 2) releaseNextPoll();
     },
   });
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "See what’s running and what’s next." })).toBeVisible();
+  await expect(page).toHaveTitle("Stoker");
 
-  const visualContract = await page.evaluate(() => ({
-    background: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
-    sidebarWidth: document.querySelector(".sidebar").getBoundingClientRect().width,
-    columns: getComputedStyle(document.querySelector(".app-shell")).gridTemplateColumns,
-  }));
+  const visualContract = await page.evaluate(() => {
+    const sidebar = document.querySelector(".sidebar");
+    const appShell = document.querySelector(".app-shell");
+    if (!(sidebar instanceof HTMLElement) || !(appShell instanceof HTMLElement)) {
+      throw new Error("Expected app shell layout elements");
+    }
+    return {
+      background: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+      sidebarWidth: sidebar.getBoundingClientRect().width,
+      columns: getComputedStyle(appShell).gridTemplateColumns,
+    };
+  });
   expect(visualContract.background).toBe("#0b1018");
   expect(visualContract.sidebarWidth).toBe(248);
   expect(visualContract.columns.startsWith("248px ")).toBeTruthy();
@@ -320,11 +367,15 @@ test("LAN auth opens token dialog and retries with bearer credentials", async ({
   await expect(page.getByRole("heading", { name: "See what’s running and what’s next." })).toBeVisible();
 });
 
-function timezone(model) {
+function requestJson<T>(request: Request): T {
+  return request.postDataJSON() as T;
+}
+
+function timezone(model: MockModel): TimezoneInfo {
   return { name: model.timezone, source: "config" };
 }
 
-function status(model) {
+function status(model: MockModel): StatusResponse {
   return {
     scheduler: { running: false, pid: null, active_job: null, queued_jobs: model.queue.length },
     counts: {
@@ -341,7 +392,7 @@ function status(model) {
   };
 }
 
-function configuration(model) {
+function configuration(model: MockModel): SettingsResponse {
   return {
     config: { timezone: model.timezone },
     effective_timezone: timezone(model),
@@ -352,7 +403,6 @@ function configuration(model) {
   };
 }
 
-function typedError(route, statusCode, code, message) {
+function typedError(route: PlaywrightRoute, statusCode: number, code: string, message: string): Promise<void> {
   return route.fulfill({ status: statusCode, json: { error: message, code, message, details: null } });
 }
-

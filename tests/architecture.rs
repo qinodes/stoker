@@ -365,6 +365,9 @@ fn browser_frontend_has_react_typescript_and_stylesheet_ownership() {
     let web = Path::new(env!("CARGO_MANIFEST_DIR")).join("web");
     let index = fs::read_to_string(web.join("index.html")).unwrap();
     assert!(index.contains("/src/main.tsx"));
+    assert!(index.contains("<title>Stoker</title>"));
+    assert!(index.contains("rel=\"icon\""));
+    assert!(index.contains("/assets/logo-mark.png"));
     assert!(!web.join("app.js").exists());
     assert!(!web.join("modules").exists());
     assert!(web.join("dist/index.html").is_file());
