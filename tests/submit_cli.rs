@@ -305,10 +305,10 @@ fn config_commands_show_get_unset_and_create_manual_snapshot() {
 }
 
 #[test]
-fn log_capacity_config_requires_queue_lock_and_supports_defaults() {
+fn log_capacity_policy_requires_queue_lock_and_supports_defaults() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
-        .args(["config", "set", "log-max-bytes-per-job", "2MiB"])
+        .args(["policy", "set", "log-max-bytes-per-job", "2MiB"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("queue is unlocked"));
@@ -318,37 +318,75 @@ fn log_capacity_config_requires_queue_lock_and_supports_defaults() {
         .assert()
         .success();
     stoker_in(repo.path())
-        .args(["config", "set", "log-max-bytes-per-job", "2MiB"])
+        .args(["policy", "set", "log-max-bytes-per-job", "2MiB"])
         .assert()
         .success();
     stoker_in(repo.path())
-        .args(["config", "get", "log-max-bytes-per-job"])
+        .args(["policy", "get", "log-max-bytes-per-job"])
         .assert()
         .success()
         .stdout(predicate::str::contains("2097152"));
     stoker_in(repo.path())
-        .args(["config", "unset", "log-max-bytes-per-job"])
+        .args(["policy", "unset", "log-max-bytes-per-job"])
         .assert()
         .success()
         .stdout(predicate::str::contains("built-in default"));
 }
 
 #[test]
-fn runtime_and_database_operations_are_available() {
+fn runtime_policy_and_database_operations_are_available() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
         .args(["queue", "lock"])
         .assert()
         .success();
     stoker_in(repo.path())
-        .args(["config", "set", "termination-grace-ms", "2000"])
+        .args(["policy", "set", "termination-grace-ms", "2000"])
         .assert()
         .success();
     stoker_in(repo.path())
-        .args(["config", "get", "termination-grace-ms"])
+        .args(["policy", "get", "termination-grace-ms"])
         .assert()
         .success()
         .stdout(predicate::str::contains("2000"));
+    stoker_in(repo.path())
+        .args(["policy", "set", "max-runtime-ms", "1000"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["policy", "get", "max-runtime-ms"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1000"));
+    stoker_in(repo.path())
+        .args(["policy", "unset", "max-runtime-ms"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["policy", "get", "max-runtime-ms"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("<disabled>"));
+    stoker_in(repo.path())
+        .args(["policy", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Stoker scheduler policy"))
+        .stdout(predicate::str::contains("Database:"))
+        .stdout(predicate::str::contains("\"log\""))
+        .stdout(predicate::str::contains("\"runtime\""));
+    stoker_in(repo.path())
+        .args(["config", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Stoker configuration"))
+        .stdout(predicate::str::contains("\"timezone\""))
+        .stdout(predicate::str::contains("\"log\"").not())
+        .stdout(predicate::str::contains("\"runtime\"").not());
+    stoker_in(repo.path())
+        .args(["config", "get", "max-runtime-ms"])
+        .assert()
+        .failure();
     stoker_in(repo.path())
         .args(["db", "check"])
         .assert()

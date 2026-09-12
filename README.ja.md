@@ -315,7 +315,7 @@ stoker config get timezone
 stoker config unset timezone
 ```
 
-`stoker config show` は config ファイルの場所と保存されている設定全体を表示します。実際に有効なタイムゾーンとその取得元を確認するには `stoker status` を使用します。
+`stoker config show` は config ファイルの場所とタイムゾーン設定だけを表示します。
 
 タイムゾーンの値を省略すると、対話型の選択画面が開きます。
 
@@ -369,19 +369,19 @@ stoker show <JOB_ID> --timezone UTC
 | `startup-timeout-ms` | 30,000 | run directory、ログ、作業ディレクトリの準備に許される最長時間。 |
 | `max-runtime-ms` | 無効 | Job の最大実行時間。無効の場合は自動タイムアウトしません。 |
 
-容量と実行ポリシーの変更は CLI のみ対応しています。変更には queue のロックと、`STARTING`、`RUNNING`、`CANCELLING` Job が存在しないことが必要です。queued Job は残せます。
+変更には queue のロックと、`STARTING`、`RUNNING`、`CANCELLING` Job が存在しないことが必要です。queued Job は残せます。
 
 ```bash
 stoker queue lock
-stoker config set log-max-bytes-per-job 256MiB
-stoker config set log-retention-jobs 30
-stoker config set termination-grace-ms 30000
-stoker config set max-runtime-ms 43200000
-stoker config unset max-runtime-ms
+stoker policy set log-max-bytes-per-job 256MiB
+stoker policy set log-retention-jobs 30
+stoker policy set termination-grace-ms 30000
+stoker policy set max-runtime-ms 43200000
+stoker policy unset max-runtime-ms
 stoker queue unlock
 ```
 
-`stoker config show` または `stoker config get <KEY>` で値を確認できます。容量超過やログ書き込みエラーが発生しても子プロセスの出力は読み続けます。古い分割ログが破棄された場合、CLI はログが切り詰められたことを表示します。空き容量が reserve を下回ると、scheduler は次の queued Job を開始せず、`stoker status` に警告を表示します。
+`stoker policy show` または `stoker policy get <KEY>` でポリシーの値を確認できます。容量超過やログ書き込みエラーが発生しても子プロセスの出力は読み続けます。古い分割ログが破棄された場合、CLI はログが切り詰められたことを表示します。空き容量が reserve を下回ると、scheduler は次の queued Job を開始せず、`stoker status` に警告を表示します。
 
 ## SQLite の検査と復元
 

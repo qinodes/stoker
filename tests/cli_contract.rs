@@ -41,6 +41,7 @@ fn public_cli_schema_matches_the_cli_command_contract() {
             "show",
             "jobs",
             "config",
+            "policy",
             "db",
             "clean",
             "update",
@@ -91,6 +92,10 @@ fn public_cli_schema_matches_the_cli_command_contract() {
         ["set", "show", "get", "unset", "restore", "snapshot"]
     );
     assert_eq!(
+        declared_subcommands(named_subcommand(&command, "policy")),
+        ["set", "show", "get", "unset"]
+    );
+    assert_eq!(
         declared_subcommands(named_subcommand(&command, "db")),
         ["check", "backup", "restore"]
     );
@@ -108,6 +113,13 @@ fn public_cli_schema_matches_the_cli_command_contract() {
             "restore"
         )),
         ["source", "yes"]
+    );
+    assert!(
+        Cli::try_parse_from(["stoker", "config", "set", "log-max-bytes-per-job", "2MiB"]).is_err(),
+        "scheduler policies must not be exposed through config"
+    );
+    assert!(
+        Cli::try_parse_from(["stoker", "policy", "set", "log-max-bytes-per-job", "2MiB"]).is_ok()
     );
     assert_eq!(
         declared_subcommands(named_subcommand(&command, "queue")),

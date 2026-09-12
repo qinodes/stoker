@@ -314,7 +314,7 @@ stoker config get timezone
 stoker config unset timezone
 ```
 
-`stoker config show` 會顯示 config 檔案位置與完整的已儲存設定。若要查看實際生效的時區與來源，請使用 `stoker status`。
+`stoker config show` 只顯示 config 檔案位置與時區設定。
 
 省略時區值時，Stoker 會開啟互動式選擇器：
 
@@ -368,19 +368,19 @@ Log 有安全的預設上限，只保留最新尾端內容：
 | `startup-timeout-ms` | 30,000 | 建立 run directory、log 檔與檢查工作目錄的最長時間。 |
 | `max-runtime-ms` | 停用 | Job 可設定的最長執行時間；停用表示不會自動因逾時取消。 |
 
-容量與執行策略只提供 CLI 設定。修改前必須先鎖定 queue，且不能有 `STARTING`、`RUNNING` 或 `CANCELLING` Job；queued Job 可以保留：
+修改前必須先鎖定 queue，且不能有 `STARTING`、`RUNNING` 或 `CANCELLING` Job；queued Job 可以保留：
 
 ```bash
 stoker queue lock
-stoker config set log-max-bytes-per-job 256MiB
-stoker config set log-retention-jobs 30
-stoker config set termination-grace-ms 30000
-stoker config set max-runtime-ms 43200000
-stoker config unset max-runtime-ms
+stoker policy set log-max-bytes-per-job 256MiB
+stoker policy set log-retention-jobs 30
+stoker policy set termination-grace-ms 30000
+stoker policy set max-runtime-ms 43200000
+stoker policy unset max-runtime-ms
 stoker queue unlock
 ```
 
-使用 `stoker config show` 或 `stoker config get <KEY>` 查看數值。容量用盡或 log 寫入失敗時仍會持續讀取子程序輸出，舊分段可能被丟棄，CLI 會提示 log 已截斷。可用空間低於 reserve 時，scheduler 不會啟動下一個 queued Job；`stoker status` 會顯示警告。
+使用 `stoker policy show` 或 `stoker policy get <KEY>` 查看 policy 數值。容量用盡或 log 寫入失敗時仍會持續讀取子程序輸出，舊分段可能被丟棄，CLI 會提示 log 已截斷。可用空間低於 reserve 時，scheduler 不會啟動下一個 queued Job；`stoker status` 會顯示警告。
 
 ## SQLite 檢查與復原
 

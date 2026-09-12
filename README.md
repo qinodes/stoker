@@ -322,7 +322,7 @@ stoker config get timezone
 stoker config unset timezone
 ```
 
-`stoker config show` displays the config file location and the complete stored configuration. Use `stoker status` to see the effective timezone and its source.
+`stoker config show` displays the config file location and its timezone setting.
 
 If the timezone value is omitted, Stoker opens an interactive selector:
 
@@ -376,19 +376,19 @@ Log capture has safe defaults and keeps only a bounded tail. The defaults are:
 | `startup-timeout-ms` | 30,000 | Maximum time for run-directory, log-file, and working-directory setup. |
 | `max-runtime-ms` | disabled | Optional maximum execution time for a job; disabled means no automatic timeout. |
 
-Change these values from the CLI. Capacity and runtime changes require a locked queue and no `STARTING`, `RUNNING`, or `CANCELLING` job; queued jobs may remain in place:
+Capacity and runtime changes require a locked queue and no `STARTING`, `RUNNING`, or `CANCELLING` job; queued jobs may remain in place:
 
 ```bash
 stoker queue lock
-stoker config set log-max-bytes-per-job 256MiB
-stoker config set log-retention-jobs 30
-stoker config set termination-grace-ms 30000
-stoker config set max-runtime-ms 43200000
-stoker config unset max-runtime-ms
+stoker policy set log-max-bytes-per-job 256MiB
+stoker policy set log-retention-jobs 30
+stoker policy set termination-grace-ms 30000
+stoker policy set max-runtime-ms 43200000
+stoker policy unset max-runtime-ms
 stoker queue unlock
 ```
 
-Use `stoker config show` or `stoker config get <KEY>` to inspect the effective numeric values. A limit reached or a log write failure does not stop reading the child process output; older log segments may be discarded and the CLI reports that the log is truncated. Low free space blocks the next queued job and is reported by `stoker status`.
+Use `stoker policy show` or `stoker policy get <KEY>` to inspect the effective policy values. A limit reached or a log write failure does not stop reading the child process output; older log segments may be discarded and the CLI reports that the log is truncated. Low free space blocks the next queued job and is reported by `stoker status`.
 
 ## Database checks and recovery
 

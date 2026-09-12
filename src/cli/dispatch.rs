@@ -13,6 +13,7 @@ use super::commands::configuration::config;
 use super::commands::db::{DatabaseOperation, database};
 use super::commands::jobs::{add, cancel, clean, commit, jobs, set_description, show};
 use super::commands::logs::logs;
+use super::commands::policy::policy;
 use super::commands::queue::{lock_queue, queue_edit, unlock_queue};
 use super::commands::service::status;
 use super::lifecycle::service::{service_run, start, stop};
@@ -46,6 +47,7 @@ pub(crate) fn run_command_with_paths(
         CliCommand::Show { id } => show(paths, id, timezone),
         CliCommand::Jobs { user, state } => jobs(paths, user.as_deref(), state, timezone),
         CliCommand::Config { command } => config(paths, command, timezone),
+        CliCommand::Policy { command } => policy(paths, command),
         CliCommand::Db { command } => match command {
             DbCommand::Check { integrity } => {
                 database(paths, DatabaseOperation::Check { integrity })

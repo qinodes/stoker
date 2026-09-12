@@ -30,7 +30,7 @@ mod args;
 use args::parse_job_state;
 pub use args::{
     AddArgs, CancelArgs, Cli, CliCommand, ConfigCommand, ConfigKey, ConfirmationArgs, DbCommand,
-    QueueCommand, SetDescriptionArgs, UiCommand, UiStartArgs,
+    PolicyCommand, PolicyKey, QueueCommand, SetDescriptionArgs, UiCommand, UiStartArgs,
 };
 
 mod dispatch;
@@ -656,6 +656,8 @@ mod update_tests {
             "Set or clear a job's description",
             "config",
             "Manage Stoker user configuration",
+            "policy",
+            "Manage scheduler execution and log policies",
             "status",
             "Show scheduler, queue, and timezone status",
             "queue",

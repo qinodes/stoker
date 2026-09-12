@@ -49,6 +49,11 @@ pub enum CliCommand {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    #[command(about = "Manage scheduler execution and log policies")]
+    Policy {
+        #[command(subcommand)]
+        command: PolicyCommand,
+    },
     #[command(about = "Check, back up, or restore the SQLite database")]
     Db {
         #[command(subcommand)]
@@ -167,6 +172,33 @@ pub enum DbCommand {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ConfigKey {
     Timezone,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PolicyCommand {
+    #[command(about = "Set a policy value")]
+    Set {
+        #[arg(value_enum)]
+        key: PolicyKey,
+        #[arg(help = "Policy value (bytes for log limits, milliseconds for runtime limits)")]
+        value: Option<String>,
+    },
+    #[command(about = "Show the current scheduler policies")]
+    Show,
+    #[command(about = "Get a policy value")]
+    Get {
+        #[arg(value_enum)]
+        key: PolicyKey,
+    },
+    #[command(about = "Reset a policy value to its built-in default")]
+    Unset {
+        #[arg(value_enum)]
+        key: PolicyKey,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum PolicyKey {
     LogMaxBytesPerJob,
     LogSegmentBytes,
     LogMaxBytesTotal,
