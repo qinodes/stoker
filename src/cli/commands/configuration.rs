@@ -12,7 +12,6 @@ use crate::{Store, StoreError};
 use super::super::{
     ConfigCommand, ConfigKey, application_cli_error, print_success, restore_config, select_timezone,
 };
-use super::db::{DatabaseOperation, database};
 
 pub(crate) fn config(
     paths: &StokerPaths,
@@ -41,29 +40,7 @@ pub(crate) fn config(
             key if is_log_key(key) => set_log_policy(paths, key, value)?,
             key => set_runtime_policy(paths, key, value)?,
         },
-        ConfigCommand::Show {
-            db_check,
-            integrity,
-            db_backup,
-            db_restore,
-            yes,
-        } => {
-            if db_check || integrity || db_backup.is_some() || db_restore.is_some() {
-                let selected = usize::from(db_check || integrity)
-                    + usize::from(db_backup.is_some())
-                    + usize::from(db_restore.is_some());
-                if selected > 1 {
-                    anyhow::bail!("choose only one database operation");
-                }
-                if db_check || integrity {
-                    database(paths, DatabaseOperation::Check { integrity })?;
-                } else if let Some(destination) = db_backup {
-                    database(paths, DatabaseOperation::Backup { destination })?;
-                } else if let Some(source) = db_restore {
-                    database(paths, DatabaseOperation::Restore { source, yes })?;
-                }
-                return Ok(());
-            }
+        ConfigCommand::Show => {
             let current =
                 application::configuration::configuration(paths).map_err(application_cli_error)?;
             let store = Store::open(&paths.database)?;

@@ -354,6 +354,52 @@ stoker show <JOB_ID> --timezone UTC
 
 適用順序は CLI オプション、`config.json`、OS のタイムゾーンです。
 
+## ログ容量と実行ポリシー
+
+ログには安全な既定値があり、最新の末尾だけを保持します。
+
+| 設定 | 既定値 | 用途 |
+| --- | ---: | --- |
+| `log-max-bytes-per-job`（stdout + stderr） | 64 MiB | 1 Job で共有するログ上限。超過すると古い分割ログを破棄します。 |
+| `log-segment-bytes` | 1 MiB | ローテーションする各ログ分割のサイズ。 |
+| `log-max-bytes-total`（terminal Job） | 1 GiB | 終了済み Job のログアーティファクト全体の上限。 |
+| `log-retention-jobs` | 100 | ログを保持する新しい terminal Job の数。 |
+| `log-disk-reserve-bytes` | 512 MiB | 最低空き容量。この値を下回ると scheduler は新しい queued Job を開始しません。 |
+| `termination-grace-ms` | 500 | キャンセル後、強制終了に移るまで正常終了を待つ時間。 |
+| `startup-timeout-ms` | 30,000 | run directory、ログ、作業ディレクトリの準備に許される最長時間。 |
+| `max-runtime-ms` | 無効 | Job の最大実行時間。無効の場合は自動タイムアウトしません。 |
+
+容量と実行ポリシーの変更は CLI のみ対応しています。変更には queue のロックと、`STARTING`、`RUNNING`、`CANCELLING` Job が存在しないことが必要です。queued Job は残せます。
+
+```bash
+stoker queue lock
+stoker config set log-max-bytes-per-job 256MiB
+stoker config set log-retention-jobs 30
+stoker config set termination-grace-ms 30000
+stoker config set max-runtime-ms 43200000
+stoker config unset max-runtime-ms
+stoker queue unlock
+```
+
+`stoker config show` または `stoker config get <KEY>` で値を確認できます。容量超過やログ書き込みエラーが発生しても子プロセスの出力は読み続けます。古い分割ログが破棄された場合、CLI はログが切り詰められたことを表示します。空き容量が reserve を下回ると、scheduler は次の queued Job を開始せず、`stoker status` に警告を表示します。
+
+## SQLite の検査と復元
+
+```bash
+stoker db check
+stoker db check --integrity
+stoker db backup
+stoker db backup <BACKUP_PATH>
+```
+
+保存先を指定しない場合、`stoker db backup` はタイムスタンプ付きバックアップを `<STOKER_HOME>/backups/`（通常は `~/.stoker/backups/`）に作成し、実際のパスを表示します。保存先を指定した場合はそのパスに作成します。`backup` は SQLite の WAL 内容も含みます。復元前に scheduler を停止してバックアップを確認してください。
+
+```bash
+stoker db restore <BACKUP_PATH> --yes
+```
+
+`restore` は `--yes` による明示確認が必要です。scheduler が中断すると実行中 Job は `LOST` になり queue がロックされます。Workload を確認・処理した後に `stoker queue unlock` を実行してください。自動 retry や外部副作用の exactly-once は保証しません。
+
 ## 補足説明
 
 ソースディレクトリのファイルに対して command が行った変更は保持されます。stoker はそのディレクトリ内のファイルを自動で変更または復元しません。

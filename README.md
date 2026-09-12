@@ -361,6 +361,54 @@ stoker show <JOB_ID> --timezone UTC
 
 Resolution order is the CLI option, `config.json`, then the operating system timezone.
 
+## Log capacity and runtime policy
+
+Log capture has safe defaults and keeps only a bounded tail. The defaults are:
+
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| `log-max-bytes-per-job` (stdout + stderr) | 64 MiB | Shared per-job log ceiling; older segments are discarded after the limit. |
+| `log-segment-bytes` | 1 MiB | Size of each rotating log segment. |
+| `log-max-bytes-total` (terminal jobs) | 1 GiB | Global ceiling for retained terminal-job log artifacts. |
+| `log-retention-jobs` | 100 | Number of newest terminal jobs whose log artifacts are retained. |
+| `log-disk-reserve-bytes` | 512 MiB | Minimum free space; the scheduler blocks new queued jobs below it. |
+| `termination-grace-ms` | 500 | Grace period after a cancellation request before forced termination. |
+| `startup-timeout-ms` | 30,000 | Maximum time for run-directory, log-file, and working-directory setup. |
+| `max-runtime-ms` | disabled | Optional maximum execution time for a job; disabled means no automatic timeout. |
+
+Change these values from the CLI. Capacity and runtime changes require a locked queue and no `STARTING`, `RUNNING`, or `CANCELLING` job; queued jobs may remain in place:
+
+```bash
+stoker queue lock
+stoker config set log-max-bytes-per-job 256MiB
+stoker config set log-retention-jobs 30
+stoker config set termination-grace-ms 30000
+stoker config set max-runtime-ms 43200000
+stoker config unset max-runtime-ms
+stoker queue unlock
+```
+
+Use `stoker config show` or `stoker config get <KEY>` to inspect the effective numeric values. A limit reached or a log write failure does not stop reading the child process output; older log segments may be discarded and the CLI reports that the log is truncated. Low free space blocks the next queued job and is reported by `stoker status`.
+
+## Database checks and recovery
+
+Use the lightweight check during normal operations and the full check when investigating corruption:
+
+```bash
+stoker db check
+stoker db check --integrity
+stoker db backup
+stoker db backup <BACKUP_PATH>
+```
+
+Without a destination, `stoker db backup` writes a timestamped file under `<STOKER_HOME>/backups/` (normally `~/.stoker/backups/`) and prints the exact path. If a destination is provided, the backup is written there. Backups include SQLite WAL contents. To restore, stop the scheduler, verify the backup, and explicitly confirm the replacement:
+
+```bash
+stoker db restore <BACKUP_PATH> --yes
+```
+
+After an interrupted scheduler, in-progress jobs are marked `LOST` and the queue is fenced. Inspect and reconcile the workload before running `stoker queue unlock`; Stoker does not retry commands automatically or guarantee exactly-once external side effects.
+
 ## Additional notes
 
 Changes made by a command to files in the source directory are retained. stoker does not automatically modify or restore files in that directory.

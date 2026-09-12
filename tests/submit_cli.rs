@@ -334,7 +334,7 @@ fn log_capacity_config_requires_queue_lock_and_supports_defaults() {
 }
 
 #[test]
-fn runtime_and_database_config_operations_are_available() {
+fn runtime_and_database_operations_are_available() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
         .args(["queue", "lock"])
@@ -350,10 +350,88 @@ fn runtime_and_database_config_operations_are_available() {
         .success()
         .stdout(predicate::str::contains("2000"));
     stoker_in(repo.path())
-        .args(["config", "show", "--db-check"])
+        .args(["db", "check"])
         .assert()
         .success()
         .stdout(predicate::str::contains("quick_check"));
+    stoker_in(repo.path())
+        .args(["db", "check", "--integrity"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("integrity_check"));
+
+    let default_backup = stoker_in(repo.path())
+        .args(["db", "backup"])
+        .output()
+        .unwrap();
+    assert!(default_backup.status.success());
+    let default_backup = String::from_utf8_lossy(&default_backup.stdout);
+    let default_backup = default_backup
+        .lines()
+        .find_map(|line| line.strip_prefix("Created SQLite backup: "))
+        .expect("default backup path is printed")
+        .trim_end_matches('.')
+        .to_owned();
+    let default_backup_path = PathBuf::from(&default_backup);
+    assert!(default_backup_path.is_file());
+    assert!(
+        default_backup_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("stoker-")
+    );
+    assert_eq!(
+        default_backup_path.parent().unwrap().file_name().unwrap(),
+        "backups"
+    );
+
+    let explicit_backup = repo.join("explicit-backup.sqlite");
+    let explicit_backup_arg = explicit_backup.to_string_lossy().into_owned();
+    stoker_in(repo.path())
+        .args(["db", "backup", &explicit_backup_arg])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("explicit-backup.sqlite"));
+    assert!(explicit_backup.is_file());
+
+    let marker = stoker_in(repo.path())
+        .args([
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "restore-marker",
+            "--cmd",
+            "echo marker",
+        ])
+        .output()
+        .unwrap();
+    assert!(marker.status.success());
+    let marker_id = String::from_utf8_lossy(&marker.stdout)
+        .split_whitespace()
+        .nth(2)
+        .unwrap()
+        .to_owned();
+    stoker_in(repo.path())
+        .args(["db", "restore", &explicit_backup_arg])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires --yes"));
+    stoker_in(repo.path())
+        .args(["db", "restore", &explicit_backup_arg, "--yes"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["show", &marker_id])
+        .assert()
+        .failure();
+
+    stoker_in(repo.path())
+        .args(["config", "show", "--db-check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument"));
 }
 
 #[test]

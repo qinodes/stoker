@@ -49,6 +49,11 @@ pub enum CliCommand {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    #[command(about = "Check, back up, or restore the SQLite database")]
+    Db {
+        #[command(subcommand)]
+        command: DbCommand,
+    },
     #[command(about = "Remove terminal job records and logs")]
     Clean,
     #[command(about = "Update stoker from GitHub Releases")]
@@ -121,18 +126,7 @@ pub enum ConfigCommand {
         value: Option<String>,
     },
     #[command(about = "Show the current configuration")]
-    Show {
-        #[arg(long, help = "Run SQLite quick_check")]
-        db_check: bool,
-        #[arg(long, help = "Run SQLite integrity_check instead of quick_check")]
-        integrity: bool,
-        #[arg(long, value_name = "PATH", help = "Write a consistent SQLite backup")]
-        db_backup: Option<PathBuf>,
-        #[arg(long, value_name = "PATH", help = "Restore SQLite from a backup")]
-        db_restore: Option<PathBuf>,
-        #[arg(long, help = "Confirm replacing the current database")]
-        yes: bool,
-    },
+    Show,
     #[command(about = "Get a configuration value")]
     Get {
         #[arg(value_enum)]
@@ -147,6 +141,27 @@ pub enum ConfigCommand {
     Restore,
     #[command(about = "Create a manual configuration snapshot")]
     Snapshot,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DbCommand {
+    #[command(about = "Check SQLite health")]
+    Check {
+        #[arg(long, help = "Run SQLite integrity_check instead of quick_check")]
+        integrity: bool,
+    },
+    #[command(about = "Create a consistent SQLite backup")]
+    Backup {
+        #[arg(value_name = "PATH", help = "Optional destination path")]
+        destination: Option<PathBuf>,
+    },
+    #[command(about = "Restore SQLite from a backup")]
+    Restore {
+        #[arg(value_name = "PATH", help = "Backup database to restore")]
+        source: PathBuf,
+        #[arg(long, help = "Confirm replacing the current database")]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

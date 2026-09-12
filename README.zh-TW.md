@@ -353,6 +353,52 @@ stoker show <JOB_ID> --timezone UTC
 
 解析優先順序為 CLI 參數、`config.json`、作業系統時區。
 
+## Log 容量與執行策略
+
+Log 有安全的預設上限，只保留最新尾端內容：
+
+| 設定 | 預設值 | 用途 |
+| --- | ---: | --- |
+| `log-max-bytes-per-job`（stdout + stderr） | 64 MiB | 單一 Job 共用的 log 上限；超過後會淘汰較舊的分段。 |
+| `log-segment-bytes` | 1 MiB | 每個輪替 log 分段的大小。 |
+| `log-max-bytes-total`（terminal Job） | 1 GiB | 所有已結束 Job 保留 log 檔案的總上限。 |
+| `log-retention-jobs` | 100 | 保留 log 檔案的最新 terminal Job 數量。 |
+| `log-disk-reserve-bytes` | 512 MiB | 最低可用磁碟空間；低於此值時 scheduler 會阻擋新的 queued Job。 |
+| `termination-grace-ms` | 500 | 取消後等待正常終止，再進行強制終止的寬限時間。 |
+| `startup-timeout-ms` | 30,000 | 建立 run directory、log 檔與檢查工作目錄的最長時間。 |
+| `max-runtime-ms` | 停用 | Job 可設定的最長執行時間；停用表示不會自動因逾時取消。 |
+
+容量與執行策略只提供 CLI 設定。修改前必須先鎖定 queue，且不能有 `STARTING`、`RUNNING` 或 `CANCELLING` Job；queued Job 可以保留：
+
+```bash
+stoker queue lock
+stoker config set log-max-bytes-per-job 256MiB
+stoker config set log-retention-jobs 30
+stoker config set termination-grace-ms 30000
+stoker config set max-runtime-ms 43200000
+stoker config unset max-runtime-ms
+stoker queue unlock
+```
+
+使用 `stoker config show` 或 `stoker config get <KEY>` 查看數值。容量用盡或 log 寫入失敗時仍會持續讀取子程序輸出，舊分段可能被丟棄，CLI 會提示 log 已截斷。可用空間低於 reserve 時，scheduler 不會啟動下一個 queued Job；`stoker status` 會顯示警告。
+
+## SQLite 檢查與復原
+
+```bash
+stoker db check
+stoker db check --integrity
+stoker db backup
+stoker db backup <BACKUP_PATH>
+```
+
+不指定目的地時，`stoker db backup` 會將帶時間戳的備份寫入 `<STOKER_HOME>/backups/`（通常是 `~/.stoker/backups/`），並輸出實際路徑；指定目的地時則直接寫入該路徑。`backup` 會包含 SQLite WAL 內容。還原前必須停止 scheduler，並確認備份檔案：
+
+```bash
+stoker db restore <BACKUP_PATH> --yes
+```
+
+`restore` 會以 `--yes` 明確確認取代目前資料庫。scheduler 中斷後，進行中的 Job 會標為 `LOST` 並鎖住 queue；請先人工檢查與處理，再執行 `stoker queue unlock`。Stoker 不會自動重試，也不保證外部副作用 exactly-once。
+
 
 ## 補充說明
 

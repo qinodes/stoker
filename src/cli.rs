@@ -29,8 +29,8 @@ mod args;
 #[cfg(test)]
 use args::parse_job_state;
 pub use args::{
-    AddArgs, CancelArgs, Cli, CliCommand, ConfigCommand, ConfigKey, ConfirmationArgs, QueueCommand,
-    SetDescriptionArgs, UiCommand, UiStartArgs,
+    AddArgs, CancelArgs, Cli, CliCommand, ConfigCommand, ConfigKey, ConfirmationArgs, DbCommand,
+    QueueCommand, SetDescriptionArgs, UiCommand, UiStartArgs,
 };
 
 mod dispatch;
@@ -1288,13 +1288,11 @@ mod cli_runtime_tests {
         })
         .unwrap();
         run_command(CliCommand::Config {
-            command: ConfigCommand::Show {
-                db_check: false,
-                integrity: false,
-                db_backup: None,
-                db_restore: None,
-                yes: false,
-            },
+            command: ConfigCommand::Show,
+        })
+        .unwrap();
+        run_command(CliCommand::Db {
+            command: DbCommand::Check { integrity: false },
         })
         .unwrap();
         run_command(CliCommand::Config {

@@ -25,7 +25,7 @@ fn named_subcommand<'a>(command: &'a Command, name: &str) -> &'a Command {
 }
 
 #[test]
-fn public_cli_schema_matches_the_v1_command_contract() {
+fn public_cli_schema_matches_the_cli_command_contract() {
     let command = Cli::command();
     assert_eq!(command.get_name(), "stoker");
     assert_eq!(
@@ -41,6 +41,7 @@ fn public_cli_schema_matches_the_v1_command_contract() {
             "show",
             "jobs",
             "config",
+            "db",
             "clean",
             "update",
             "uninstall",
@@ -88,6 +89,25 @@ fn public_cli_schema_matches_the_v1_command_contract() {
     assert_eq!(
         declared_subcommands(named_subcommand(&command, "config")),
         ["set", "show", "get", "unset", "restore", "snapshot"]
+    );
+    assert_eq!(
+        declared_subcommands(named_subcommand(&command, "db")),
+        ["check", "backup", "restore"]
+    );
+    assert_eq!(
+        declared_arguments(named_subcommand(named_subcommand(&command, "db"), "check")),
+        ["integrity"]
+    );
+    assert_eq!(
+        declared_arguments(named_subcommand(named_subcommand(&command, "db"), "backup")),
+        ["destination"]
+    );
+    assert_eq!(
+        declared_arguments(named_subcommand(
+            named_subcommand(&command, "db"),
+            "restore"
+        )),
+        ["source", "yes"]
     );
     assert_eq!(
         declared_subcommands(named_subcommand(&command, "queue")),

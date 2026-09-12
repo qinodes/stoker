@@ -1,7 +1,10 @@
 //! SQLite health and recovery commands.
 
+use chrono::{SecondsFormat, Utc};
 use fs2::FileExt;
 use std::fs::OpenOptions;
+use std::path::PathBuf;
+use uuid::Uuid;
 
 use crate::{StokerPaths, Store};
 
@@ -12,7 +15,7 @@ pub(crate) enum DatabaseOperation {
         integrity: bool,
     },
     Backup {
-        destination: std::path::PathBuf,
+        destination: Option<PathBuf>,
     },
     Restore {
         source: std::path::PathBuf,
@@ -33,6 +36,12 @@ pub(crate) fn database(paths: &StokerPaths, command: DatabaseOperation) -> anyho
             }
         }
         DatabaseOperation::Backup { destination } => {
+            let destination = destination.unwrap_or(default_backup_path(paths)?);
+            if let Some(parent) = destination.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent)?;
+            }
             let store = Store::open(&paths.database)?;
             store.backup_to(&destination)?;
             print_success(format!("Created SQLite backup: {}.", destination.display()));
@@ -55,6 +64,14 @@ pub(crate) fn database(paths: &StokerPaths, command: DatabaseOperation) -> anyho
         }
     }
     Ok(())
+}
+
+fn default_backup_path(paths: &StokerPaths) -> anyhow::Result<PathBuf> {
+    let directory = paths.root.join("backups");
+    std::fs::create_dir_all(&directory)?;
+    let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let timestamp = timestamp.replace(['-', ':'], "");
+    Ok(directory.join(format!("stoker-{timestamp}-{}.sqlite", Uuid::new_v4())))
 }
 
 fn ensure_service_stopped(paths: &StokerPaths) -> anyhow::Result<()> {

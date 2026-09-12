@@ -8,8 +8,9 @@ use crate::adapters::LocalSchedulerGateway;
 use crate::ui;
 use crate::{ServiceClient, StokerPaths, Store};
 
-use super::args::{Cli, CliCommand, QueueCommand, UiCommand};
+use super::args::{Cli, CliCommand, DbCommand, QueueCommand, UiCommand};
 use super::commands::configuration::config;
+use super::commands::db::{DatabaseOperation, database};
 use super::commands::jobs::{add, cancel, clean, commit, jobs, set_description, show};
 use super::commands::logs::logs;
 use super::commands::queue::{lock_queue, queue_edit, unlock_queue};
@@ -45,6 +46,17 @@ pub(crate) fn run_command_with_paths(
         CliCommand::Show { id } => show(paths, id, timezone),
         CliCommand::Jobs { user, state } => jobs(paths, user.as_deref(), state, timezone),
         CliCommand::Config { command } => config(paths, command, timezone),
+        CliCommand::Db { command } => match command {
+            DbCommand::Check { integrity } => {
+                database(paths, DatabaseOperation::Check { integrity })
+            }
+            DbCommand::Backup { destination } => {
+                database(paths, DatabaseOperation::Backup { destination })
+            }
+            DbCommand::Restore { source, yes } => {
+                database(paths, DatabaseOperation::Restore { source, yes })
+            }
+        },
         CliCommand::Clean => clean(paths),
         CliCommand::Update(args) => update(args.yes),
         CliCommand::Uninstall(args) => uninstall(args.yes),
