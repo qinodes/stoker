@@ -86,9 +86,15 @@ impl Service {
     pub async fn run(self) -> anyhow::Result<()> {
         // A service never reattaches to processes from a previous instance.
         // Recover before the scheduler can claim any new queue work.
-        self.store
-            .mark_runtime_jobs_lost()
+        let recovered = self
+            .store
+            .recover_runtime_jobs()
             .context("recover interrupted jobs")?;
+        if recovered {
+            eprintln!(
+                "scheduler recovery fenced the queue after an interrupted job; inspect the LOST job and run `stoker queue unlock` only after reconciliation"
+            );
+        }
         let scheduler = std::sync::Arc::new(Scheduler::new(
             self.paths.clone(),
             std::sync::Arc::clone(&self.store),
@@ -104,7 +110,7 @@ mod tests {
     use super::*;
     use crate::ipc::{decode_response, encode_request};
     use crate::process::{ManagedProcess, ProcessController, ProcessSpec};
-    use crate::scheduler::{LogEvent, LogMessage, OutputStream};
+    use crate::scheduler::{LOG_CHUNK_SIZE, LogEvent, LogMessage, OutputStream};
     use crate::{JobState, NewJob};
     use async_trait::async_trait;
     use futures_util::{SinkExt, StreamExt};
@@ -442,6 +448,59 @@ mod tests {
             stream: LogStream::Stderr,
             bytes: b"err".to_vec(),
         }));
+    }
+
+    #[tokio::test]
+    async fn stream_logs_splits_large_history_into_bounded_frames() {
+        let (directory, store, scheduler) = scheduler_fixture();
+        let id = store
+            .create_job(NewJob {
+                name: "large history".into(),
+                user: "test".into(),
+                description: None,
+                cwd: PathBuf::from("."),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.cancel_not_started(id).unwrap();
+        let run_dir = directory.path().join("runs").join(id.to_string());
+        std::fs::create_dir_all(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("stdout.log"),
+            vec![b'z'; LOG_CHUNK_SIZE * 2 + 3],
+        )
+        .unwrap();
+        std::fs::write(run_dir.join("stderr.log"), b"").unwrap();
+
+        let (server_stream, client_stream) = tokio::io::duplex(8192);
+        let mut server_framed = Framed::new(server_stream, LengthDelimitedCodec::new());
+        let mut client_framed = Framed::new(client_stream, LengthDelimitedCodec::new());
+        let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
+        let server_task = tokio::spawn(async move {
+            stream_logs(&mut server_framed, &scheduler, id, &mut shutdown_rx).await
+        });
+
+        let mut stdout_bytes = 0;
+        let mut chunk_count = 0;
+        loop {
+            let frame = client_framed.next().await.unwrap().unwrap();
+            let response = decode_response(&frame).unwrap();
+            match response {
+                IpcResponse::LogChunk {
+                    stream: LogStream::Stdout,
+                    bytes,
+                } => {
+                    assert!(bytes.len() <= LOG_CHUNK_SIZE);
+                    stdout_bytes += bytes.len();
+                    chunk_count += 1;
+                }
+                IpcResponse::LogEnd => break,
+                _ => {}
+            }
+        }
+        server_task.await.unwrap().unwrap();
+        assert_eq!(stdout_bytes, LOG_CHUNK_SIZE * 2 + 3);
+        assert_eq!(chunk_count, 3);
     }
 
     #[tokio::test]

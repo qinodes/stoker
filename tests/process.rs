@@ -150,6 +150,25 @@ async fn spawning_a_missing_program_reports_an_error() {
     assert!(error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error().is_some());
 }
 
+#[tokio::test]
+async fn log_capture_failure_does_not_change_successful_command_status() {
+    let paths = process_paths();
+    std::fs::create_dir_all(&paths.stdout).unwrap();
+    let spec = ProcessSpec {
+        program: OsString::from(if cfg!(windows) { "cmd" } else { "sh" }),
+        args: if cfg!(windows) {
+            vec![OsString::from("/C"), OsString::from("exit 0")]
+        } else {
+            vec![OsString::from("-c"), OsString::from("exit 0")]
+        },
+        cwd: std::env::current_dir().unwrap(),
+        stdout_log: paths.stdout,
+        stderr_log: paths.stderr,
+    };
+    let process = controller().spawn(spec).await.unwrap();
+    assert_eq!(process.wait().await.unwrap().code(), Some(0));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn terminate_tree_stops_descendants_too() {

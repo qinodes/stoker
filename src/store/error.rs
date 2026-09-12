@@ -21,6 +21,8 @@ pub enum StoreError {
     QueueLocked,
     #[error("queue is unlocked; run 'stoker queue lock' first")]
     QueueUnlocked,
+    #[error("cannot change log policy while job {id} is {state}; wait for it to finish")]
+    ActiveJob { id: Uuid, state: JobState },
     #[error("cannot move job {id} to queue position {target_order}; queue has {queued_count} jobs")]
     InvalidQueueOrder {
         id: Uuid,

@@ -305,6 +305,58 @@ fn config_commands_show_get_unset_and_create_manual_snapshot() {
 }
 
 #[test]
+fn log_capacity_config_requires_queue_lock_and_supports_defaults() {
+    let repo = TestRepo::new();
+    stoker_in(repo.path())
+        .args(["config", "set", "log-max-bytes-per-job", "2MiB"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("queue is unlocked"));
+
+    stoker_in(repo.path())
+        .args(["queue", "lock"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["config", "set", "log-max-bytes-per-job", "2MiB"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["config", "get", "log-max-bytes-per-job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2097152"));
+    stoker_in(repo.path())
+        .args(["config", "unset", "log-max-bytes-per-job"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("built-in default"));
+}
+
+#[test]
+fn runtime_and_database_config_operations_are_available() {
+    let repo = TestRepo::new();
+    stoker_in(repo.path())
+        .args(["queue", "lock"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["config", "set", "termination-grace-ms", "2000"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["config", "get", "termination-grace-ms"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2000"));
+    stoker_in(repo.path())
+        .args(["config", "show", "--db-check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("quick_check"));
+}
+
+#[test]
 fn add_rejects_empty_user_and_name() {
     let repo = TestRepo::new();
     stoker_in(repo.path())

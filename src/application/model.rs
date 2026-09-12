@@ -136,6 +136,7 @@ pub struct LogContent {
     pub bytes: Vec<u8>,
     pub available: bool,
     pub truncated: bool,
+    pub capture_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

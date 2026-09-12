@@ -1,13 +1,15 @@
 //! One-job process execution and durable cleanup.
 
 use std::ffi::OsString;
+use std::future;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use tokio::sync::{broadcast, watch};
 
 use crate::domain::{Job, JobState};
-use crate::process::ProcessSpec;
+use crate::process::{LogCapturePolicy, ProcessLaunchPolicy, ProcessSpec};
 use crate::{Store, StoreError};
 
 use super::logs::{flush_log_events, watch_logs};
@@ -66,21 +68,37 @@ impl Scheduler {
         // time. Stoker does not inspect or manage that directory's contents.
         let cwd = job.cwd.clone();
         let mut sender = None;
+        let mut timed_out = false;
         let result = async {
             // Keep setup inside the guarded path so a filesystem failure is
             // persisted as FAILED instead of escaping with STARTING claimed.
-            tokio::fs::create_dir_all(&run_dir).await?;
-            tokio::fs::write(&stdout, &[]).await?;
-            tokio::fs::write(&stderr, &[]).await?;
+            let startup_timeout = Duration::from_millis(
+                self.store
+                    .runtime_policy()
+                    .context("read startup timeout policy")?
+                    .startup_timeout_ms,
+            );
+            tokio::time::timeout(startup_timeout, async {
+                tokio::fs::create_dir_all(&run_dir).await?;
+                tokio::fs::write(&stdout, &[]).await?;
+                tokio::fs::write(&stderr, &[]).await?;
+                Ok::<(), std::io::Error>(())
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("job setup timed out after {:?}", startup_timeout))??;
             let (log_sender, _) = broadcast::channel(256);
             self.logs
                 .lock()
                 .map_err(|_| anyhow::anyhow!("scheduler log map is poisoned"))?
                 .insert(job.id, log_sender.clone());
             sender = Some(log_sender.clone());
-            let metadata = tokio::fs::metadata(&cwd)
-                .await
-                .with_context(|| format!("inspect job cwd {}", cwd.display()))?;
+            let metadata = tokio::time::timeout(
+                startup_timeout,
+                tokio::fs::metadata(&cwd),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("job setup timed out after {:?}", startup_timeout))?
+            .with_context(|| format!("inspect job cwd {}", cwd.display()))?;
             if !metadata.is_dir() {
                 anyhow::bail!("job cwd {} is not a directory", cwd.display());
             }
@@ -104,14 +122,22 @@ impl Scheduler {
                         args.iter().cloned().map(Into::into).collect(),
                     )
                 };
+            let log_policy = self.store.log_policy().context("read log policy")?;
+            let runtime_policy = self.store.runtime_policy().context("read runtime policy")?;
             let process = self
                 .controller
-                .spawn(ProcessSpec {
+                .spawn_with_policy(ProcessSpec {
                     program,
                     args,
                     cwd,
                     stdout_log: stdout.clone(),
                     stderr_log: stderr.clone(),
+                }, ProcessLaunchPolicy {
+                    log_policy: LogCapturePolicy {
+                        max_bytes_per_job: log_policy.max_bytes_per_job,
+                        segment_bytes: log_policy.segment_bytes,
+                    },
+                    termination_grace: Duration::from_millis(runtime_policy.termination_grace_ms),
                 })
                 .await
                 .context("spawn job process")?;
@@ -146,10 +172,12 @@ impl Scheduler {
                     ));
                 }
             }
+            let log_offsets = Arc::new(tokio::sync::Mutex::new([0_u64, 0_u64]));
             let watcher = tokio::spawn(watch_logs(
                 stdout.clone(),
                 stderr.clone(),
                 log_sender.clone(),
+                log_offsets.clone(),
             ));
             let status = if *cancel.borrow() {
                 let _ = self.store.request_cancelling(job.id);
@@ -159,6 +187,14 @@ impl Scheduler {
                     .map_err(|error| anyhow::anyhow!("wait for cancelled job process: {error}"))?
                     .context("wait for cancelled job process")?
             } else {
+                let runtime_timeout = async {
+                    match runtime_policy.max_runtime_ms {
+                        Some(milliseconds) => {
+                            tokio::time::sleep(Duration::from_millis(milliseconds)).await;
+                        }
+                        None => future::pending::<()>().await,
+                    }
+                };
                 tokio::select! {
                     status = &mut process_task => status
                         .map_err(|error| anyhow::anyhow!("wait for job process: {error}"))?
@@ -182,15 +218,37 @@ impl Scheduler {
                             .map_err(|error| anyhow::anyhow!("wait for cancelled job process: {error}"))?
                             .context("wait for cancelled job process")?
                     }
+                    _ = runtime_timeout => {
+                        timed_out = true;
+                        if let Err(error) = self.store.request_cancelling(job.id) {
+                            let current = self.store.get_job(job.id).context("inspect timed-out job")?;
+                            if current.state != JobState::Cancelling {
+                                return Err(error).context(format!(
+                                    "mark timed-out job cancelling while job is {}",
+                                    current.state
+                                ));
+                            }
+                        }
+                        let _ = process_cancel_tx.take().map(|sender| sender.send(()));
+                        (&mut process_task)
+                            .await
+                            .map_err(|error| anyhow::anyhow!("wait for timed-out job process: {error}"))?
+                            .context("wait for timed-out job process")?
+                    }
                 }
             };
             watcher.abort();
             let _ = watcher.await;
-            flush_log_events(&stdout, &stderr, &log_sender).await;
+            flush_log_events(&stdout, &stderr, &log_sender, &log_offsets).await;
             let code = status.code();
             self.execution_store
                 .finish(job.id, code, None)
                 .context("record job result")?;
+            if timed_out {
+                self.execution_store
+                    .record_failure_detail(job.id, "maximum runtime exceeded; process cancellation requested")
+                    .context("record maximum runtime diagnostic")?;
+            }
             Ok::<(), anyhow::Error>(())
         }
         .await;

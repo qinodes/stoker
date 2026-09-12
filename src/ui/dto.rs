@@ -104,6 +104,7 @@ pub(super) struct StatusResponse {
     pub scheduler: SchedulerResponse,
     pub counts: CountResponse,
     pub queue_locked: bool,
+    pub disk_pressure: bool,
     pub timezone: TimezoneResponse,
     pub generated_at: String,
 }
@@ -239,6 +240,8 @@ pub(super) struct LogsResponse {
     pub stderr_available: bool,
     pub stdout_truncated: bool,
     pub stderr_truncated: bool,
+    pub stdout_capture_error: Option<String>,
+    pub stderr_capture_error: Option<String>,
     pub message: Option<String>,
 }
 

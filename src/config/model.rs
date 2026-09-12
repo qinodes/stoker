@@ -6,6 +6,14 @@ use serde::{Deserialize, Serialize};
 
 pub(super) const SNAPSHOT_VERSION: u8 = 1;
 
+pub const DEFAULT_LOG_MAX_BYTES_PER_JOB: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_LOG_SEGMENT_BYTES: u64 = 1024 * 1024;
+pub const DEFAULT_LOG_MAX_BYTES_TOTAL: u64 = 1024 * 1024 * 1024;
+pub const DEFAULT_LOG_RETENTION_JOBS: u64 = 100;
+pub const DEFAULT_LOG_DISK_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
+pub const DEFAULT_TERMINATION_GRACE_MS: u64 = 500;
+pub const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 30_000;
+
 fn default_snapshot_version() -> u8 {
     SNAPSHOT_VERSION
 }
@@ -14,6 +22,85 @@ fn default_snapshot_version() -> u8 {
 pub struct StokerConfig {
     #[serde(default)]
     pub timezone: Option<String>,
+}
+
+/// Runtime log retention and disk-pressure policy. These values are stored in
+/// SQLite so updates can share the queue-lock transaction with scheduler
+/// state, while the timezone configuration remains in the legacy JSON file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogPolicy {
+    pub max_bytes_per_job: u64,
+    pub segment_bytes: u64,
+    pub max_bytes_total: u64,
+    pub retention_jobs: u64,
+    pub disk_reserve_bytes: u64,
+}
+
+impl Default for LogPolicy {
+    fn default() -> Self {
+        Self {
+            max_bytes_per_job: DEFAULT_LOG_MAX_BYTES_PER_JOB,
+            segment_bytes: DEFAULT_LOG_SEGMENT_BYTES,
+            max_bytes_total: DEFAULT_LOG_MAX_BYTES_TOTAL,
+            retention_jobs: DEFAULT_LOG_RETENTION_JOBS,
+            disk_reserve_bytes: DEFAULT_LOG_DISK_RESERVE_BYTES,
+        }
+    }
+}
+
+impl LogPolicy {
+    pub fn validate(self) -> Result<(), String> {
+        if self.max_bytes_per_job == 0 {
+            return Err("log max bytes per job must be greater than zero".into());
+        }
+        if self.segment_bytes == 0 {
+            return Err("log segment bytes must be greater than zero".into());
+        }
+        if self.segment_bytes.saturating_mul(2) > self.max_bytes_per_job {
+            return Err(
+                "log segment bytes cannot exceed half of the shared per-job log limit".into(),
+            );
+        }
+        if self.max_bytes_total < self.max_bytes_per_job {
+            return Err("global log limit cannot be smaller than the per-job log limit".into());
+        }
+        if self.disk_reserve_bytes == 0 {
+            return Err("log disk reserve bytes must be greater than zero".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimePolicy {
+    pub termination_grace_ms: u64,
+    pub max_runtime_ms: Option<u64>,
+    pub startup_timeout_ms: u64,
+}
+
+impl Default for RuntimePolicy {
+    fn default() -> Self {
+        Self {
+            termination_grace_ms: DEFAULT_TERMINATION_GRACE_MS,
+            max_runtime_ms: None,
+            startup_timeout_ms: DEFAULT_STARTUP_TIMEOUT_MS,
+        }
+    }
+}
+
+impl RuntimePolicy {
+    pub fn validate(self) -> Result<(), String> {
+        if self.termination_grace_ms == 0 {
+            return Err("termination grace must be greater than zero".into());
+        }
+        if self.startup_timeout_ms == 0 {
+            return Err("startup timeout must be greater than zero".into());
+        }
+        if self.max_runtime_ms == Some(0) {
+            return Err("maximum runtime must be greater than zero when set".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

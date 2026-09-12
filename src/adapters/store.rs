@@ -106,6 +106,13 @@ pub(super) fn map_store_error(error: StoreError) -> JobRepositoryError {
         }
         StoreError::QueueLocked => JobRepositoryError::Conflict(Conflict::QueueLocked),
         StoreError::QueueUnlocked => JobRepositoryError::Conflict(Conflict::QueueUnlocked),
+        StoreError::ActiveJob { id, state } => {
+            JobRepositoryError::Conflict(Conflict::InvalidJobState {
+                id,
+                state,
+                operation: "change log policy",
+            })
+        }
         StoreError::InvalidQueueOrder { .. } => JobRepositoryError::Conflict(Conflict::StaleQueue),
         StoreError::DescriptionConflict {
             id,

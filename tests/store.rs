@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Barrier};
 
 use rusqlite::{Connection, params};
+use stoker::config::{LogPolicy, RuntimePolicy};
 use stoker::{JobState, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, NewJob, Store, StoreError};
 use stoker::{MAX_JOB_DESCRIPTION_LENGTH, normalize_description};
 use tempfile::TempDir;
@@ -268,6 +269,64 @@ fn queue_lock_rejects_queue_mutations_but_allows_cancellation() {
         store.cancel_not_started(queued).unwrap().state,
         JobState::Cancelled
     );
+}
+
+#[test]
+fn log_policy_defaults_and_requires_a_locked_idle_queue() {
+    let store = test_store();
+    let defaults = store.log_policy().unwrap();
+    assert_eq!(defaults, LogPolicy::default());
+
+    let mut changed = defaults;
+    changed.max_bytes_per_job *= 2;
+    assert!(matches!(
+        store.set_log_policy(changed),
+        Err(StoreError::QueueUnlocked)
+    ));
+
+    store.lock_queue().unwrap();
+    store.set_log_policy(changed).unwrap();
+    assert_eq!(store.log_policy().unwrap(), changed);
+}
+
+#[test]
+fn log_policy_rejects_changes_while_runtime_job_is_active() {
+    let store = test_store();
+    let id = store.create_job(new_job()).unwrap();
+    store.commit_job(id).unwrap();
+    store.lock_queue().unwrap();
+    // Simulate the scheduler's durable STARTING state while the queue remains
+    // locked. The policy update must fail closed until cleanup clears it.
+    // Unlock only long enough to claim, then re-lock before changing policy.
+    store.unlock_queue().unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.lock_queue().unwrap();
+    let error = store.set_log_policy(LogPolicy::default()).unwrap_err();
+    assert!(matches!(
+        error,
+        StoreError::ActiveJob {
+            state: JobState::Starting,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn runtime_policy_defaults_and_is_gated_by_queue_lock_and_active_state() {
+    let store = test_store();
+    assert_eq!(store.runtime_policy().unwrap(), RuntimePolicy::default());
+    let changed = RuntimePolicy {
+        termination_grace_ms: 2_000,
+        max_runtime_ms: Some(10_000),
+        ..RuntimePolicy::default()
+    };
+    assert!(matches!(
+        store.set_runtime_policy(changed),
+        Err(StoreError::QueueUnlocked)
+    ));
+    store.lock_queue().unwrap();
+    store.set_runtime_policy(changed).unwrap();
+    assert_eq!(store.runtime_policy().unwrap(), changed);
 }
 
 #[test]
@@ -847,6 +906,35 @@ fn restart_marks_only_runtime_states_lost() {
     assert_eq!(store.get_job(running).unwrap().state, JobState::Lost);
     assert_eq!(store.get_job(cancelling).unwrap().state, JobState::Lost);
     assert_eq!(store.get_job(queued).unwrap().state, JobState::Queued);
+}
+
+#[test]
+fn recovery_fences_queue_until_operator_unlocks_it() {
+    let store = test_store();
+    let id = store.create_job(new_job_named("runtime")).unwrap();
+    store.commit_job(id).unwrap();
+    store.claim_next().unwrap().unwrap();
+    store.unlock_queue().unwrap();
+    assert!(store.recover_runtime_jobs().unwrap());
+    assert_eq!(store.get_job(id).unwrap().state, JobState::Lost);
+    assert!(store.queue_locked().unwrap());
+    assert!(store.claim_next().unwrap().is_none());
+    store.unlock_queue().unwrap();
+    assert!(!store.queue_locked().unwrap());
+}
+
+#[test]
+fn sqlite_health_checks_and_backup_round_trip() {
+    let dir = TempDir::new().unwrap();
+    let database = dir.path().join("stoker.db");
+    let backup = dir.path().join("backup.sqlite");
+    let store = Store::open(&database).unwrap();
+    store.create_job(new_job()).unwrap();
+    store.quick_check().unwrap();
+    store.integrity_check().unwrap();
+    store.backup_to(&backup).unwrap();
+    let restored = Store::open(&backup).unwrap();
+    assert_eq!(restored.list_jobs(None).unwrap().len(), 1);
 }
 
 #[test]

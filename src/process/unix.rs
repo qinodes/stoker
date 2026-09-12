@@ -9,9 +9,12 @@ use tokio::process::{Child, Command};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, sleep};
 
-use super::{ManagedProcess, ProcessSpec, finish_pipes, spawn_pipe_writer};
+use super::{ManagedProcess, ProcessLaunchPolicy, ProcessSpec, finish_pipes, spawn_pipe_writer};
 
-pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProcess>> {
+pub(crate) async fn spawn(
+    spec: ProcessSpec,
+    policy: ProcessLaunchPolicy,
+) -> io::Result<Box<dyn ManagedProcess>> {
     let mut command = Command::new(&spec.program);
     command
         .args(&spec.args)
@@ -41,8 +44,8 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
         let _ = child.start_kill();
         io::Error::other("spawned process has no stderr pipe")
     })?;
-    let stdout_task = spawn_pipe_writer(stdout, spec.stdout_log);
-    let stderr_task = spawn_pipe_writer(stderr, spec.stderr_log);
+    let stdout_task = spawn_pipe_writer(stdout, spec.stdout_log, policy.log_policy);
+    let stderr_task = spawn_pipe_writer(stderr, spec.stderr_log, policy.log_policy);
 
     Ok(Box::new(UnixManagedProcess {
         pid,
@@ -51,6 +54,7 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
         stdout_task: Some(stdout_task),
         stderr_task: Some(stderr_task),
         terminated: false,
+        termination_grace: policy.termination_grace,
     }))
 }
 
@@ -61,6 +65,7 @@ struct UnixManagedProcess {
     stdout_task: Option<JoinHandle<io::Result<()>>>,
     stderr_task: Option<JoinHandle<io::Result<()>>>,
     terminated: bool,
+    termination_grace: Duration,
 }
 
 #[async_trait]
@@ -99,9 +104,15 @@ impl ManagedProcess for UnixManagedProcess {
                 // escalate for commands that ignore or trap SIGTERM. The
                 // process group is used for both signals so descendants are
                 // covered by the same bounded cancellation path.
-                for _ in 0..50 {
+                let deadline = tokio::time::Instant::now() + self.termination_grace;
+                loop {
                     match killpg(Pid::from_raw(self.group_id as i32), None) {
-                        Ok(()) => sleep(Duration::from_millis(10)).await,
+                        Ok(()) => {
+                            if tokio::time::Instant::now() >= deadline {
+                                break;
+                            }
+                            sleep(Duration::from_millis(10)).await
+                        }
                         Err(error) if group_is_gone(error) => return Ok(()),
                         Err(error) => {
                             return Err(io::Error::from_raw_os_error(error as i32));
@@ -136,7 +147,13 @@ impl UnixManagedProcess {
             .stderr_task
             .take()
             .ok_or_else(|| io::Error::other("stderr task already joined"))?;
-        finish_pipes(stdout_task, stderr_task).await?;
+        if let Err(error) = finish_pipes(stdout_task, stderr_task).await {
+            // A log sink may fail independently of the child command (for
+            // example ENOSPC). The child exit status remains authoritative;
+            // the writer records capture_error metadata and the scheduler
+            // keeps the command outcome separate from degraded capture.
+            eprintln!("process {0} log capture degraded: {error}", self.pid);
+        }
         wait_for_group_exit(self.group_id).await?;
         Ok(status)
     }

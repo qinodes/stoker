@@ -115,15 +115,28 @@ impl Store {
     }
 
     pub fn mark_runtime_jobs_lost(&self) -> Result<(), StoreError> {
+        self.mark_runtime_jobs_lost_internal(false).map(|_| ())
+    }
+
+    /// Recover runtime rows after a service restart and fence queue claims if
+    /// any prior execution may still have survived the crash boundary.
+    pub fn recover_runtime_jobs(&self) -> Result<bool, StoreError> {
+        self.mark_runtime_jobs_lost_internal(true)
+    }
+
+    fn mark_runtime_jobs_lost_internal(&self, fence_queue: bool) -> Result<bool, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute(
+        let changed = transaction.execute(
             "UPDATE jobs SET state = 'LOST', finished_at = ?1
              WHERE state IN ('STARTING', 'RUNNING', 'CANCELLING')",
             [Utc::now().to_rfc3339()],
         )?;
+        if fence_queue && changed > 0 {
+            transaction.execute("UPDATE settings SET queue_locked = 1 WHERE id = 1", [])?;
+        }
         transaction.commit()?;
-        Ok(())
+        Ok(changed > 0)
     }
 
     pub(super) fn current_state(

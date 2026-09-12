@@ -86,6 +86,12 @@ fn map_store_error(store: &StoreError, error: &anyhow::Error, operation: &'stati
         }),
         StoreError::QueueLocked => IpcError::new(IpcErrorCode::QueueLocked, message),
         StoreError::QueueUnlocked => IpcError::new(IpcErrorCode::QueueUnlocked, message),
+        StoreError::ActiveJob { id, state } => IpcError::new(IpcErrorCode::InvalidState, message)
+            .with_details(IpcErrorDetails::Job {
+                id: *id,
+                state: Some(JobStateDto::from(*state)),
+                operation: operation.to_owned(),
+            }),
         StoreError::InvalidQueueOrder {
             id,
             target_order,

@@ -1,6 +1,8 @@
 //! Job log command orchestration.
 
-use std::io::Write;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::Path;
 
 use futures_util::StreamExt;
 use uuid::Uuid;
@@ -8,6 +10,7 @@ use uuid::Uuid;
 use crate::application;
 use crate::domain::JobState;
 use crate::ipc::{ClientLogEvent, LogStream};
+use crate::log_storage;
 use crate::{ServiceClient, StokerPaths, Store};
 
 use super::super::{application_cli_error, runtime};
@@ -34,8 +37,10 @@ pub(crate) fn logs(paths: &StokerPaths, id: Uuid, follow: bool) -> anyhow::Resul
         });
     }
     let store = Store::open(&paths.database)?;
+    // Read only metadata here; stream the actual bytes below so a large log
+    // cannot be materialized as one Vec before it reaches the terminal.
     let logs =
-        application::logs::read_logs(&store, paths, id, None).map_err(application_cli_error)?;
+        application::logs::read_logs(&store, paths, id, Some(0)).map_err(application_cli_error)?;
     if !logs.stdout.available && !logs.stderr.available {
         match logs.job.state {
             JobState::Draft => anyhow::bail!(
@@ -47,7 +52,75 @@ pub(crate) fn logs(paths: &StokerPaths, id: Uuid, follow: bool) -> anyhow::Resul
             _ => anyhow::bail!("No logs are available for job {id} yet."),
         }
     }
-    std::io::stdout().write_all(&logs.stdout.bytes)?;
-    std::io::stderr().write_all(&logs.stderr.bytes)?;
+    if logs.stdout.truncated {
+        eprintln!("stdout log is truncated; older output was discarded");
+    }
+    if logs.stderr.truncated {
+        eprintln!("stderr log is truncated; older output was discarded");
+    }
+    for (name, path) in [
+        ("stdout", paths.runs.join(id.to_string()).join("stdout.log")),
+        ("stderr", paths.runs.join(id.to_string()).join("stderr.log")),
+    ] {
+        if let Some(metadata) = log_storage::read_metadata(&path)?
+            && let Some(error) = metadata.capture_error
+        {
+            eprintln!("{name} log capture degraded: {error}");
+        }
+    }
+    stream_log(
+        &paths.runs.join(id.to_string()).join("stdout.log"),
+        &mut std::io::stdout(),
+    )?;
+    stream_log(
+        &paths.runs.join(id.to_string()).join("stderr.log"),
+        &mut std::io::stderr(),
+    )?;
     Ok(())
+}
+
+fn stream_log(path: &Path, output: &mut impl Write) -> anyhow::Result<()> {
+    let segments = log_storage::list_segments(path)?;
+    if segments.is_empty() {
+        return Ok(());
+    }
+    let mut buffer = vec![0_u8; crate::scheduler::LOG_CHUNK_SIZE];
+    for segment in segments {
+        let mut file = File::open(segment)?;
+        loop {
+            let bytes_read = file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..bytes_read])?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_log_preserves_large_output_without_one_file_sized_buffer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("stdout.log");
+        let payload = vec![b'q'; crate::scheduler::LOG_CHUNK_SIZE * 2 + 5];
+        std::fs::write(&path, &payload).unwrap();
+
+        let mut output = Vec::new();
+        stream_log(&path, &mut output).unwrap();
+        assert_eq!(output, payload);
+    }
+
+    #[test]
+    fn stream_log_treats_a_removed_stream_as_empty() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut output = Vec::new();
+
+        stream_log(&directory.path().join("missing.log"), &mut output).unwrap();
+
+        assert!(output.is_empty());
+    }
 }

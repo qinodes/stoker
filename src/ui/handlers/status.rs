@@ -16,6 +16,16 @@ pub(in crate::ui) async fn status(
     let timezone =
         crate::config::resolve_timezone(&state.paths, None).map_err(ApiError::internal)?;
     let queue = application::queue::queue_status(&state.store, &state.scheduler).await?;
+    let disk_pressure = state
+        .store
+        .log_policy()
+        .ok()
+        .and_then(|policy| {
+            crate::log_storage::available_space(&state.paths.runs)
+                .ok()
+                .map(|free| free < policy.disk_reserve_bytes)
+        })
+        .unwrap_or(false);
     let scheduler = match &queue.scheduler {
         Some(service) => SchedulerResponse {
             running: true,
@@ -52,6 +62,7 @@ pub(in crate::ui) async fn status(
                 .count(),
         },
         queue_locked: queue.snapshot.locked,
+        disk_pressure,
         timezone: TimezoneResponse::from(&timezone),
         generated_at: Utc::now().to_rfc3339(),
     }))

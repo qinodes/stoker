@@ -1288,7 +1288,13 @@ mod cli_runtime_tests {
         })
         .unwrap();
         run_command(CliCommand::Config {
-            command: ConfigCommand::Show,
+            command: ConfigCommand::Show {
+                db_check: false,
+                integrity: false,
+                db_backup: None,
+                db_restore: None,
+                yes: false,
+            },
         })
         .unwrap();
         run_command(CliCommand::Config {

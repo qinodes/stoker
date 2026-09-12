@@ -3,12 +3,14 @@ mod v002_command_line;
 mod v003_queue_order;
 mod v004_description;
 mod v005_text_constraints;
+mod v006_log_policy;
+mod v007_runtime_policy;
 
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use super::error::StoreError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 5;
+pub const CURRENT_SCHEMA_VERSION: u32 = 7;
 
 type Migration = fn(&Transaction<'_>) -> Result<(), StoreError>;
 
@@ -18,6 +20,8 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (3, v003_queue_order::apply),
     (4, v004_description::apply),
     (5, v005_text_constraints::apply),
+    (6, v006_log_policy::apply),
+    (7, v007_runtime_policy::apply),
 ];
 
 pub(super) fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
@@ -120,6 +124,23 @@ fn validate_latest_schema(connection: &Connection) -> Result<(), StoreError> {
         if !jobs_sql.contains(constraint) {
             return Err(StoreError::InvalidData(format!(
                 "schema version {CURRENT_SCHEMA_VERSION} is missing jobs constraint {constraint}"
+            )));
+        }
+    }
+    let settings_columns = table_columns(connection, "settings")?;
+    for required in [
+        "log_max_bytes_per_job",
+        "log_segment_bytes",
+        "log_max_bytes_total",
+        "log_retention_jobs",
+        "log_disk_reserve_bytes",
+        "termination_grace_ms",
+        "max_runtime_ms",
+        "startup_timeout_ms",
+    ] {
+        if !settings_columns.iter().any(|column| column == required) {
+            return Err(StoreError::InvalidData(format!(
+                "schema version {CURRENT_SCHEMA_VERSION} is missing settings.{required}"
             )));
         }
     }

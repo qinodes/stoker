@@ -1,6 +1,7 @@
 //! Declarative CLI schema. This module performs no I/O.
 
 use std::net::IpAddr;
+use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use uuid::Uuid;
@@ -120,7 +121,18 @@ pub enum ConfigCommand {
         value: Option<String>,
     },
     #[command(about = "Show the current configuration")]
-    Show,
+    Show {
+        #[arg(long, help = "Run SQLite quick_check")]
+        db_check: bool,
+        #[arg(long, help = "Run SQLite integrity_check instead of quick_check")]
+        integrity: bool,
+        #[arg(long, value_name = "PATH", help = "Write a consistent SQLite backup")]
+        db_backup: Option<PathBuf>,
+        #[arg(long, value_name = "PATH", help = "Restore SQLite from a backup")]
+        db_restore: Option<PathBuf>,
+        #[arg(long, help = "Confirm replacing the current database")]
+        yes: bool,
+    },
     #[command(about = "Get a configuration value")]
     Get {
         #[arg(value_enum)]
@@ -140,6 +152,14 @@ pub enum ConfigCommand {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum ConfigKey {
     Timezone,
+    LogMaxBytesPerJob,
+    LogSegmentBytes,
+    LogMaxBytesTotal,
+    LogRetentionJobs,
+    LogDiskReserveBytes,
+    TerminationGraceMs,
+    MaxRuntimeMs,
+    StartupTimeoutMs,
 }
 
 #[derive(Debug, Subcommand)]

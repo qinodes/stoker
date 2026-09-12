@@ -21,10 +21,21 @@ CREATE TABLE IF NOT EXISTS jobs (
 
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    queue_locked INTEGER NOT NULL DEFAULT 0 CHECK (queue_locked IN (0, 1))
+    queue_locked INTEGER NOT NULL DEFAULT 0 CHECK (queue_locked IN (0, 1)),
+    log_max_bytes_per_job INTEGER NOT NULL DEFAULT 67108864,
+    log_segment_bytes INTEGER NOT NULL DEFAULT 1048576,
+    log_max_bytes_total INTEGER NOT NULL DEFAULT 1073741824,
+    log_retention_jobs INTEGER NOT NULL DEFAULT 100,
+    log_disk_reserve_bytes INTEGER NOT NULL DEFAULT 536870912,
+    termination_grace_ms INTEGER NOT NULL DEFAULT 500,
+    max_runtime_ms INTEGER,
+    startup_timeout_ms INTEGER NOT NULL DEFAULT 30000
 );
 
-INSERT OR IGNORE INTO settings (id, queue_locked) VALUES (1, 0);
+INSERT OR IGNORE INTO settings
+    (id, queue_locked, log_max_bytes_per_job, log_segment_bytes,
+     log_max_bytes_total, log_retention_jobs, log_disk_reserve_bytes)
+VALUES (1, 0, 67108864, 1048576, 1073741824, 100, 536870912);
 "#;
 
 pub(super) const INDEXES: &str = r#"

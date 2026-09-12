@@ -587,6 +587,7 @@ fn bounded_reads_and_live_streams_are_separate_log_use_cases() {
             bytes: b"tail".to_vec(),
             available: true,
             truncated: true,
+            capture_error: None,
         },
         LogContent::default(),
     );

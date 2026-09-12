@@ -18,7 +18,7 @@ export function Overview() {
     </div>
     <div className="metrics-grid">
       <Metric label="Running" value={counts.active} note={active?.name || "No active job"} accent="accent-ember" />
-      <Metric label="Queued" value={counts.queued} note={state.queue.locked ? "Queue is locked" : "Ready to run"} accent="accent-cyan" />
+      <Metric label="Queued" value={counts.queued} note={status?.disk_pressure ? "Waiting for disk space" : state.queue.locked ? "Queue is locked" : "Ready to run"} accent="accent-cyan" />
       <Metric label="Drafts" value={counts.draft} note="Awaiting review" />
       <Metric label="Succeeded" value={counts.succeeded} note="Completed jobs" accent="accent-green" />
       <Metric label="Failed / lost" value={counts.failed} note="Needs attention" />

@@ -23,6 +23,9 @@ use execution::ExecutionStore;
 pub(crate) use model::{LogEvent, LogMessage};
 pub use model::{OutputStream, SchedulerStatus};
 
+/// Maximum number of bytes carried by one durable/live log event.
+pub(crate) const LOG_CHUNK_SIZE: usize = 64 * 1024;
+
 #[derive(Clone)]
 pub struct Scheduler {
     paths: StokerPaths,
@@ -86,6 +89,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
 
     struct FailingWaitController;
 
@@ -683,7 +687,8 @@ mod tests {
         tokio::fs::write(&stdout, b"out").await.unwrap();
         tokio::fs::write(&stderr, b"err").await.unwrap();
         let (sender, mut receiver) = broadcast::channel(8);
-        let task = tokio::spawn(watch_logs(stdout, stderr, sender));
+        let offsets = Arc::new(tokio::sync::Mutex::new([0_u64, 0_u64]));
+        let task = tokio::spawn(watch_logs(stdout, stderr, sender, offsets));
 
         let first = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
             .await
@@ -709,19 +714,107 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn log_watcher_splits_large_files_into_bounded_chunks() {
+        let directory = tempfile::tempdir().unwrap();
+        let stdout = directory.path().join("stdout.log");
+        let stderr = directory.path().join("stderr.log");
+        let payload = vec![b'x'; LOG_CHUNK_SIZE * 2 + 17];
+        tokio::fs::write(&stdout, &payload).await.unwrap();
+        tokio::fs::write(&stderr, b"").await.unwrap();
+        let (sender, mut receiver) = broadcast::channel(8);
+        let offsets = Arc::new(tokio::sync::Mutex::new([0_u64, 0_u64]));
+        let task = tokio::spawn(watch_logs(stdout, stderr, sender, offsets));
+
+        let mut chunks = Vec::new();
+        while chunks.len() < 3 {
+            let message = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if let LogMessage::Chunk(event) = message {
+                assert_eq!(event.stream, OutputStream::Stdout);
+                assert!(event.bytes.len() <= LOG_CHUNK_SIZE);
+                chunks.push(event);
+            }
+        }
+        assert_eq!(chunks[0].offset, 0);
+        assert_eq!(chunks[1].offset, LOG_CHUNK_SIZE as u64);
+        assert_eq!(chunks[2].offset, (LOG_CHUNK_SIZE * 2) as u64);
+        assert_eq!(
+            chunks.iter().map(|chunk| chunk.bytes.len()).sum::<usize>(),
+            payload.len()
+        );
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
     async fn flush_log_events_sends_existing_files_and_skips_missing_files() {
         let directory = tempfile::tempdir().unwrap();
         let stdout = directory.path().join("stdout.log");
         let stderr = directory.path().join("stderr.log");
         tokio::fs::write(&stdout, b"already there").await.unwrap();
         let (sender, mut receiver) = broadcast::channel(4);
-        flush_log_events(&stdout, &stderr, &sender).await;
+        let offsets = Arc::new(tokio::sync::Mutex::new([0_u64, 0_u64]));
+        flush_log_events(&stdout, &stderr, &sender, &offsets).await;
 
         let message = receiver.recv().await.unwrap();
         assert!(matches!(
             message,
             LogMessage::Chunk(LogEvent { stream: OutputStream::Stdout, offset: 0, bytes })
                 if bytes == b"already there"
+        ));
+    }
+
+    #[tokio::test]
+    async fn flush_log_events_splits_large_files_into_bounded_chunks() {
+        let directory = tempfile::tempdir().unwrap();
+        let stdout = directory.path().join("stdout.log");
+        let stderr = directory.path().join("stderr.log");
+        let payload = vec![b'y'; LOG_CHUNK_SIZE + 9];
+        tokio::fs::write(&stdout, &payload).await.unwrap();
+        let (sender, mut receiver) = broadcast::channel(8);
+        let offsets = Arc::new(tokio::sync::Mutex::new([0_u64, 0_u64]));
+        flush_log_events(&stdout, &stderr, &sender, &offsets).await;
+
+        let first = receiver.recv().await.unwrap();
+        let second = receiver.recv().await.unwrap();
+        assert!(matches!(
+            first,
+            LogMessage::Chunk(LogEvent { offset: 0, bytes, .. })
+                if bytes.len() == LOG_CHUNK_SIZE
+        ));
+        assert!(matches!(
+            second,
+            LogMessage::Chunk(LogEvent { offset, bytes, .. })
+                if offset == LOG_CHUNK_SIZE as u64 && bytes.len() == 9
+        ));
+    }
+
+    #[tokio::test]
+    async fn flush_log_events_only_publishes_bytes_after_watcher_offset() {
+        let directory = tempfile::tempdir().unwrap();
+        let stdout = directory.path().join("stdout.log");
+        let stderr = directory.path().join("stderr.log");
+        tokio::fs::write(&stdout, b"already there").await.unwrap();
+        tokio::fs::write(&stderr, b"").await.unwrap();
+        let offsets = Arc::new(tokio::sync::Mutex::new([13_u64, 0_u64]));
+        tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&stdout)
+            .await
+            .unwrap()
+            .write_all(b"tail")
+            .await
+            .unwrap();
+        let (sender, mut receiver) = broadcast::channel(4);
+        flush_log_events(&stdout, &stderr, &sender, &offsets).await;
+
+        let message = receiver.recv().await.unwrap();
+        assert!(matches!(
+            message,
+            LogMessage::Chunk(LogEvent { stream: OutputStream::Stdout, offset: 13, bytes })
+                if bytes == b"tail"
         ));
     }
 

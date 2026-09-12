@@ -163,6 +163,8 @@ pub(in crate::ui) async fn logs(
         stderr_available: logs.stderr.available,
         stdout_truncated: logs.stdout.truncated,
         stderr_truncated: logs.stderr.truncated,
+        stdout_capture_error: logs.stdout.capture_error,
+        stderr_capture_error: logs.stderr.capture_error,
         message: logs.message,
     }))
 }

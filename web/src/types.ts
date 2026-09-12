@@ -60,6 +60,7 @@ export interface StatusResponse {
     failed: number;
   };
   queue_locked: boolean;
+  disk_pressure?: boolean;
   timezone?: TimezoneInfo | null;
   generated_at?: string;
 }
@@ -105,6 +106,8 @@ export interface LogsResponse {
   stderr_available: boolean;
   stdout_truncated: boolean;
   stderr_truncated: boolean;
+  stdout_capture_error?: string | null;
+  stderr_capture_error?: string | null;
   message?: string | null;
 }
 

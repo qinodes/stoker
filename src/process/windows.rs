@@ -15,7 +15,9 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject,
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, TerminateJobObject,
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
@@ -24,14 +26,22 @@ use windows_sys::Win32::System::Threading::{
     WaitForSingleObject,
 };
 
-use super::{ManagedProcess, ProcessSpec, finish_pipes, spawn_pipe_writer};
+use super::{ManagedProcess, ProcessLaunchPolicy, ProcessSpec, finish_pipes, spawn_pipe_writer};
 
-pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProcess>> {
+pub(crate) async fn spawn(
+    spec: ProcessSpec,
+    policy: ProcessLaunchPolicy,
+) -> io::Result<Box<dyn ManagedProcess>> {
     // Keep the primary thread suspended until the process has been assigned to
     // the Job Object, closing the escape race during process startup.
     let job = unsafe { CreateJobObjectW(null(), null()) };
     if job.is_null() {
         return Err(io::Error::last_os_error());
+    }
+    if unsafe { configure_job_kill_on_close(job) } == 0 {
+        let error = io::Error::last_os_error();
+        unsafe { CloseHandle(job) };
+        return Err(error);
     }
 
     let (stdout_read, stdout_write) = match create_output_pipe() {
@@ -126,8 +136,8 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
         unsafe { TokioFile::from_std(std::fs::File::from_raw_handle(stdout_read as RawHandle)) };
     let stderr =
         unsafe { TokioFile::from_std(std::fs::File::from_raw_handle(stderr_read as RawHandle)) };
-    let stdout_task = spawn_pipe_writer(stdout, spec.stdout_log);
-    let stderr_task = spawn_pipe_writer(stderr, spec.stderr_log);
+    let stdout_task = spawn_pipe_writer(stdout, spec.stdout_log, policy.log_policy);
+    let stderr_task = spawn_pipe_writer(stderr, spec.stderr_log, policy.log_policy);
 
     Ok(Box::new(WindowsManagedProcess {
         pid: information.dwProcessId,
@@ -137,6 +147,19 @@ pub(crate) async fn spawn(spec: ProcessSpec) -> io::Result<Box<dyn ManagedProces
         stderr_task: Some(stderr_task),
         terminated: false,
     }))
+}
+
+unsafe fn configure_job_kill_on_close(job: HANDLE) -> i32 {
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    unsafe {
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    }
 }
 
 fn creation_flags() -> u32 {
@@ -293,7 +316,9 @@ impl WindowsManagedProcess {
             CloseHandle(self.job as HANDLE);
         }
         let status = status?;
-        pipes_result?;
+        if let Err(error) = pipes_result {
+            eprintln!("process {0} log capture degraded: {error}", self.pid);
+        }
         Ok(status)
     }
 }
