@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route as PlaywrightRoute, type Request } from "@playwright/test";
-import type { Job, RootsResponse, SettingsResponse, Snapshot, StatusResponse, TimezoneInfo } from "../../src/types.ts";
+import type { Job, PolicyResponse, RootsResponse, SettingsResponse, Snapshot, StatusResponse, TimezoneInfo } from "../../src/types.ts";
 
 interface MockModel {
   jobs: Job[];
@@ -7,6 +7,7 @@ interface MockModel {
   locked: boolean;
   timezone: string;
   snapshots: Snapshot[];
+  policy: PolicyResponse;
 }
 
 interface MockBackendOptions {
@@ -62,6 +63,7 @@ async function mockBackend(page: Page, { onRequest = () => {} }: MockBackendOpti
     locked: false,
     timezone: "UTC",
     snapshots: [],
+    policy: defaultPolicy(),
   };
 
   await page.route("**/api/v1/**", async (route: PlaywrightRoute) => {
@@ -101,6 +103,17 @@ async function mockBackend(page: Page, { onRequest = () => {} }: MockBackendOpti
     }
     if (path === "/api/v1/queue" && method === "GET") {
       return route.fulfill({ json: { jobs: model.queue, locked: model.locked } });
+    }
+    if (path === "/api/v1/policy" && method === "GET") return route.fulfill({ json: { ...model.policy, queue_locked: model.locked, can_update: model.locked, blocked_reason: model.locked ? null : "Lock the queue before changing policy.", active_jobs: [] } });
+    const policyMatch = path.match(/^\/api\/v1\/policy\/([^/]+)$/);
+    if (policyMatch && (method === "PUT" || method === "DELETE")) {
+      if (!model.locked) return typedError(route, 409, "conflict", "Lock the queue before changing policy.");
+      const key = policyMatch[1];
+      const body = method === "PUT" ? requestJson<{ value: number }>(request) : null;
+      if (!setMockPolicyValue(model.policy, key, body?.value)) {
+        return typedError(route, 400, "invalid_input", "unknown policy key");
+      }
+      return route.fulfill({ json: { ...model.policy, queue_locked: true, can_update: true, blocked_reason: null, active_jobs: [] } });
     }
     if (path === "/api/v1/config" || path === "/api/v1/config/snapshots") {
       return route.fulfill({ json: configuration(model) });
@@ -258,6 +271,12 @@ test("browser journey covers create, detail, description, queue, logs, and confi
   await page.locator("[data-restore-path]").click();
   await page.locator("#confirm-accept").click();
   await expect(page.locator(".config-summary strong")).toHaveText("UTC");
+
+  await page.locator('[data-route="policy"]').click();
+  await expect(page.getByRole("heading", { name: "Execution policy" })).toBeVisible();
+  await page.locator("#policy-max_bytes_per_job").fill("8");
+  await page.locator('[data-policy-set="log-max-bytes-per-job"]').click();
+  await expect(page.getByText("Policy updated.")).toBeVisible();
 });
 
 test("job owner suggestions close when the form is clicked elsewhere", async ({ page }) => {
@@ -355,6 +374,26 @@ test("LAN mode loads without an authentication prompt", async ({ page }) => {
   await expect(page.locator("dialog[open]")).toHaveCount(0);
 });
 
+test("policy page explains the queue gate and supports reset", async ({ page }) => {
+  await mockBackend(page);
+  await page.goto("/#policy");
+  await expect(page.getByRole("heading", { name: "Execution policy" })).toBeVisible();
+  await expect(page.getByText("Lock the queue before changing policy.")).toBeVisible();
+  await expect(page.locator('[data-policy-set="log-max-bytes-per-job"]')).toBeDisabled();
+
+  await page.locator("[data-policy-lock]").click();
+  await expect(page.getByText("Policy changes are available")).toBeVisible();
+  const runtime = page.locator("#policy-max_runtime_ms");
+  await runtime.fill("0");
+  await expect(page.getByText("Enter a positive whole number.")).toBeVisible();
+  await expect(page.locator('[data-policy-set="max-runtime-ms"]')).toBeDisabled();
+  await runtime.fill("1200");
+  await page.locator('[data-policy-set="max-runtime-ms"]').click();
+  await expect(page.getByText("Policy updated.")).toBeVisible();
+  await page.locator('[data-policy-unset="max-runtime-ms"]').click();
+  await expect(runtime).toHaveValue("");
+});
+
 function requestJson<T>(request: Request): T {
   return request.postDataJSON() as T;
 }
@@ -389,6 +428,32 @@ function configuration(model: MockModel): SettingsResponse {
     snapshot_dir: "/config/snapshots",
     snapshots: model.snapshots,
   };
+}
+
+function defaultPolicy(): PolicyResponse {
+  const log = { max_bytes_per_job: 64, segment_bytes: 1, max_bytes_total: 1024, retention_jobs: 100, disk_reserve_bytes: 512 };
+  const runtime = { termination_grace_ms: 500, max_runtime_ms: null, startup_timeout_ms: 30_000 };
+  return {
+    log,
+    runtime,
+    defaults: { log: { ...log }, runtime: { ...runtime } },
+    units: { log: { max_bytes_per_job: "MB", segment_bytes: "MB", max_bytes_total: "MB", retention_jobs: "jobs", disk_reserve_bytes: "MB" }, runtime: { termination_grace_ms: "milliseconds", max_runtime_ms: "milliseconds", startup_timeout_ms: "milliseconds" } },
+    queue_locked: false,
+    can_update: false,
+    active_jobs: [],
+    blocked_reason: "Lock the queue before changing policy.",
+  };
+}
+
+function setMockPolicyValue(policy: PolicyResponse, routeKey: string, value?: number): boolean {
+  const section = routeKey.startsWith("log-") ? "log" : "runtime";
+  const fieldKey = section === "log" ? routeKey.slice("log-".length) : routeKey;
+  const key = fieldKey.replaceAll("-", "_") as keyof PolicyResponse["log"] & keyof PolicyResponse["runtime"];
+  const target = policy[section] as Record<string, number | null>;
+  const defaults = policy.defaults[section] as Record<string, number | null>;
+  if (!(key in target)) return false;
+  target[key] = value === undefined ? defaults[key] : value;
+  return true;
 }
 
 function typedError(route: PlaywrightRoute, statusCode: number, code: string, message: string): Promise<void> {

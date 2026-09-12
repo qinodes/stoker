@@ -180,7 +180,9 @@ pub enum PolicyCommand {
     Set {
         #[arg(value_enum)]
         key: PolicyKey,
-        #[arg(help = "Policy value (bytes for log limits, milliseconds for runtime limits)")]
+        #[arg(
+            help = "Policy value (whole MB for log capacities, a count for retained jobs, or milliseconds for runtime limits)"
+        )]
         value: Option<String>,
     },
     #[command(about = "Show the current scheduler policies")]

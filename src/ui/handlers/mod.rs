@@ -1,6 +1,7 @@
 pub(super) mod configuration;
 pub(super) mod filesystem;
 pub(super) mod jobs;
+pub(super) mod policy;
 pub(super) mod queue;
 pub(super) mod status;
 pub(super) mod system;

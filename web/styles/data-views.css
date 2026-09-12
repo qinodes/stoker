@@ -201,3 +201,55 @@
 .notice-panel h2 { margin: 2px 0 7px; font-size: 15px; }
 
 .notice-panel p { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.65; }
+
+.policy-gate { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 18px; padding: 20px 22px; border-color: rgba(243, 198, 107, .28); background: rgba(243, 198, 107, .06); }
+
+.policy-gate.ready { border-color: rgba(117, 214, 163, .28); background: rgba(117, 214, 163, .06); }
+
+.policy-gate-copy { min-width: 0; }
+
+.policy-gate h2 { margin: 7px 0 6px; font-size: 15px; }
+
+.policy-gate p { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+
+.policy-gate-action { display: flex; align-items: center; flex: 0 0 auto; gap: 12px; }
+
+.policy-lock-state { color: var(--yellow); font-size: 10px; font-weight: 750; white-space: nowrap; }
+
+.policy-gate.ready .policy-lock-state { color: var(--green); }
+
+.policy-active-jobs { display: grid; gap: 6px; max-width: 600px; margin-top: 13px; }
+
+.policy-active-jobs > strong { color: var(--text-muted); font-size: 10px; }
+
+.policy-active-job { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 9px; border: 1px solid rgba(243, 198, 107, .16); border-radius: 7px; background: rgba(11, 16, 24, .22); color: var(--text-muted); font-size: 10px; }
+
+.policy-active-job code { color: var(--yellow); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9px; }
+
+.policy-layout { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+
+.policy-card { overflow: hidden; }
+
+.policy-fields { padding: 0 22px; }
+
+.policy-field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 44%); gap: 18px; align-items: center; padding: 17px 0; border-top: 1px solid rgba(52, 75, 103, .42); }
+
+.policy-field-copy { min-width: 0; }
+
+.policy-field-copy label { display: block; margin-bottom: 5px; color: var(--text); font-size: 11px; font-weight: 750; }
+
+.policy-field-copy p { margin: 0 0 7px; color: var(--text-subtle); font-size: 10px; line-height: 1.5; }
+
+.policy-field-copy small { display: block; color: var(--text-subtle); font-size: 9px; }
+
+.policy-field-copy small strong { color: var(--cyan); font-weight: 700; }
+
+.policy-field-control { display: grid; gap: 8px; }
+
+.policy-input-wrap { display: flex; align-items: center; gap: 8px; }
+
+.policy-input-wrap .text-input { min-width: 0; width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.policy-input-wrap > span { flex: 0 0 auto; color: var(--text-subtle); font-size: 9px; }
+
+.policy-field-actions { display: flex; justify-content: flex-end; gap: 7px; }

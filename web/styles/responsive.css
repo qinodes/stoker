@@ -28,7 +28,7 @@
   .app-shell { display: block; padding-bottom: 70px; }
   .sidebar { position: fixed; right: 0; bottom: 0; left: 0; z-index: 5; display: block; min-height: 0; height: 68px; padding: 7px 10px; border-top: 1px solid var(--border); border-right: 0; background: rgba(12, 19, 30, .95); backdrop-filter: blur(14px); }
   .brand, .workspace-label, .sidebar-bottom { display: none; }
-  .nav-list { grid-template-columns: repeat(5, 1fr); gap: 3px; height: 100%; }
+  .nav-list { grid-template-columns: repeat(6, 1fr); gap: 3px; height: 100%; }
   .nav-item { display: grid; justify-items: center; gap: 2px; min-height: 0; padding: 4px 2px; border-radius: 8px; font-size: 9px; }
   .nav-item:hover { transform: none; }
   .nav-icon { height: 20px; font-size: 16px; }
@@ -53,6 +53,11 @@
   .page-actions { justify-content: flex-start; margin-top: 16px; }
   .page-heading .page-actions .button { margin-top: 0; }
   .config-layout { grid-template-columns: 1fr; }
+  .policy-layout { grid-template-columns: 1fr; }
+  .policy-gate { align-items: stretch; flex-direction: column; margin-right: 0; margin-left: 0; }
+  .policy-gate-action { justify-content: space-between; }
+  .policy-field { grid-template-columns: 1fr; gap: 12px; }
+  .policy-fields { padding-right: 16px; padding-left: 16px; }
   .config-summary { grid-template-columns: 1fr; margin-right: 16px; margin-left: 16px; }
   .config-form { padding-right: 16px; padding-left: 16px; }
   .snapshot-list { height: 280px; padding-right: 16px; padding-left: 16px; }

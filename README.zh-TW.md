@@ -31,7 +31,7 @@ Stoker 使用本機 SQLite 保存 Job 狀態與日誌，不需要 Redis、Postgr
   <img src="assets/ui-demo.png" alt="Stoker Web UI 展示">
 </p>
 
-Web UI 可以建立與查看 DRAFT Job、修改描述、commit 或取消 Job、管理 Queue、讀取 logs，以及管理時區與設定快照。
+Web UI 可以建立與查看 DRAFT Job、修改描述、commit 或取消 Job、管理 Queue、讀取 logs，以及管理時區、設定快照與 scheduler policy。
 
 ```bash
 stoker start
@@ -359,20 +359,22 @@ Log 有安全的預設上限，只保留最新尾端內容：
 
 | 設定 | 預設值 | 用途 |
 | --- | ---: | --- |
-| `log-max-bytes-per-job`（stdout + stderr） | 64 MiB | 單一 Job 共用的 log 上限；超過後會淘汰較舊的分段。 |
-| `log-segment-bytes` | 1 MiB | 每個輪替 log 分段的大小。 |
-| `log-max-bytes-total`（terminal Job） | 1 GiB | 所有已結束 Job 保留 log 檔案的總上限。 |
+| `log-max-bytes-per-job`（stdout + stderr） | 64 MB | 單一 Job 共用的 log 上限；超過後會淘汰較舊的分段。 |
+| `log-segment-bytes` | 1 MB | 每個輪替 log 分段的大小。 |
+| `log-max-bytes-total`（terminal Job） | 1024 MB | 所有已結束 Job 保留 log 檔案的總上限。 |
 | `log-retention-jobs` | 100 | 保留 log 檔案的最新 terminal Job 數量。 |
-| `log-disk-reserve-bytes` | 512 MiB | 最低可用磁碟空間；低於此值時 scheduler 會阻擋新的 queued Job。 |
+| `log-disk-reserve-bytes` | 512 MB | 最低可用磁碟空間；低於此值時 scheduler 會阻擋新的 queued Job。 |
 | `termination-grace-ms` | 500 | 取消後等待正常終止，再進行強制終止的寬限時間。 |
 | `startup-timeout-ms` | 30,000 | 建立 run directory、log 檔與檢查工作目錄的最長時間。 |
 | `max-runtime-ms` | 停用 | Job 可設定的最長執行時間；停用表示不會自動因逾時取消。 |
 
 修改前必須先鎖定 queue，且不能有 `STARTING`、`RUNNING` 或 `CANCELLING` Job；queued Job 可以保留：
 
+Log 容量請輸入不帶單位的整數 MB（例如 `256`）。
+
 ```bash
 stoker queue lock
-stoker policy set log-max-bytes-per-job 256MiB
+stoker policy set log-max-bytes-per-job 256
 stoker policy set log-retention-jobs 30
 stoker policy set termination-grace-ms 30000
 stoker policy set max-runtime-ms 43200000

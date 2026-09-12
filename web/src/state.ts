@@ -27,6 +27,7 @@ export function createState(route: Route = "overview"): WorkspaceState {
   return {
     config: null,
     settings: null,
+    policy: null,
     status: null,
     timezone: null,
     jobs: [],

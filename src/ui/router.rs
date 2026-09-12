@@ -7,7 +7,7 @@ use axum::routing::{get, patch, post, put};
 
 use super::assets;
 use super::auth;
-use super::handlers::{configuration, filesystem, jobs, queue, status, system};
+use super::handlers::{configuration, filesystem, jobs, policy, queue, status, system};
 use super::state::ApiState;
 
 pub(super) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -26,6 +26,8 @@ pub(super) fn build_router(state: ApiState) -> Router {
         .route("/queue/lock", post(queue::lock))
         .route("/queue/unlock", post(queue::unlock))
         .route("/queue/{id}/move", post(queue::move_job))
+        .route("/policy", get(policy::get))
+        .route("/policy/{key}", put(policy::set).delete(policy::unset))
         .route("/fs/roots", get(filesystem::roots))
         .route("/fs/directories", get(filesystem::directories))
         .route("/config", get(configuration::get))
@@ -432,6 +434,138 @@ mod tests {
         )
         .await;
         assert_eq!(restored["config"]["timezone"], "UTC");
+    }
+
+    #[tokio::test]
+    async fn policy_round_trip_exposes_defaults_and_enforces_queue_gate() {
+        use crate::domain::NewJob;
+
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(directory.path());
+        paths.ensure().unwrap();
+        let state = state_for(&paths);
+
+        let initial = json_response(
+            build_router(state.clone())
+                .oneshot(Request::get("/api/v1/policy").body(Body::empty()).unwrap())
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(initial["queue_locked"], false);
+        assert_eq!(initial["can_update"], false);
+        assert_eq!(initial["log"]["max_bytes_per_job"], 64);
+        assert_eq!(
+            initial["defaults"]["runtime"]["max_runtime_ms"],
+            Value::Null
+        );
+        assert_eq!(initial["units"]["log"]["max_bytes_per_job"], "MB");
+        assert_eq!(initial["units"]["log"]["retention_jobs"], "jobs");
+
+        let unlocked = build_router(state.clone())
+            .oneshot(json_request(
+                "PUT",
+                "/api/v1/policy/log-max-bytes-per-job",
+                serde_json::json!({"value": 8}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(unlocked.status(), StatusCode::CONFLICT);
+        let error = json_response(unlocked).await;
+        assert_eq!(error["code"], "conflict");
+        assert_eq!(error["details"]["queue_locked"], false);
+
+        let invalid = build_router(state.clone())
+            .oneshot(json_request(
+                "PUT",
+                "/api/v1/policy/not-a-policy",
+                serde_json::json!({"value": 1}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(json_response(invalid).await["code"], "invalid_input");
+
+        build_router(state.clone())
+            .oneshot(
+                Request::post("/api/v1/queue/lock")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let updated = json_response(
+            build_router(state.clone())
+                .oneshot(json_request(
+                    "PUT",
+                    "/api/v1/policy/log-max-bytes-per-job",
+                    serde_json::json!({"value": 8}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(updated["log"]["max_bytes_per_job"], 8);
+        assert_eq!(updated["can_update"], true);
+
+        let runtime = json_response(
+            build_router(state.clone())
+                .oneshot(json_request(
+                    "PUT",
+                    "/api/v1/policy/max-runtime-ms",
+                    serde_json::json!({"value": 1_000}),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(runtime["runtime"]["max_runtime_ms"], 1_000);
+        let reset = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::delete("/api/v1/policy/max-runtime-ms")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(reset["runtime"]["max_runtime_ms"], Value::Null);
+
+        build_router(state.clone())
+            .oneshot(
+                Request::post("/api/v1/queue/unlock")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let id = state
+            .store
+            .create_job(NewJob {
+                name: "active-policy-job".into(),
+                user: "test".into(),
+                description: None,
+                cwd: directory.path().into(),
+                command: vec!["echo".into(), "active".into()],
+            })
+            .unwrap();
+        state.store.commit_job(id).unwrap();
+        state.store.claim_next().unwrap();
+        state.store.lock_queue().unwrap();
+        let active = build_router(state)
+            .oneshot(json_request(
+                "PUT",
+                "/api/v1/policy/termination-grace-ms",
+                serde_json::json!({"value": 750}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(active.status(), StatusCode::CONFLICT);
+        let active_error = json_response(active).await;
+        assert_eq!(active_error["details"]["state"], "STARTING");
+        assert_eq!(active_error["details"]["active_job"], id.to_string());
     }
 
     fn fixture_request(fixture: &HttpRouteFixture, fixture_root: &Path) -> Request<Body> {

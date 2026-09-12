@@ -1,9 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createApiClient, type ApiClient } from "./api";
 import { cacheDirectory, cachedDirectory, createRequestSequence, createState, JOBS_PAGE_SIZE, SNAPSHOTS_PAGE_SIZE, pageInfo, type DirectoryCacheEntry } from "./state";
-import type { Job, JobDetailResponse, JobDraft, JobsResponse, LogsResponse, Route, SettingsResponse, StatusResponse, UiConfig, WorkspaceState } from "./types";
+import type { Job, JobDetailResponse, JobDraft, JobsResponse, LogsResponse, PolicyResponse, Route, SettingsResponse, StatusResponse, UiConfig, WorkspaceState } from "./types";
 
-const ROUTES: Route[] = ["overview", "jobs", "queue", "logs", "configuration"];
+const ROUTES: Route[] = ["overview", "jobs", "queue", "logs", "configuration", "policy"];
 
 export interface Confirmation {
   kicker: string;
@@ -46,6 +46,8 @@ export interface WorkspaceActions {
   unsetTimezone: () => Promise<void>;
   createSnapshot: () => Promise<void>;
   restoreSnapshot: (path: string) => Promise<void>;
+  savePolicy: (key: string, value: number) => Promise<boolean>;
+  unsetPolicy: (key: string) => Promise<boolean>;
 }
 
 export interface WorkspaceContextValue {
@@ -113,12 +115,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setState((value) => ({ ...value, loading: true, error: null }));
     try {
       const configPromise = current.config ? Promise.resolve(current.config) : api.get<UiConfig>("/api/v1/ui/config");
-      const [config, status, jobs, queue, settings] = await Promise.all([
+      const [config, status, jobs, queue, settings, policy] = await Promise.all([
         configPromise,
         api.get<StatusResponse>("/api/v1/status"),
         api.get<JobsResponse>("/api/v1/jobs"),
         api.get<WorkspaceState["queue"]>("/api/v1/queue"),
         api.get<SettingsResponse>("/api/v1/config"),
+        api.get<PolicyResponse>("/api/v1/policy"),
       ]);
       if (!sequence.current.isCurrent(request)) return;
       setState((value) => {
@@ -131,6 +134,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           timezone: jobs.timezone || status?.timezone || null,
           queue,
           settings,
+          policy,
           selectedJob,
           loaded: true,
           loading: false,
@@ -268,7 +272,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const unsetTimezone = useCallback(async () => { const result = await mutate<SettingsResponse>("/api/v1/config/timezone", "DELETE", null, "System timezone enabled."); if (result) setState((current) => ({ ...current, configurationDraft: null })); }, [mutate]);
   const createSnapshot = useCallback(async () => { await mutate("/api/v1/config/snapshot", "POST", null, "Configuration snapshot created."); }, [mutate]);
   const restoreSnapshot = useCallback(async (path: string) => { if (await requestConfirmation({ kicker: "Configuration snapshot", title: "Restore this snapshot?", message: "The current configuration will be preserved before restore.", acceptLabel: "Restore snapshot", destructive: false })) await mutate("/api/v1/config/restore", "POST", { path }, "Configuration restored."); }, [mutate, requestConfirmation]);
-  const actions = useMemo<WorkspaceActions>(() => ({ loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot }), [loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot]);
+  const savePolicy = useCallback(async (key: string, value: number) => Boolean(await mutate<PolicyResponse>(`/api/v1/policy/${key}`, "PUT", { value }, "Policy updated.")), [mutate]);
+  const unsetPolicy = useCallback(async (key: string) => Boolean(await mutate<PolicyResponse>(`/api/v1/policy/${key}`, "DELETE", null, "Policy reset to its default.")), [mutate]);
+  const actions = useMemo<WorkspaceActions>(() => ({ loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy }), [loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy]);
   return <WorkspaceContext.Provider value={{ state, actions, jobFormOpen, jobDetailOpen, detailEditing, confirmation, toasts }}>{children}</WorkspaceContext.Provider>;
 }
 

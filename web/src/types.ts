@@ -1,4 +1,4 @@
-export type Route = "overview" | "jobs" | "queue" | "logs" | "configuration";
+export type Route = "overview" | "jobs" | "queue" | "logs" | "configuration" | "policy";
 
 export type JobState =
   | "DRAFT"
@@ -93,6 +93,33 @@ export interface SettingsResponse {
   snapshots: Snapshot[];
 }
 
+export interface PolicyResponse {
+  log: {
+    max_bytes_per_job: number;
+    segment_bytes: number;
+    max_bytes_total: number;
+    retention_jobs: number;
+    disk_reserve_bytes: number;
+  };
+  runtime: {
+    termination_grace_ms: number;
+    max_runtime_ms: number | null;
+    startup_timeout_ms: number;
+  };
+  defaults: {
+    log: PolicyResponse["log"];
+    runtime: PolicyResponse["runtime"];
+  };
+  units: {
+    log: Record<keyof PolicyResponse["log"], string>;
+    runtime: Record<keyof PolicyResponse["runtime"], string>;
+  };
+  queue_locked: boolean;
+  can_update: boolean;
+  active_jobs: Array<{ id: string; name: string; state: JobState }>;
+  blocked_reason: string | null;
+}
+
 export interface JobDetailResponse {
   job: Job;
   working_directory_status?: string;
@@ -149,6 +176,7 @@ export interface LogsState {
 export interface WorkspaceState {
   config: UiConfig | null;
   settings: SettingsResponse | null;
+  policy: PolicyResponse | null;
   status: StatusResponse | null;
   timezone: TimezoneInfo | null;
   jobs: Job[];

@@ -3,10 +3,13 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
 use crate::application::ConfigSnapshot;
-use crate::config::{ResolvedTimezone, StokerConfig, TimezoneSource};
+use crate::config::{
+    LogPolicy, POLICY_MB_BYTES, ResolvedTimezone, RuntimePolicy, StokerConfig, TimezoneSource,
+};
 use crate::domain::{Job, JobState};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -253,6 +256,98 @@ pub(super) struct ConfigurationResponse {
     pub config_path: String,
     pub snapshot_dir: String,
     pub snapshots: Vec<SnapshotResponse>,
+}
+
+/// The policy endpoint exposes the same whole-number units accepted by the
+/// CLI. Log capacities are MB; runtime values are milliseconds.
+#[derive(Debug, Serialize)]
+pub(super) struct PolicyResponse {
+    pub log: LogPolicyResponse,
+    pub runtime: RuntimePolicyResponse,
+    pub defaults: PolicyDefaultsResponse,
+    pub units: PolicyUnitsResponse,
+    pub queue_locked: bool,
+    pub can_update: bool,
+    pub active_jobs: Vec<PolicyActiveJobResponse>,
+    pub blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct LogPolicyResponse {
+    pub max_bytes_per_job: u64,
+    pub segment_bytes: u64,
+    pub max_bytes_total: u64,
+    pub retention_jobs: u64,
+    pub disk_reserve_bytes: u64,
+}
+
+impl From<LogPolicy> for LogPolicyResponse {
+    fn from(policy: LogPolicy) -> Self {
+        Self {
+            max_bytes_per_job: policy.max_bytes_per_job.div_ceil(POLICY_MB_BYTES),
+            segment_bytes: policy.segment_bytes.div_ceil(POLICY_MB_BYTES),
+            max_bytes_total: policy.max_bytes_total.div_ceil(POLICY_MB_BYTES),
+            retention_jobs: policy.retention_jobs,
+            disk_reserve_bytes: policy.disk_reserve_bytes.div_ceil(POLICY_MB_BYTES),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct RuntimePolicyResponse {
+    pub termination_grace_ms: u64,
+    pub max_runtime_ms: Option<u64>,
+    pub startup_timeout_ms: u64,
+}
+
+impl From<RuntimePolicy> for RuntimePolicyResponse {
+    fn from(policy: RuntimePolicy) -> Self {
+        Self {
+            termination_grace_ms: policy.termination_grace_ms,
+            max_runtime_ms: policy.max_runtime_ms,
+            startup_timeout_ms: policy.startup_timeout_ms,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PolicyDefaultsResponse {
+    pub log: LogPolicyResponse,
+    pub runtime: RuntimePolicyResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PolicyUnitsResponse {
+    pub log: LogPolicyUnitsResponse,
+    pub runtime: RuntimePolicyUnitsResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct LogPolicyUnitsResponse {
+    pub max_bytes_per_job: &'static str,
+    pub segment_bytes: &'static str,
+    pub max_bytes_total: &'static str,
+    pub retention_jobs: &'static str,
+    pub disk_reserve_bytes: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct RuntimePolicyUnitsResponse {
+    pub termination_grace_ms: &'static str,
+    pub max_runtime_ms: &'static str,
+    pub startup_timeout_ms: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PolicyActiveJobResponse {
+    pub id: Uuid,
+    pub name: String,
+    pub state: JobStateDto,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct PolicyValueRequest {
+    pub value: Value,
 }
 
 #[derive(Debug, Serialize)]

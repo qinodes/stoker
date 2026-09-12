@@ -118,9 +118,7 @@ fn public_cli_schema_matches_the_cli_command_contract() {
         Cli::try_parse_from(["stoker", "config", "set", "log-max-bytes-per-job", "2MiB"]).is_err(),
         "scheduler policies must not be exposed through config"
     );
-    assert!(
-        Cli::try_parse_from(["stoker", "policy", "set", "log-max-bytes-per-job", "2MiB"]).is_ok()
-    );
+    assert!(Cli::try_parse_from(["stoker", "policy", "set", "log-max-bytes-per-job", "2"]).is_ok());
     assert_eq!(
         declared_subcommands(named_subcommand(&command, "queue")),
         ["lock", "edit", "unlock"]

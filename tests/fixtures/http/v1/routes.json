@@ -3,6 +3,7 @@
   {"name":"status","method":"GET","target":"/api/v1/status","expected_status":200,"expected_fields":["scheduler","counts","queue_locked","timezone","generated_at"]},
   {"name":"jobs","method":"GET","target":"/api/v1/jobs","expected_status":200,"expected_fields":["jobs","timezone"]},
   {"name":"queue","method":"GET","target":"/api/v1/queue","expected_status":200,"expected_fields":["jobs","locked"]},
+  {"name":"policy","method":"GET","target":"/api/v1/policy","expected_status":200,"expected_fields":["log","runtime","defaults","units","queue_locked","can_update","active_jobs","blocked_reason"]},
   {"name":"filesystem roots","method":"GET","target":"/api/v1/fs/roots","expected_status":200,"expected_fields":["default_path","locations"]},
   {"name":"configuration","method":"GET","target":"/api/v1/config","expected_status":200,"expected_fields":["config","effective_timezone","timezones","config_path","snapshot_dir","snapshots"]},
   {"name":"configuration snapshots alias","method":"GET","target":"/api/v1/config/snapshots","expected_status":200,"expected_fields":["config","effective_timezone","timezones","config_path","snapshot_dir","snapshots"]},

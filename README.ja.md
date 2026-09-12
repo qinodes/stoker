@@ -31,7 +31,7 @@ Stoker は Job の状態とログをローカルの SQLite に保存します。
   <img src="assets/ui-demo.png" alt="Stoker Web UI デモ">
 </p>
 
-Web UI では、DRAFT Job の作成と確認、説明の編集、Job の commit／cancel、Queue の管理、ログの表示、タイムゾーンと設定スナップショットの管理ができます。
+Web UI では、DRAFT Job の作成と確認、説明の編集、Job の commit／cancel、Queue の管理、ログの表示、タイムゾーン・設定スナップショット・scheduler policy の管理ができます。
 
 ```bash
 stoker start
@@ -360,20 +360,22 @@ stoker show <JOB_ID> --timezone UTC
 
 | 設定 | 既定値 | 用途 |
 | --- | ---: | --- |
-| `log-max-bytes-per-job`（stdout + stderr） | 64 MiB | 1 Job で共有するログ上限。超過すると古い分割ログを破棄します。 |
-| `log-segment-bytes` | 1 MiB | ローテーションする各ログ分割のサイズ。 |
-| `log-max-bytes-total`（terminal Job） | 1 GiB | 終了済み Job のログアーティファクト全体の上限。 |
+| `log-max-bytes-per-job`（stdout + stderr） | 64 MB | 1 Job で共有するログ上限。超過すると古い分割ログを破棄します。 |
+| `log-segment-bytes` | 1 MB | ローテーションする各ログ分割のサイズ。 |
+| `log-max-bytes-total`（terminal Job） | 1024 MB | 終了済み Job のログアーティファクト全体の上限。 |
 | `log-retention-jobs` | 100 | ログを保持する新しい terminal Job の数。 |
-| `log-disk-reserve-bytes` | 512 MiB | 最低空き容量。この値を下回ると scheduler は新しい queued Job を開始しません。 |
+| `log-disk-reserve-bytes` | 512 MB | 最低空き容量。この値を下回ると scheduler は新しい queued Job を開始しません。 |
 | `termination-grace-ms` | 500 | キャンセル後、強制終了に移るまで正常終了を待つ時間。 |
 | `startup-timeout-ms` | 30,000 | run directory、ログ、作業ディレクトリの準備に許される最長時間。 |
 | `max-runtime-ms` | 無効 | Job の最大実行時間。無効の場合は自動タイムアウトしません。 |
 
 変更には queue のロックと、`STARTING`、`RUNNING`、`CANCELLING` Job が存在しないことが必要です。queued Job は残せます。
 
+ログ容量は単位を付けず、MB の整数で入力します（例: `256`）。
+
 ```bash
 stoker queue lock
-stoker policy set log-max-bytes-per-job 256MiB
+stoker policy set log-max-bytes-per-job 256
 stoker policy set log-retention-jobs 30
 stoker policy set termination-grace-ms 30000
 stoker policy set max-runtime-ms 43200000

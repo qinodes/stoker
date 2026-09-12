@@ -308,7 +308,7 @@ fn config_commands_show_get_unset_and_create_manual_snapshot() {
 fn log_capacity_policy_requires_queue_lock_and_supports_defaults() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
-        .args(["policy", "set", "log-max-bytes-per-job", "2MiB"])
+        .args(["policy", "set", "log-max-bytes-per-job", "2"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("queue is unlocked"));
@@ -318,14 +318,19 @@ fn log_capacity_policy_requires_queue_lock_and_supports_defaults() {
         .assert()
         .success();
     stoker_in(repo.path())
-        .args(["policy", "set", "log-max-bytes-per-job", "2MiB"])
+        .args(["policy", "set", "log-max-bytes-per-job", "2"])
         .assert()
         .success();
+    stoker_in(repo.path())
+        .args(["policy", "set", "log-max-bytes-per-job", "2MiB"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("without a unit suffix"));
     stoker_in(repo.path())
         .args(["policy", "get", "log-max-bytes-per-job"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("2097152"));
+        .stdout(predicate::str::is_match(r"(?m)^log-max-bytes-per-job: 2\r?$").unwrap());
     stoker_in(repo.path())
         .args(["policy", "unset", "log-max-bytes-per-job"])
         .assert()

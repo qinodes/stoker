@@ -31,7 +31,7 @@ Stoker uses a local SQLite database for job state and logs. No Redis, PostgreSQL
   <img src="assets/ui-demo.png" alt="Stoker web UI">
 </p>
 
-The Web UI can create and review DRAFT jobs, edit descriptions, commit or cancel jobs, manage the queue, read logs, and manage timezone snapshots.
+The Web UI can create and review DRAFT jobs, edit descriptions, commit or cancel jobs, manage the queue, read logs, manage timezone snapshots, and adjust scheduler policy.
 
 ```bash
 stoker start
@@ -367,20 +367,22 @@ Log capture has safe defaults and keeps only a bounded tail. The defaults are:
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `log-max-bytes-per-job` (stdout + stderr) | 64 MiB | Shared per-job log ceiling; older segments are discarded after the limit. |
-| `log-segment-bytes` | 1 MiB | Size of each rotating log segment. |
-| `log-max-bytes-total` (terminal jobs) | 1 GiB | Global ceiling for retained terminal-job log artifacts. |
+| `log-max-bytes-per-job` (stdout + stderr) | 64 MB | Shared per-job log ceiling; older segments are discarded after the limit. |
+| `log-segment-bytes` | 1 MB | Size of each rotating log segment. |
+| `log-max-bytes-total` (terminal jobs) | 1024 MB | Global ceiling for retained terminal-job log artifacts. |
 | `log-retention-jobs` | 100 | Number of newest terminal jobs whose log artifacts are retained. |
-| `log-disk-reserve-bytes` | 512 MiB | Minimum free space; the scheduler blocks new queued jobs below it. |
+| `log-disk-reserve-bytes` | 512 MB | Minimum free space; the scheduler blocks new queued jobs below it. |
 | `termination-grace-ms` | 500 | Grace period after a cancellation request before forced termination. |
 | `startup-timeout-ms` | 30,000 | Maximum time for run-directory, log-file, and working-directory setup. |
 | `max-runtime-ms` | disabled | Optional maximum execution time for a job; disabled means no automatic timeout. |
 
 Capacity and runtime changes require a locked queue and no `STARTING`, `RUNNING`, or `CANCELLING` job; queued jobs may remain in place:
 
+Enter log capacity values as whole numbers of MB, without a unit suffix (for example, `256`).
+
 ```bash
 stoker queue lock
-stoker policy set log-max-bytes-per-job 256MiB
+stoker policy set log-max-bytes-per-job 256
 stoker policy set log-retention-jobs 30
 stoker policy set termination-grace-ms 30000
 stoker policy set max-runtime-ms 43200000

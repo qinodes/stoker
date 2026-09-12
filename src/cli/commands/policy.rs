@@ -4,7 +4,7 @@ use anyhow::Context;
 use crossterm::style::Color;
 
 use crate::StokerPaths;
-use crate::config::{LogPolicy, RuntimePolicy};
+use crate::config::{LogPolicy, POLICY_MB_BYTES, RuntimePolicy};
 use crate::output;
 use crate::{Store, StoreError};
 
@@ -36,7 +36,13 @@ pub(crate) fn policy(paths: &StokerPaths, command: PolicyCommand) -> anyhow::Res
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
-                    "log": log,
+                    "log": {
+                        "max_bytes_per_job": display_policy_value(log, PolicyKey::LogMaxBytesPerJob),
+                        "segment_bytes": display_policy_value(log, PolicyKey::LogSegmentBytes),
+                        "max_bytes_total": display_policy_value(log, PolicyKey::LogMaxBytesTotal),
+                        "retention_jobs": display_policy_value(log, PolicyKey::LogRetentionJobs),
+                        "disk_reserve_bytes": display_policy_value(log, PolicyKey::LogDiskReserveBytes),
+                    },
                     "runtime": runtime,
                 }))
                 .context("format Stoker scheduler policy")?
@@ -60,10 +66,17 @@ fn set_log_policy(
     value: Option<String>,
 ) -> anyhow::Result<()> {
     let value = value.ok_or_else(|| {
-        anyhow::anyhow!(
-            "a value is required for {}; use bytes such as 64MiB or a non-negative count",
-            policy_key_name(key)
-        )
+        if is_byte_key(key) {
+            anyhow::anyhow!(
+                "a value is required for {}; use a whole number of MB such as 64",
+                policy_key_name(key)
+            )
+        } else {
+            anyhow::anyhow!(
+                "a value is required for {}; use a non-negative whole number",
+                policy_key_name(key)
+            )
+        }
     })?;
     let parsed = parse_policy_value(key, &value)?;
     let store = Store::open(&paths.database)?;
@@ -143,7 +156,7 @@ fn get_policy(paths: &StokerPaths, key: PolicyKey) -> anyhow::Result<()> {
         println!(
             "{}: {}",
             policy_key_name(key),
-            policy_value(store.log_policy()?, key)
+            display_policy_value(store.log_policy()?, key)
         );
     } else {
         match runtime_value(store.runtime_policy()?, key) {
@@ -201,6 +214,25 @@ fn policy_value(policy: LogPolicy, key: PolicyKey) -> u64 {
             unreachable!("runtime policy key passed to log policy")
         }
     }
+}
+
+fn display_policy_value(policy: LogPolicy, key: PolicyKey) -> u64 {
+    let value = policy_value(policy, key);
+    if is_byte_key(key) {
+        value.div_ceil(POLICY_MB_BYTES)
+    } else {
+        value
+    }
+}
+
+fn is_byte_key(key: PolicyKey) -> bool {
+    matches!(
+        key,
+        PolicyKey::LogMaxBytesPerJob
+            | PolicyKey::LogSegmentBytes
+            | PolicyKey::LogMaxBytesTotal
+            | PolicyKey::LogDiskReserveBytes
+    )
 }
 
 fn assign_policy_value(policy: &mut LogPolicy, key: PolicyKey, value: u64) {
@@ -267,19 +299,16 @@ fn parse_policy_value(key: PolicyKey, value: &str) -> anyhow::Result<u64> {
         }
         return Ok(number);
     }
-    let multiplier = match suffix.to_ascii_lowercase().as_str() {
-        "" | "b" => 1,
-        "kb" => 1_000,
-        "kib" => 1_024,
-        "mb" => 1_000_000,
-        "mib" => 1_048_576,
-        "gb" => 1_000_000_000,
-        "gib" => 1_073_741_824,
-        "tb" => 1_000_000_000_000,
-        "tib" => 1_099_511_627_776,
-        _ => anyhow::bail!("unsupported byte suffix '{suffix}'"),
-    };
+    if !is_byte_key(key) {
+        anyhow::bail!("{} is not a supported policy value", policy_key_name(key));
+    }
+    if !suffix.is_empty() {
+        anyhow::bail!(
+            "{} accepts only a whole number of MB without a unit suffix",
+            policy_key_name(key)
+        );
+    }
     number
-        .checked_mul(multiplier)
+        .checked_mul(POLICY_MB_BYTES)
         .ok_or_else(|| anyhow::anyhow!("{} is too large", policy_key_name(key)))
 }

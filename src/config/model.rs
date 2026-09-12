@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 pub(super) const SNAPSHOT_VERSION: u8 = 1;
 
+/// Number of bytes represented by one user-facing policy megabyte.
+pub const POLICY_MB_BYTES: u64 = 1024 * 1024;
+
 pub const DEFAULT_LOG_MAX_BYTES_PER_JOB: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_LOG_SEGMENT_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_LOG_MAX_BYTES_TOTAL: u64 = 1024 * 1024 * 1024;
