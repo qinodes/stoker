@@ -89,3 +89,110 @@ fn ensure_service_stopped(paths: &StokerPaths) -> anyhow::Result<()> {
     })?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fs2::FileExt;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn paths(root: &std::path::Path) -> StokerPaths {
+        StokerPaths {
+            root: root.to_path_buf(),
+            database: root.join("stoker.db"),
+            runs: root.join("runs"),
+            lock: root.join("stoker.lock"),
+            endpoint: root.join("stoker.sock"),
+        }
+    }
+
+    #[test]
+    fn check_backup_and_restore_commands_cover_default_and_explicit_destinations() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(directory.path());
+        paths.ensure().unwrap();
+
+        database(&paths, DatabaseOperation::Check { integrity: false }).unwrap();
+        database(&paths, DatabaseOperation::Check { integrity: true }).unwrap();
+
+        let explicit = directory.path().join("explicit.sqlite");
+        database(
+            &paths,
+            DatabaseOperation::Backup {
+                destination: Some(explicit.clone()),
+            },
+        )
+        .unwrap();
+        assert!(explicit.is_file());
+
+        database(&paths, DatabaseOperation::Backup { destination: None }).unwrap();
+        let backups = fs::read_dir(directory.path().join("backups"))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(backups.len(), 1);
+        assert!(
+            backups[0]
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "sqlite")
+        );
+
+        let restore_error = database(
+            &paths,
+            DatabaseOperation::Restore {
+                source: explicit.clone(),
+                yes: false,
+            },
+        )
+        .unwrap_err();
+        assert!(restore_error.to_string().contains("requires --yes"));
+        database(
+            &paths,
+            DatabaseOperation::Restore {
+                source: explicit,
+                yes: true,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn restore_is_rejected_while_the_scheduler_lock_is_held() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(directory.path());
+        paths.ensure().unwrap();
+        let source = directory.path().join("source.sqlite");
+        Store::open(&source).unwrap().quick_check().unwrap();
+        let lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&paths.lock)
+            .unwrap();
+        lock.try_lock_exclusive().unwrap();
+
+        let error = database(&paths, DatabaseOperation::Restore { source, yes: true }).unwrap_err();
+        assert!(error.to_string().contains("scheduler is running"));
+        lock.unlock().unwrap();
+    }
+
+    #[test]
+    fn default_backup_path_is_created_under_the_stoker_root() {
+        let directory = TempDir::new().unwrap();
+        let paths = paths(directory.path());
+        let backup = default_backup_path(&paths).unwrap();
+        let expected_parent = directory.path().join("backups");
+        assert_eq!(backup.parent(), Some(expected_parent.as_path()));
+        assert!(
+            backup
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("stoker-")
+        );
+        assert!(backup.extension().is_some_and(|ext| ext == "sqlite"));
+    }
+}

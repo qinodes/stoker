@@ -508,6 +508,68 @@ mod tests {
         assert_eq!(updated["log"]["max_bytes_per_job"], 8);
         assert_eq!(updated["can_update"], true);
 
+        for (key, value, field, expected) in [
+            ("log-segment-bytes", 1, "segment_bytes", 1),
+            ("log-max-bytes-total", 16, "max_bytes_total", 16),
+            ("log-retention-jobs", 0, "retention_jobs", 0),
+            ("log-disk-reserve-bytes", 1, "disk_reserve_bytes", 1),
+        ] {
+            let response = json_response(
+                build_router(state.clone())
+                    .oneshot(json_request(
+                        "PUT",
+                        &format!("/api/v1/policy/{key}"),
+                        serde_json::json!({"value": value}),
+                    ))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(response["log"][field], expected);
+        }
+
+        let invalid_type = build_router(state.clone())
+            .oneshot(json_request(
+                "PUT",
+                "/api/v1/policy/log-max-bytes-per-job",
+                serde_json::json!({"value": "8"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(invalid_type.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(json_response(invalid_type).await["code"], "invalid_input");
+
+        let overflow = build_router(state.clone())
+            .oneshot(json_request(
+                "PUT",
+                "/api/v1/policy/log-max-bytes-per-job",
+                serde_json::json!({"value": u64::MAX}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(overflow.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(json_response(overflow).await["code"], "invalid_input");
+
+        for key in [
+            "log-max-bytes-total",
+            "log-max-bytes-per-job",
+            "log-segment-bytes",
+            "log-retention-jobs",
+            "log-disk-reserve-bytes",
+        ] {
+            let response = build_router(state.clone())
+                .oneshot(
+                    Request::delete(format!("/api/v1/policy/{key}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if response.status() != StatusCode::OK {
+                panic!("reset {key} failed: {}", json_response(response).await);
+            }
+        }
+
         let runtime = json_response(
             build_router(state.clone())
                 .oneshot(json_request(
@@ -520,6 +582,52 @@ mod tests {
         )
         .await;
         assert_eq!(runtime["runtime"]["max_runtime_ms"], 1_000);
+
+        for (key, value, field) in [
+            ("termination-grace-ms", 750, "termination_grace_ms"),
+            ("startup-timeout-ms", 1_000, "startup_timeout_ms"),
+        ] {
+            let response = json_response(
+                build_router(state.clone())
+                    .oneshot(json_request(
+                        "PUT",
+                        &format!("/api/v1/policy/{key}"),
+                        serde_json::json!({"value": value}),
+                    ))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            assert_eq!(response["runtime"][field], value);
+        }
+
+        build_router(state.clone())
+            .oneshot(
+                Request::post("/api/v1/queue/unlock")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let runtime_unlocked = build_router(state.clone())
+            .oneshot(json_request(
+                "PUT",
+                "/api/v1/policy/termination-grace-ms",
+                serde_json::json!({"value": 750}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(runtime_unlocked.status(), StatusCode::CONFLICT);
+        assert_eq!(json_response(runtime_unlocked).await["code"], "conflict");
+        build_router(state.clone())
+            .oneshot(
+                Request::post("/api/v1/queue/lock")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
         let reset = json_response(
             build_router(state.clone())
                 .oneshot(
@@ -554,6 +662,55 @@ mod tests {
         state.store.commit_job(id).unwrap();
         state.store.claim_next().unwrap();
         state.store.lock_queue().unwrap();
+        let active_policy = json_response(
+            build_router(state.clone())
+                .oneshot(Request::get("/api/v1/policy").body(Body::empty()).unwrap())
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(active_policy["can_update"], false);
+        assert_eq!(active_policy["active_jobs"][0]["id"], id.to_string());
+        assert_eq!(active_policy["active_jobs"][0]["state"], "STARTING");
+        assert!(
+            active_policy["blocked_reason"]
+                .as_str()
+                .unwrap()
+                .contains("STARTING")
+        );
+
+        build_router(state.clone())
+            .oneshot(
+                Request::post("/api/v1/queue/unlock")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let unlocked_with_active = json_response(
+            build_router(state.clone())
+                .oneshot(Request::get("/api/v1/policy").body(Body::empty()).unwrap())
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(unlocked_with_active["can_update"], false);
+        assert!(
+            unlocked_with_active["blocked_reason"]
+                .as_str()
+                .unwrap()
+                .contains("Lock the queue and wait")
+        );
+
+        build_router(state.clone())
+            .oneshot(
+                Request::post("/api/v1/queue/lock")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
         let active = build_router(state)
             .oneshot(json_request(
                 "PUT",

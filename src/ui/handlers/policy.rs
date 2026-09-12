@@ -292,3 +292,103 @@ fn store_error(error: StoreError) -> ApiError {
         other => ApiError::internal(other),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LOG_KEYS: [PolicyKey; 5] = [
+        PolicyKey::LogMaxBytesPerJob,
+        PolicyKey::LogSegmentBytes,
+        PolicyKey::LogMaxBytesTotal,
+        PolicyKey::LogRetentionJobs,
+        PolicyKey::LogDiskReserveBytes,
+    ];
+
+    const RUNTIME_KEYS: [PolicyKey; 3] = [
+        PolicyKey::TerminationGraceMs,
+        PolicyKey::MaxRuntimeMs,
+        PolicyKey::StartupTimeoutMs,
+    ];
+
+    #[test]
+    fn policy_keys_parse_classify_and_map_to_stable_names() {
+        let names = [
+            "log-max-bytes-per-job",
+            "log-segment-bytes",
+            "log-max-bytes-total",
+            "log-retention-jobs",
+            "log-disk-reserve-bytes",
+            "termination-grace-ms",
+            "max-runtime-ms",
+            "startup-timeout-ms",
+        ];
+        for (key, name) in LOG_KEYS.into_iter().chain(RUNTIME_KEYS).zip(names) {
+            assert_eq!(PolicyKey::parse(name).unwrap(), key);
+            assert_eq!(key.name(), name);
+        }
+        let error = PolicyKey::parse("unknown").unwrap_err();
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.code, ErrorCode::InvalidInput);
+
+        for key in LOG_KEYS {
+            assert!(key.is_log());
+        }
+        for key in RUNTIME_KEYS {
+            assert!(!key.is_log());
+        }
+        for key in [
+            PolicyKey::LogMaxBytesPerJob,
+            PolicyKey::LogSegmentBytes,
+            PolicyKey::LogMaxBytesTotal,
+            PolicyKey::LogDiskReserveBytes,
+        ] {
+            assert!(key.is_byte());
+        }
+        assert!(!PolicyKey::LogRetentionJobs.is_byte());
+    }
+
+    #[test]
+    fn policy_value_helpers_cover_each_branch_and_reject_cross_section_keys() {
+        let mut log = LogPolicy::default();
+        for (index, key) in LOG_KEYS.into_iter().enumerate() {
+            assign_log_value(&mut log, key, index as u64 + 1).unwrap();
+            assert_eq!(log_value(log, key), index as u64 + 1);
+        }
+        for key in RUNTIME_KEYS {
+            assert_eq!(log_value(log, key), 0);
+            let error = assign_log_value(&mut log, key, 1).unwrap_err();
+            assert_eq!(error.code, ErrorCode::InvalidInput);
+        }
+
+        let mut runtime = RuntimePolicy::default();
+        assign_runtime_value(&mut runtime, PolicyKey::TerminationGraceMs, None).unwrap();
+        assign_runtime_value(&mut runtime, PolicyKey::MaxRuntimeMs, Some(10)).unwrap();
+        assign_runtime_value(&mut runtime, PolicyKey::StartupTimeoutMs, Some(20)).unwrap();
+        assert_eq!(runtime.termination_grace_ms, 0);
+        assert_eq!(
+            runtime_value(runtime, PolicyKey::TerminationGraceMs),
+            Some(0)
+        );
+        assert_eq!(runtime_value(runtime, PolicyKey::MaxRuntimeMs), Some(10));
+        assert_eq!(
+            runtime_value(runtime, PolicyKey::StartupTimeoutMs),
+            Some(20)
+        );
+        assert_eq!(runtime_value(runtime, PolicyKey::LogRetentionJobs), None);
+        let error =
+            assign_runtime_value(&mut runtime, PolicyKey::LogRetentionJobs, Some(1)).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidInput);
+    }
+
+    #[test]
+    fn store_error_maps_data_and_unexpected_failures_to_api_errors() {
+        let invalid = store_error(StoreError::InvalidData("bad value".into()));
+        assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+        assert_eq!(invalid.code, ErrorCode::InvalidInput);
+
+        let internal = store_error(StoreError::Database(rusqlite::Error::InvalidQuery));
+        assert_eq!(internal.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(internal.code, ErrorCode::Internal);
+    }
+}

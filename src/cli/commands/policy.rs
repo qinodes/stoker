@@ -312,3 +312,7 @@ fn parse_policy_value(key: PolicyKey, value: &str) -> anyhow::Result<u64> {
         .checked_mul(POLICY_MB_BYTES)
         .ok_or_else(|| anyhow::anyhow!("{} is too large", policy_key_name(key)))
 }
+
+#[cfg(test)]
+#[path = "policy_tests.rs"]
+mod tests;

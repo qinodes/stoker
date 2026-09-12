@@ -83,3 +83,119 @@ impl Store {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn test_store() -> Store {
+        let directory = Box::leak(Box::new(TempDir::new().unwrap()));
+        Store::open(directory.path().join("stoker.db")).unwrap()
+    }
+
+    #[test]
+    fn invalid_runtime_policies_are_rejected_before_opening_a_transaction() {
+        let store = test_store();
+        let defaults = RuntimePolicy::default();
+        for (policy, expected) in [
+            (
+                RuntimePolicy {
+                    termination_grace_ms: 0,
+                    ..defaults
+                },
+                "termination grace must be greater than zero",
+            ),
+            (
+                RuntimePolicy {
+                    startup_timeout_ms: 0,
+                    ..defaults
+                },
+                "startup timeout must be greater than zero",
+            ),
+            (
+                RuntimePolicy {
+                    max_runtime_ms: Some(0),
+                    ..defaults
+                },
+                "maximum runtime must be greater than zero when set",
+            ),
+        ] {
+            assert!(matches!(
+                store.set_runtime_policy(policy),
+                Err(StoreError::InvalidData(message)) if message == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn oversized_runtime_policy_values_report_the_field_that_cannot_be_stored() {
+        let store = test_store();
+        store.lock_queue().unwrap();
+        let defaults = RuntimePolicy::default();
+        for (policy, expected) in [
+            (
+                RuntimePolicy {
+                    termination_grace_ms: u64::MAX,
+                    ..defaults
+                },
+                "termination grace is too large",
+            ),
+            (
+                RuntimePolicy {
+                    max_runtime_ms: Some(u64::MAX),
+                    ..defaults
+                },
+                "maximum runtime is too large",
+            ),
+            (
+                RuntimePolicy {
+                    startup_timeout_ms: u64::MAX,
+                    ..defaults
+                },
+                "startup timeout is too large",
+            ),
+        ] {
+            assert!(matches!(
+                store.set_runtime_policy(policy),
+                Err(StoreError::InvalidData(message)) if message == expected
+            ));
+        }
+    }
+
+    #[test]
+    fn negative_database_values_are_rejected_when_reading_runtime_policy() {
+        let store = test_store();
+        for column in ["termination_grace_ms", "startup_timeout_ms"] {
+            let connection = store.lock().unwrap();
+            connection
+                .execute(
+                    &format!("UPDATE settings SET {column} = -1 WHERE id = 1"),
+                    [],
+                )
+                .unwrap();
+            drop(connection);
+            assert!(matches!(
+                store.runtime_policy(),
+                Err(StoreError::InvalidData(_))
+            ));
+            let connection = store.lock().unwrap();
+            connection
+                .execute(
+                    &format!("UPDATE settings SET {column} = 500 WHERE id = 1"),
+                    [],
+                )
+                .unwrap();
+        }
+
+        let connection = store.lock().unwrap();
+        connection
+            .execute("UPDATE settings SET max_runtime_ms = -1 WHERE id = 1", [])
+            .unwrap();
+        drop(connection);
+        assert!(matches!(
+            store.runtime_policy(),
+            Err(StoreError::InvalidData(message)) if message == "invalid maximum runtime"
+        ));
+    }
+}

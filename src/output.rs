@@ -73,7 +73,9 @@ pub fn paint_state(state: JobState, enabled: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{colors_enabled, paint, paint_bold, paint_state, state_color};
+    use super::{
+        colors_enabled, paint, paint_bold, paint_state, state_color, stderr_color_enabled,
+    };
     use crate::JobState;
     use crossterm::style::Color;
 
@@ -104,6 +106,14 @@ mod tests {
         assert_eq!(state_color(JobState::Succeeded), Color::Green);
         assert_eq!(state_color(JobState::Failed), Color::Red);
         assert_eq!(state_color(JobState::Running), Color::Yellow);
+        assert_eq!(state_color(JobState::Starting), Color::Yellow);
+        assert_eq!(state_color(JobState::Cancelling), Color::Magenta);
         assert_eq!(state_color(JobState::Cancelled), Color::Magenta);
+    }
+
+    #[test]
+    fn stderr_color_detection_is_safe_when_output_is_redirected() {
+        let _ = stderr_color_enabled();
+        assert_eq!(paint_state(JobState::Cancelling, false), "CANCELLING");
     }
 }

@@ -327,3 +327,72 @@ fn snapshots_without_a_version_use_the_compatible_default() {
         [ConfigSnapshotEntry::Valid(file)] if file.path == valid_path && file.snapshot.snapshot_version == 1
     ));
 }
+
+#[test]
+fn log_policy_validation_rejects_zero_and_inconsistent_limits() {
+    let defaults = LogPolicy::default();
+
+    let mut invalid = defaults;
+    invalid.max_bytes_per_job = 0;
+    assert_eq!(
+        invalid.validate().unwrap_err(),
+        "log max bytes per job must be greater than zero"
+    );
+
+    invalid = defaults;
+    invalid.segment_bytes = 0;
+    assert_eq!(
+        invalid.validate().unwrap_err(),
+        "log segment bytes must be greater than zero"
+    );
+
+    invalid = defaults;
+    invalid.segment_bytes = defaults.max_bytes_per_job / 2 + 1;
+    assert_eq!(
+        invalid.validate().unwrap_err(),
+        "log segment bytes cannot exceed half of the shared per-job log limit"
+    );
+
+    invalid = defaults;
+    invalid.max_bytes_total = defaults.max_bytes_per_job - 1;
+    assert_eq!(
+        invalid.validate().unwrap_err(),
+        "global log limit cannot be smaller than the per-job log limit"
+    );
+
+    invalid = defaults;
+    invalid.disk_reserve_bytes = 0;
+    assert_eq!(
+        invalid.validate().unwrap_err(),
+        "log disk reserve bytes must be greater than zero"
+    );
+}
+
+#[test]
+fn runtime_policy_validation_rejects_zero_values_but_allows_disabled_limit() {
+    let defaults = RuntimePolicy::default();
+    assert!(defaults.validate().is_ok());
+
+    let mut invalid = defaults;
+    invalid.termination_grace_ms = 0;
+    assert_eq!(
+        invalid.validate().unwrap_err(),
+        "termination grace must be greater than zero"
+    );
+
+    invalid = defaults;
+    invalid.startup_timeout_ms = 0;
+    assert_eq!(
+        invalid.validate().unwrap_err(),
+        "startup timeout must be greater than zero"
+    );
+
+    invalid = defaults;
+    invalid.max_runtime_ms = Some(0);
+    assert_eq!(
+        invalid.validate().unwrap_err(),
+        "maximum runtime must be greater than zero when set"
+    );
+
+    assert_eq!(defaults.max_runtime_ms, None);
+}

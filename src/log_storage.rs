@@ -224,6 +224,92 @@ mod tests {
 
         assert!(run.join("stdout.log").exists());
     }
+
+    #[test]
+    fn terminal_log_size_counts_only_supported_log_artifacts() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        let id = uuid::Uuid::nil();
+        let run = paths.runs.join(id.to_string());
+        std::fs::create_dir_all(run.join("nested")).unwrap();
+        std::fs::write(run.join("stdout.log"), b"123").unwrap();
+        std::fs::write(run.join("stderr.000001.log"), b"12").unwrap();
+        std::fs::write(run.join("stdout.meta.json"), b"1").unwrap();
+        std::fs::write(run.join("ignored.txt"), b"ignored").unwrap();
+        std::fs::write(run.join("nested").join("stdout.log"), b"nested").unwrap();
+
+        assert_eq!(terminal_log_size(&paths, id).unwrap(), 6);
+        assert_eq!(terminal_log_size(&paths, uuid::Uuid::new_v4()).unwrap(), 0);
+    }
+
+    #[test]
+    fn segment_listing_orders_numbered_segments_and_ignores_invalid_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("stdout.log");
+        std::fs::write(&path, b"base").unwrap();
+        for name in [
+            "stdout.000002.log",
+            "stdout.000001.log",
+            "stdout.12.log",
+            "stdout.000003.txt",
+            "stderr.000004.log",
+        ] {
+            std::fs::write(directory.path().join(name), b"segment").unwrap();
+        }
+
+        let listed = list_segments(&path).unwrap();
+        assert_eq!(
+            listed,
+            vec![
+                path.clone(),
+                directory.path().join("stdout.000001.log"),
+                directory.path().join("stdout.000002.log"),
+            ]
+        );
+        assert_eq!(
+            segment_path(&path, 4),
+            directory.path().join("stdout.000004.log")
+        );
+        let fallback = directory.path().join("no-extension");
+        assert_eq!(
+            segment_path(&fallback, 0),
+            directory.path().join("no-extension.000000.log")
+        );
+    }
+
+    #[test]
+    fn metadata_reader_distinguishes_missing_and_malformed_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("stdout.log");
+        assert_eq!(read_metadata(&path).unwrap(), None);
+        std::fs::write(metadata_path(&path), b"not-json").unwrap();
+        assert!(read_metadata(&path).is_err());
+    }
+
+    #[test]
+    fn retention_limit_removes_logs_even_when_job_count_limit_keeps_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = paths(directory.path());
+        std::fs::create_dir_all(&paths.runs).unwrap();
+        let store = Store::open(&paths.database).unwrap();
+        let id = job(&store, "over-capacity");
+        let run = paths.runs.join(id.to_string());
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join("stdout.log"), b"larger-than-limit").unwrap();
+
+        let removed = enforce_retention(
+            &paths,
+            &store,
+            LogPolicy {
+                retention_jobs: 100,
+                max_bytes_total: 1,
+                ..LogPolicy::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(removed, 1);
+        assert!(!run.join("stdout.log").exists());
+    }
 }
 
 pub(crate) fn metadata_path(path: &Path) -> PathBuf {
