@@ -13,17 +13,21 @@
 
 [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | English
 
-**stoker is a lightweight, cross-platform CLI for scheduling multiple time-consuming jobs.**
+**stoker is a cross-platform CLI for sharing a machine and running time-consuming jobs one at a time.**
 
-Designed specifically to run multiple time-consuming tasks sequentially and reliably.
+When batch computation or data processing ties up resources for long periods, Stoker lets everyone put their work in a shared queue. The background scheduler runs one job at a time, reducing competition for GPU, CPU, or memory among queued jobs.
 
-Stoker uses a local SQLite database for job state and logs. No Redis, PostgreSQL, or other external database is required.
+No more asking a colleague, “Are you using it? Can I use it now?” Add your work to the queue, and it runs automatically when your turn comes.
 
-- Suitable for shared use by multiple people who want to avoid tasks competing for resources.
+- **Submit together, queue centrally:** Multiple users can submit jobs at the same time, view job status, and reorder the queue through the CLI or Web UI.
 
-- Supports multiple users submitting scheduled jobs at the same time.
+- **Prepare first, submit when ready:** `stoker add` creates a draft Job. Review it, then use `stoker commit` to add it to the execution queue.
 
-- Each Job runs by default from the directory where you submit the command (`stoker add`).
+- **Keep your working directory:** Each Job starts by default in the directory where you ran `stoker add`, making it easy to submit work from different projects.
+
+- **Lightweight background operation:** Built with Rust and designed for low resource usage, Stoker is suited to managing the job queue in the background for long periods, leaving computing resources for your work.
+
+Job state is stored in a local SQLite database, and execution logs are kept locally. No Redis, PostgreSQL, or other external database service needs to be set up.
 
 ## Web UI demo
 
