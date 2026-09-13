@@ -232,7 +232,7 @@
 
 .policy-fields { padding: 0 22px; }
 
-.policy-field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, 44%); gap: 18px; align-items: center; padding: 17px 0; border-top: 1px solid rgba(52, 75, 103, .42); }
+.policy-field { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 18px; align-items: center; padding: 17px 0; border-top: 1px solid rgba(52, 75, 103, .42); }
 
 .policy-field-copy { min-width: 0; }
 
@@ -244,11 +244,11 @@
 
 .policy-field-copy small strong { color: var(--cyan); font-weight: 700; }
 
-.policy-field-control { display: grid; gap: 8px; }
+.policy-field-control { display: grid; gap: 8px; min-width: 0; justify-self: end; }
 
 .policy-input-wrap { display: flex; align-items: center; gap: 8px; }
 
-.policy-input-wrap .text-input { min-width: 0; width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.policy-input-wrap .text-input { min-width: 0; width: 180px; flex: 0 0 180px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 .policy-input-wrap > span { flex: 0 0 auto; color: var(--text-subtle); font-size: 9px; }
 

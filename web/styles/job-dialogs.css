@@ -24,8 +24,6 @@
 
 .dialog-close:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text); }
 
-.dialog-language { display: flex; justify-content: flex-end; margin-bottom: 12px; }
-
 .job-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 
 .job-field { margin-top: 16px; }

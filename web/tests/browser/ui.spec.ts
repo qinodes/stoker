@@ -424,9 +424,10 @@ test.describe("localized Web UI", () => {
       await page.locator('[data-action="new-job"]').click();
       await page.locator("#job-name").fill("unsaved 草稿・下書き");
       await page.locator("#job-command").fill("echo original-command");
-      const formPicker = page.locator("#job-dialog .language-picker");
-      await formPicker.selectOption("en");
-      await formPicker.selectOption(locale);
+      await page.locator('[data-action="close-job-form"]').first().click();
+      await picker.selectOption("en");
+      await picker.selectOption(locale);
+      await page.locator('[data-action="new-job"]').click();
       await expect(page.locator("#job-name")).toHaveValue("unsaved 草稿・下書き");
       await expect(page.locator("#job-command")).toHaveValue("echo original-command");
       await expect(page.locator("#job-dialog-title")).toHaveText(translate(locale, "jobs.newTitle"));
@@ -439,14 +440,9 @@ test.describe("localized Web UI", () => {
       await expect(page.locator(".job-detail-directory-status")).toHaveText("planned");
       await page.locator('[data-action="edit-description"]').click();
       await page.locator("#description-input").fill("unsaved edited description");
-      await page.locator("#job-detail-dialog .language-picker").selectOption("en");
-      await page.locator("#job-detail-dialog .language-picker").selectOption(locale);
       await expect(page.locator("#description-input")).toHaveValue("unsaved edited description");
       await page.locator('[data-job-action="commit"]').click();
       await expect(page.locator("#confirm-title")).toHaveText(translate(locale, "confirm.commitTitle"));
-      await page.locator("#confirm-dialog .language-picker").selectOption("en");
-      await expect(page.locator("#confirm-title")).toHaveText("Commit this job?");
-      await page.locator("#confirm-dialog .language-picker").selectOption(locale);
       await page.locator("#confirm-accept").click();
       await expect(page.locator("#job-detail-dialog")).not.toBeVisible();
       expect(seed.state).toBe("QUEUED");
@@ -577,7 +573,7 @@ test.describe("localized Web UI", () => {
       await page.screenshot({ path: testInfo.outputPath(`${locale}-mobile.png`), fullPage: true });
       await page.locator('[data-route="jobs"]').click();
       await page.locator('[data-action="new-job"]').click();
-      await expect(page.locator("#job-dialog .language-picker")).toBeInViewport();
+      await expect(page.locator("#job-dialog")).toBeVisible();
       await expect(page.locator("#job-dialog-title")).toHaveText(translate(locale, "jobs.newTitle"));
       expect((await page.locator("#job-dialog").boundingBox())!.width).toBe(320);
       expect((await page.locator("#job-cwd").boundingBox())!.height).toBeLessThan(60);
