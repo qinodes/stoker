@@ -13,7 +13,7 @@
 
 [繁體中文](README.zh-TW.md) | [日本語](README.ja.md) | English
 
-**stoker is a cross-platform CLI for sharing a machine and running time-consuming jobs one at a time.**
+**stoker is a cross-platform (Linux/macOS/Windows) CLI for sharing a machine and running time-consuming jobs one at a time.**
 
 When batch computation or data processing ties up resources for long periods, Stoker lets everyone put their work in a shared queue. The background scheduler runs one job at a time, reducing competition for GPU, CPU, or memory among queued jobs.
 
