@@ -32,7 +32,7 @@ Job 狀態以本機 SQLite 保存，執行日誌也保留在本機；不需要�
 ## Web UI 展示
 
 <p align="center">
-  <img src="assets/ui-demo.png" alt="Stoker Web UI 展示">
+  <img src="assets/ui-demo-v2.png" alt="Stoker Web UI 展示">
 </p>
 
 Web UI 可以建立與查看 DRAFT Job、修改描述、commit 或取消 Job、管理 Queue、讀取 logs，以及管理時區、設定快照與 scheduler policy。

@@ -32,7 +32,7 @@ Job の状態はローカルの SQLite に保存し、実行ログもローカ�
 ## Web UI デモ
 
 <p align="center">
-  <img src="assets/ui-demo.png" alt="Stoker Web UI デモ">
+  <img src="assets/ui-demo-v2.png" alt="Stoker Web UI デモ">
 </p>
 
 Web UI では、DRAFT Job の作成と確認、説明の編集、Job の commit／cancel、Queue の管理、ログの表示、タイムゾーン・設定スナップショット・scheduler policy の管理ができます。

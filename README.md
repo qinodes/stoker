@@ -32,7 +32,7 @@ Job state is stored in a local SQLite database, and execution logs are kept loca
 ## Web UI demo
 
 <p align="center">
-  <img src="assets/ui-demo.png" alt="Stoker web UI">
+  <img src="assets/ui-demo-v2.png" alt="Stoker web UI">
 </p>
 
 The Web UI can create and review DRAFT jobs, edit descriptions, commit or cancel jobs, manage the queue, read logs, manage timezone snapshots, and adjust scheduler policy.
