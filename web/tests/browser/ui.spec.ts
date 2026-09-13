@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route as PlaywrightRoute, type Request } from "@playwright/test";
 import type { Job, PolicyResponse, RootsResponse, SettingsResponse, Snapshot, StatusResponse, TimezoneInfo } from "../../src/types.ts";
-import { LANGUAGE_STORAGE_KEY, translate, type StaticKey } from "../../src/i18n/messages.ts";
+import { LANGUAGE_STORAGE_KEY, translate, type Locale, type StaticKey } from "../../src/i18n/messages.ts";
 
 interface MockModel {
   jobs: Job[];
@@ -396,6 +396,63 @@ test("policy page explains the queue gate and supports reset", async ({ page }) 
 });
 
 test.describe("localized Web UI", () => {
+  test("language menu supports keyboard selection, focus return and outside dismissal", async ({ page }, testInfo) => {
+    await mockBackend(page);
+    await page.goto("/");
+    const trigger = page.locator(".topbar .language-picker");
+    const menu = page.getByRole("menu");
+    const english = page.getByRole("menuitemradio", { name: "English", exact: true });
+    const chinese = page.getByRole("menuitemradio", { name: "繁體中文", exact: true });
+    const japanese = page.getByRole("menuitemradio", { name: "日本語", exact: true });
+    await trigger.focus();
+    await trigger.press("ArrowDown");
+    await expect(menu).toBeVisible();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect(english).toBeFocused();
+    await english.press("ArrowUp");
+    await expect(japanese).toBeFocused();
+    await japanese.press("Home");
+    await expect(english).toBeFocused();
+    await english.press("End");
+    await expect(japanese).toBeFocused();
+    await japanese.press("ArrowDown");
+    await expect(english).toBeFocused();
+    await english.press("ArrowDown");
+    await chinese.press("Enter");
+    await expect(page.locator("html")).toHaveAttribute("lang", "zh-TW");
+    await expect(menu).not.toBeVisible();
+    await expect(trigger).toBeFocused();
+
+    await trigger.click();
+    await expect(chinese).toBeFocused();
+    await expect(chinese).toHaveAttribute("aria-checked", "true");
+    const menuBounds = (await menu.boundingBox())!;
+    const buttonBounds = (await trigger.boundingBox())!;
+    await page.screenshot({ path: testInfo.outputPath("language-menu.png"), clip: { x: menuBounds.x - 8, y: buttonBounds.y - 8, width: menuBounds.width + 16, height: menuBounds.y + menuBounds.height - buttonBounds.y + 16 } });
+    await chinese.press("Escape");
+    await expect(menu).not.toBeVisible();
+    await expect(trigger).toBeFocused();
+
+    await trigger.press("ArrowUp");
+    await expect(japanese).toBeFocused();
+    await japanese.press("e");
+    await expect(english).toBeFocused();
+    await page.getByRole("heading", { level: 1 }).click();
+    await expect(menu).not.toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("lang", "zh-TW");
+
+    await trigger.click();
+    await chinese.press("Tab");
+    await expect(menu).not.toBeVisible();
+    await expect(page.locator('[data-action="refresh"]')).toBeFocused();
+    await trigger.click();
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await trigger.click();
+    await page.locator('[data-route="jobs"]').focus();
+    await expect(menu).not.toBeVisible();
+  });
+
   for (const locale of ["zh-TW", "ja"] as const) {
     test(`${locale} covers all pages, dialogs, raw API values, and persistent preferences`, async ({ page }) => {
       const model = await mockBackend(page);
@@ -406,7 +463,7 @@ test.describe("localized Web UI", () => {
       model.queue = [];
       await page.goto("/");
       const picker = page.locator(".topbar .language-picker");
-      await picker.selectOption(locale);
+      await chooseLanguage(page, locale);
       await expect(page.locator("html")).toHaveAttribute("lang", locale);
       await expect(page.getByRole("heading", { name: translate(locale, "overview.title") })).toBeVisible();
       await expect(page.locator(".activity-copy")).toContainText(translate(locale, "state.DRAFT"));
@@ -415,8 +472,8 @@ test.describe("localized Web UI", () => {
       await expect(page.getByRole("heading", { name: translate(locale, "jobs.title") })).toBeVisible();
       await page.locator("#job-search").fill("使用者");
       await page.locator("#state-filter").selectOption("DRAFT");
-      await picker.selectOption("en");
-      await picker.selectOption(locale);
+      await chooseLanguage(page, "en");
+      await chooseLanguage(page, locale);
       await expect(page.locator("#job-search")).toHaveValue("使用者");
       await expect(page.locator("#state-filter")).toHaveValue("DRAFT");
       await expect(page.locator('.jobs-table .state-badge')).toHaveText(translate(locale, "state.DRAFT"));
@@ -425,8 +482,8 @@ test.describe("localized Web UI", () => {
       await page.locator("#job-name").fill("unsaved 草稿・下書き");
       await page.locator("#job-command").fill("echo original-command");
       await page.locator('[data-action="close-job-form"]').first().click();
-      await picker.selectOption("en");
-      await picker.selectOption(locale);
+      await chooseLanguage(page, "en");
+      await chooseLanguage(page, locale);
       await page.locator('[data-action="new-job"]').click();
       await expect(page.locator("#job-name")).toHaveValue("unsaved 草稿・下書き");
       await expect(page.locator("#job-command")).toHaveValue("echo original-command");
@@ -447,9 +504,9 @@ test.describe("localized Web UI", () => {
       await expect(page.locator("#job-detail-dialog")).not.toBeVisible();
       expect(seed.state).toBe("QUEUED");
       await expect(page.locator("#toast-region")).toContainText(translate(locale, "toast.saved"));
-      await picker.selectOption("en");
+      await chooseLanguage(page, "en");
       await expect(page.locator("#toast-region")).toContainText("Change saved to the server.");
-      await picker.selectOption(locale);
+      await chooseLanguage(page, locale);
 
       await page.locator('[data-route="queue"]').click();
       await expect(page.getByRole("heading", { name: translate(locale, "queue.title") })).toBeVisible();
@@ -474,8 +531,8 @@ test.describe("localized Web UI", () => {
       await page.locator("#timezone-input").fill("Asia/Tokyo");
       await expect(page.locator("#timezone-feedback")).toHaveText(translate(locale, "config.validTimezone"));
       await expect(page.locator("#timezone-set")).toBeEnabled();
-      await picker.selectOption("en");
-      await picker.selectOption(locale);
+      await chooseLanguage(page, "en");
+      await chooseLanguage(page, locale);
       await expect(page.locator("#timezone-input")).toHaveValue("Asia/Tokyo");
       await expect(page.locator(".config-summary strong")).toHaveText("UTC");
 
@@ -486,11 +543,13 @@ test.describe("localized Web UI", () => {
       await page.locator("#policy-max_runtime_ms").fill("0");
       await expect(page.getByText(translate(locale, "policy.invalidPositive"))).toBeVisible();
       await page.locator("#policy-max_runtime_ms").fill("12345");
-      await picker.selectOption("en");
-      await picker.selectOption(locale);
+      await chooseLanguage(page, "en");
+      await chooseLanguage(page, locale);
       await expect(page.locator("#policy-max_runtime_ms")).toHaveValue("12345");
       await page.reload();
-      await expect(picker).toHaveValue(locale);
+      await picker.click();
+      await expect(page.locator(`.language-option[data-locale="${locale}"]`)).toHaveAttribute("aria-checked", "true");
+      await page.keyboard.press("Escape");
       await expect(page.locator("html")).toHaveAttribute("lang", locale);
       await expect(page.locator("#breadcrumb-current")).toHaveText(translate(locale, "nav.policy"));
     });
@@ -506,7 +565,7 @@ test.describe("localized Web UI", () => {
     await expect(page.locator("#connection-label")).toHaveText("Server connected");
     const before = statusRequests;
     await page.clock.runFor(1000);
-    await page.locator(".topbar .language-picker").selectOption("ja");
+    await chooseLanguage(page, "ja");
     await expect(page.locator("#connection-label")).toHaveText(translate("ja", "connection.connected"));
     expect(statusRequests).toBe(before);
     await page.clock.runFor(1000);
@@ -520,7 +579,7 @@ test.describe("localized Web UI", () => {
       await mockBackend(page);
       await page.goto("/");
       await expect(page.locator("html")).toHaveAttribute("lang", "ja");
-      await page.locator(".topbar .language-picker").selectOption("zh-TW");
+      await chooseLanguage(page, "zh-TW");
       await page.reload();
       await expect(page.locator("html")).toHaveAttribute("lang", "zh-TW");
       await page.addInitScript(() => {
@@ -529,7 +588,7 @@ test.describe("localized Web UI", () => {
       });
       await page.reload();
       await expect(page.locator("html")).toHaveAttribute("lang", "ja");
-      await page.locator(".topbar .language-picker").selectOption("zh-TW");
+      await chooseLanguage(page, "zh-TW");
       await expect(page.locator("html")).toHaveAttribute("lang", "zh-TW");
     } finally {
       await context.close();
@@ -551,7 +610,7 @@ test.describe("localized Web UI", () => {
       await page.setViewportSize({ width: 320, height: 760 });
       await mockBackend(page);
       await page.goto("/");
-      await page.locator(".topbar .language-picker").selectOption(locale);
+      await chooseLanguage(page, locale);
       const titles: Record<string, StaticKey> = { overview: "overview.title", jobs: "jobs.title", queue: "queue.title", logs: "logs.title", configuration: "config.title", policy: "policy.title" };
       for (const [route, title] of Object.entries(titles)) {
         await page.locator(`[data-route="${route}"]`).click();
@@ -561,6 +620,13 @@ test.describe("localized Web UI", () => {
         await expect(picker).toBeInViewport();
         const bounds = await picker.boundingBox();
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+        await picker.click();
+        const menu = page.getByRole("menu");
+        await expect(menu).toBeInViewport();
+        const menuBounds = (await menu.boundingBox())!;
+        expect(menuBounds.x).toBeGreaterThanOrEqual(0);
+        expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(320);
+        await page.keyboard.press("Escape");
         for (const label of await page.locator(".nav-label").all()) {
           const fits = await label.evaluate(element => {
             const labelBounds = element.getBoundingClientRect();
@@ -581,6 +647,11 @@ test.describe("localized Web UI", () => {
     });
   }
 });
+
+async function chooseLanguage(page: Page, locale: Locale) {
+  await page.locator(".topbar .language-picker").click();
+  await page.locator(`.language-option[data-locale="${locale}"]`).click();
+}
 
 function requestJson<T>(request: Request): T {
   return request.postDataJSON() as T;
