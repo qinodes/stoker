@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route as PlaywrightRoute, type Request } from "@playwright/test";
 import type { Job, PolicyResponse, RootsResponse, SettingsResponse, Snapshot, StatusResponse, TimezoneInfo } from "../../src/types.ts";
+import { LANGUAGE_STORAGE_KEY, translate, type StaticKey } from "../../src/i18n/messages.ts";
 
 interface MockModel {
   jobs: Job[];
@@ -392,6 +393,197 @@ test("policy page explains the queue gate and supports reset", async ({ page }) 
   await expect(page.getByText("Policy updated.")).toBeVisible();
   await page.locator('[data-policy-unset="max-runtime-ms"]').click();
   await expect(runtime).toHaveValue("");
+});
+
+test.describe("localized Web UI", () => {
+  for (const locale of ["zh-TW", "ja"] as const) {
+    test(`${locale} covers all pages, dialogs, raw API values, and persistent preferences`, async ({ page }) => {
+      const model = await mockBackend(page);
+      const seed = model.jobs[0];
+      seed.name = "使用者名稱・日本語";
+      seed.description = "Original user text 原始描述";
+      seed.state = "DRAFT";
+      model.queue = [];
+      await page.goto("/");
+      const picker = page.locator(".topbar .language-picker");
+      await picker.selectOption(locale);
+      await expect(page.locator("html")).toHaveAttribute("lang", locale);
+      await expect(page.getByRole("heading", { name: translate(locale, "overview.title") })).toBeVisible();
+      await expect(page.locator(".activity-copy")).toContainText(translate(locale, "state.DRAFT"));
+
+      await page.locator('[data-route="jobs"]').click();
+      await expect(page.getByRole("heading", { name: translate(locale, "jobs.title") })).toBeVisible();
+      await page.locator("#job-search").fill("使用者");
+      await page.locator("#state-filter").selectOption("DRAFT");
+      await picker.selectOption("en");
+      await picker.selectOption(locale);
+      await expect(page.locator("#job-search")).toHaveValue("使用者");
+      await expect(page.locator("#state-filter")).toHaveValue("DRAFT");
+      await expect(page.locator('.jobs-table .state-badge')).toHaveText(translate(locale, "state.DRAFT"));
+
+      await page.locator('[data-action="new-job"]').click();
+      await page.locator("#job-name").fill("unsaved 草稿・下書き");
+      await page.locator("#job-command").fill("echo original-command");
+      const formPicker = page.locator("#job-dialog .language-picker");
+      await formPicker.selectOption("en");
+      await formPicker.selectOption(locale);
+      await expect(page.locator("#job-name")).toHaveValue("unsaved 草稿・下書き");
+      await expect(page.locator("#job-command")).toHaveValue("echo original-command");
+      await expect(page.locator("#job-dialog-title")).toHaveText(translate(locale, "jobs.newTitle"));
+      await page.locator('[data-action="close-job-form"]').first().click();
+
+      await page.locator(".job-row").click();
+      await expect(page.locator("#job-detail-title")).toHaveText(seed.name);
+      await expect(page.locator(".job-description-preview")).toHaveText(seed.description!);
+      await expect(page.locator(".job-command")).toHaveText("echo hello");
+      await expect(page.locator(".job-detail-directory-status")).toHaveText("planned");
+      await page.locator('[data-action="edit-description"]').click();
+      await page.locator("#description-input").fill("unsaved edited description");
+      await page.locator("#job-detail-dialog .language-picker").selectOption("en");
+      await page.locator("#job-detail-dialog .language-picker").selectOption(locale);
+      await expect(page.locator("#description-input")).toHaveValue("unsaved edited description");
+      await page.locator('[data-job-action="commit"]').click();
+      await expect(page.locator("#confirm-title")).toHaveText(translate(locale, "confirm.commitTitle"));
+      await page.locator("#confirm-dialog .language-picker").selectOption("en");
+      await expect(page.locator("#confirm-title")).toHaveText("Commit this job?");
+      await page.locator("#confirm-dialog .language-picker").selectOption(locale);
+      await page.locator("#confirm-accept").click();
+      await expect(page.locator("#job-detail-dialog")).not.toBeVisible();
+      expect(seed.state).toBe("QUEUED");
+      await expect(page.locator("#toast-region")).toContainText(translate(locale, "toast.saved"));
+      await picker.selectOption("en");
+      await expect(page.locator("#toast-region")).toContainText("Change saved to the server.");
+      await picker.selectOption(locale);
+
+      await page.locator('[data-route="queue"]').click();
+      await expect(page.getByRole("heading", { name: translate(locale, "queue.title") })).toBeVisible();
+      await expect(page.locator(".queue-order-table .state-badge").first()).toHaveText(translate(locale, "state.QUEUED"));
+      await page.locator('[data-route="logs"]').click();
+      await expect(page.getByRole("heading", { name: translate(locale, "logs.title") })).toBeVisible();
+      await page.locator("#log-job-select").selectOption(seed.id);
+      await expect(page.locator(".log-output")).toContainText("hello from stdout");
+      await page.locator('[data-log-stream="stderr"]').click();
+      await expect(page.locator(".log-message")).toContainText(translate(locale, "logs.unavailable", { stream: "stderr" }));
+
+      await page.locator('[data-route="configuration"]').click();
+      await expect(page.getByRole("heading", { name: translate(locale, "config.title") })).toBeVisible();
+      await expect(page.locator("#timezone-feedback")).toHaveCount(0);
+      await expect(page.locator("#timezone-set")).toBeDisabled();
+      await page.locator("#timezone-input").fill("Not/AZone");
+      await expect(page.locator("#timezone-feedback")).toHaveText(translate(locale, "config.chooseSuggestion"));
+      await expect(page.locator("#timezone-set")).toBeDisabled();
+      await page.locator("#timezone-input").fill("UTC");
+      await expect(page.locator("#timezone-feedback")).toHaveCount(0);
+      await expect(page.locator("#timezone-set")).toBeDisabled();
+      await page.locator("#timezone-input").fill("Asia/Tokyo");
+      await expect(page.locator("#timezone-feedback")).toHaveText(translate(locale, "config.validTimezone"));
+      await expect(page.locator("#timezone-set")).toBeEnabled();
+      await picker.selectOption("en");
+      await picker.selectOption(locale);
+      await expect(page.locator("#timezone-input")).toHaveValue("Asia/Tokyo");
+      await expect(page.locator(".config-summary strong")).toHaveText("UTC");
+
+      await page.locator('[data-route="policy"]').click();
+      await expect(page.getByRole("heading", { name: translate(locale, "policy.title"), level: 1 })).toBeVisible();
+      await expect(page.locator(".policy-gate-copy p")).toHaveText("Lock the queue before changing policy.");
+      await page.locator("[data-policy-lock]").click();
+      await page.locator("#policy-max_runtime_ms").fill("0");
+      await expect(page.getByText(translate(locale, "policy.invalidPositive"))).toBeVisible();
+      await page.locator("#policy-max_runtime_ms").fill("12345");
+      await picker.selectOption("en");
+      await picker.selectOption(locale);
+      await expect(page.locator("#policy-max_runtime_ms")).toHaveValue("12345");
+      await page.reload();
+      await expect(picker).toHaveValue(locale);
+      await expect(page.locator("html")).toHaveAttribute("lang", locale);
+      await expect(page.locator("#breadcrumb-current")).toHaveText(translate(locale, "nav.policy"));
+    });
+  }
+
+  test("switching language does not reload data or reset the two-second polling timer", async ({ page }) => {
+    let statusRequests = 0;
+    await page.clock.install({ time: new Date("2026-01-01T00:00:00Z") });
+    // Freeze before navigation so host/browser clock drift cannot move pauseAt into the past.
+    await page.clock.pauseAt(new Date("2026-01-01T00:01:00Z"));
+    await mockBackend(page, { onRequest(path) { if (path === "/api/v1/status") statusRequests++; } });
+    await page.goto("/");
+    await expect(page.locator("#connection-label")).toHaveText("Server connected");
+    const before = statusRequests;
+    await page.clock.runFor(1000);
+    await page.locator(".topbar .language-picker").selectOption("ja");
+    await expect(page.locator("#connection-label")).toHaveText(translate("ja", "connection.connected"));
+    expect(statusRequests).toBe(before);
+    await page.clock.runFor(1000);
+    await expect.poll(() => statusRequests).toBe(before + 1);
+  });
+
+  test("browser language detection and saved override work with unavailable storage", async ({ browser }) => {
+    const context = await browser.newContext({ locale: "ja-JP" });
+    try {
+      const page = await context.newPage();
+      await mockBackend(page);
+      await page.goto("/");
+      await expect(page.locator("html")).toHaveAttribute("lang", "ja");
+      await page.locator(".topbar .language-picker").selectOption("zh-TW");
+      await page.reload();
+      await expect(page.locator("html")).toHaveAttribute("lang", "zh-TW");
+      await page.addInitScript(() => {
+        Storage.prototype.getItem = () => { throw new DOMException("Storage unavailable", "SecurityError"); };
+        Storage.prototype.setItem = () => { throw new DOMException("Storage unavailable", "SecurityError"); };
+      });
+      await page.reload();
+      await expect(page.locator("html")).toHaveAttribute("lang", "ja");
+      await page.locator(".topbar .language-picker").selectOption("zh-TW");
+      await expect(page.locator("html")).toHaveAttribute("lang", "zh-TW");
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("backend errors remain English under a translated failure screen", async ({ page }) => {
+    await page.addInitScript(({ key }) => localStorage.setItem(key, "zh-TW"), { key: LANGUAGE_STORAGE_KEY });
+    await mockBackend(page);
+    await page.route("**/api/v1/status", route => typedError(route, 500, "internal", "Original backend error"));
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: translate("zh-TW", "workspace.loadFailed") })).toBeVisible();
+    await expect(page.getByText("Original backend error")).toBeVisible();
+    await expect(page.getByRole("button", { name: translate("zh-TW", "common.retry") })).toBeVisible();
+  });
+
+  for (const locale of ["zh-TW", "ja"] as const) {
+    test(`${locale} fits navigation and controls at a 320px viewport`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: 320, height: 760 });
+      await mockBackend(page);
+      await page.goto("/");
+      await page.locator(".topbar .language-picker").selectOption(locale);
+      const titles: Record<string, StaticKey> = { overview: "overview.title", jobs: "jobs.title", queue: "queue.title", logs: "logs.title", configuration: "config.title", policy: "policy.title" };
+      for (const [route, title] of Object.entries(titles)) {
+        await page.locator(`[data-route="${route}"]`).click();
+        await expect(page.getByRole("heading", { name: translate(locale, title), level: 1 })).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+        const picker = page.locator(".topbar .language-picker");
+        await expect(picker).toBeInViewport();
+        const bounds = await picker.boundingBox();
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+        for (const label of await page.locator(".nav-label").all()) {
+          const fits = await label.evaluate(element => {
+            const labelBounds = element.getBoundingClientRect();
+            const itemBounds = element.parentElement!.getBoundingClientRect();
+            return labelBounds.left >= itemBounds.left && labelBounds.right <= itemBounds.right;
+          });
+          expect(fits).toBeTruthy();
+        }
+      }
+      await page.screenshot({ path: testInfo.outputPath(`${locale}-mobile.png`), fullPage: true });
+      await page.locator('[data-route="jobs"]').click();
+      await page.locator('[data-action="new-job"]').click();
+      await expect(page.locator("#job-dialog .language-picker")).toBeInViewport();
+      await expect(page.locator("#job-dialog-title")).toHaveText(translate(locale, "jobs.newTitle"));
+      expect((await page.locator("#job-dialog").boundingBox())!.width).toBe(320);
+      expect((await page.locator("#job-cwd").boundingBox())!.height).toBeLessThan(60);
+      await page.screenshot({ path: testInfo.outputPath(`${locale}-job-dialog.png`), fullPage: true });
+    });
+  }
 });
 
 function requestJson<T>(request: Request): T {

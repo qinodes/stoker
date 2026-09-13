@@ -4,10 +4,19 @@ html { min-width: 320px; background: var(--bg); }
 
 body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(circle at 78% -10%, rgba(87, 62, 126, .22), transparent 34rem), var(--bg); }
 
-button, input { font: inherit; }
+button, input, select, textarea { font: inherit; }
 
 button, a { -webkit-tap-highlight-color: transparent; }
 
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: none; box-shadow: var(--focus); }
 
 a { color: inherit; text-decoration: none; }
+
+html:lang(zh-TW) { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft JhengHei", "PingFang TC", sans-serif; }
+html:lang(ja) { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Yu Gothic UI", "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif; }
+
+:is(html:lang(zh-TW), html:lang(ja)) :is(.eyebrow, .section-kicker, .dialog-kicker, .workspace-label, .config-label, .detail-label, .timeline-label, .logs-toolbar label, .field-optional, .brand-copy small) { letter-spacing: 0; text-transform: none; }
+:is(html:lang(zh-TW), html:lang(ja)) :is(.form-help, .form-feedback, .metric-note, .panel-title p, .connection-card small) { font-size: 12px; line-height: 1.6; }
+:is(html:lang(zh-TW), html:lang(ja)) .connection-card small { white-space: normal; }
+:is(html:lang(zh-TW), html:lang(ja)) :is(.policy-field-copy p, .policy-field-copy small, .policy-input-wrap > span, .log-footnote, .toast) { font-size: 12px; line-height: 1.6; }
+:is(html:lang(zh-TW), html:lang(ja)) .button.small { font-size: 11px; }

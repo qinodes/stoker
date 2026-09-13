@@ -1,3 +1,4 @@
+import { uiMessage, type UiMessage } from "./i18n/messages.ts";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createApiClient, type ApiClient } from "./api";
 import { cacheDirectory, cachedDirectory, createRequestSequence, createState, JOBS_PAGE_SIZE, SNAPSHOTS_PAGE_SIZE, pageInfo, type DirectoryCacheEntry } from "./state";
@@ -6,10 +7,10 @@ import type { Job, JobDetailResponse, JobDraft, JobsResponse, LogsResponse, Poli
 const ROUTES: Route[] = ["overview", "jobs", "queue", "logs", "configuration", "policy"];
 
 export interface Confirmation {
-  kicker: string;
-  title: string;
-  message: string;
-  acceptLabel: string;
+  kicker: UiMessage;
+  title: UiMessage;
+  message: UiMessage;
+  acceptLabel: UiMessage;
   destructive: boolean;
 }
 
@@ -57,7 +58,7 @@ export interface WorkspaceContextValue {
   jobDetailOpen: boolean;
   detailEditing: boolean;
   confirmation: Confirmation | null;
-  toasts: Array<{ id: number; message: string; error: boolean }>;
+  toasts: Array<{ id: number; message: UiMessage; error: boolean }>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -80,13 +81,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [detailEditing, setDetailEditing] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const resolver = useRef<((value: boolean) => void) | null>(null);
-  const [toasts, setToasts] = useState<Array<{ id: number; message: string; error: boolean }>>([]);
+  const [toasts, setToasts] = useState<Array<{ id: number; message: UiMessage; error: boolean }>>([]);
   const toastSequence = useRef(0);
   const apiRef = useRef<ApiClient | null>(null);
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
-  const showToast = useCallback((message: string, error = false) => {
+  const showToast = useCallback((message: UiMessage, error = false) => {
     const id = ++toastSequence.current;
     setToasts((current) => [...current, { id, message, error }]);
     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 4200);
@@ -211,7 +212,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const chooseDirectory = useCallback(() => setState((current) => current.filesystem.current ? { ...current, jobDraft: { ...current.jobDraft, cwd: current.filesystem.current.path }, filesystem: { ...current.filesystem, roots: null, current: null } } : current), []);
   const setFilesystemInputPath = useCallback((path: string) => setState((current) => ({ ...current, filesystem: { ...current.filesystem, inputPath: path } })), []);
 
-  const mutate = useCallback(async <T,>(path: string, method: string, body: unknown = null, message = "Change saved to the server."): Promise<T | null> => {
+  const mutate = useCallback(async <T,>(path: string, method: string, body: unknown = null, message: UiMessage = uiMessage("toast.saved")): Promise<T | null> => {
     try {
       const result = await api.send<T>(path, method, body);
       showToast(message);
@@ -226,7 +227,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const saveJob = useCallback(async () => {
     const current = stateRef.current;
-    const created = await mutate<{ job: Job }>("/api/v1/jobs", "POST", current.jobDraft, "Job created as DRAFT.");
+    const created = await mutate<{ job: Job }>("/api/v1/jobs", "POST", current.jobDraft, uiMessage("toast.created"));
     if (created) {
       setState((value) => ({ ...value, jobDraft: { user: value.jobDraft.user, name: "", cwd: value.jobDraft.cwd, command: "", description: "" } }));
       setJobFormOpen(false);
@@ -251,29 +252,29 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const saveDescription = useCallback(async (description: string) => {
     const job = stateRef.current.selectedJob;
     if (!job) return;
-    const result = await mutate<JobDetailResponse>(`/api/v1/jobs/${job.id}/description`, "PATCH", { description, expected_revision: job.description_revision }, "Description updated.");
+    const result = await mutate<JobDetailResponse>(`/api/v1/jobs/${job.id}/description`, "PATCH", { description, expected_revision: job.description_revision }, uiMessage("toast.description"));
     if (result) {
       setState((current) => ({ ...current, selectedJob: result.job, selectedJobDetail: current.selectedJobDetail ? { ...current.selectedJobDetail, job: result.job } : current.selectedJobDetail }));
       setDetailEditing(false);
     }
   }, [mutate]);
-  const copyJobId = useCallback(async (id: string) => { await navigator.clipboard.writeText(id); showToast("Job ID copied."); }, [showToast]);
+  const copyJobId = useCallback(async (id: string) => { await navigator.clipboard.writeText(id); showToast(uiMessage("toast.copied")); }, [showToast]);
 
   const requestConfirmation = useCallback((value: Confirmation) => new Promise<boolean>((resolve) => { resolver.current = resolve; setConfirmation(value); }), []);
   const resolveConfirmation = useCallback((value: boolean) => { const current = resolver.current; resolver.current = null; setConfirmation(null); current?.(value); }, []);
-  const cleanJobs = useCallback(async () => { if (await requestConfirmation({ kicker: "Maintenance", title: "Clean terminal jobs?", message: "This removes terminal job history and its run artifacts.", acceptLabel: "Clean jobs", destructive: true })) await mutate("/api/v1/clean", "POST", null, "Terminal job history cleaned."); }, [mutate, requestConfirmation]);
+  const cleanJobs = useCallback(async () => { if (await requestConfirmation({ kicker: uiMessage("confirm.maintenance"), title: uiMessage("confirm.cleanTitle"), message: uiMessage("confirm.cleanMessage"), acceptLabel: uiMessage("confirm.cleanAccept"), destructive: true })) await mutate("/api/v1/clean", "POST", null, uiMessage("toast.cleaned")); }, [mutate, requestConfirmation]);
   const queueLock = useCallback(async (locked: boolean) => { await mutate(`/api/v1/queue/${locked ? "lock" : "unlock"}`, "POST"); }, [mutate]);
   const moveQueueJob = useCallback(async (id: string, targetOrder: number) => { await mutate(`/api/v1/queue/${id}/move`, "POST", { target_order: targetOrder }); }, [mutate]);
-  const commitJob = useCallback(async (id: string) => { if (await requestConfirmation({ kicker: "Job action", title: "Commit this job?", message: "The scheduler will apply this state transition.", acceptLabel: "Commit job", destructive: false })) { await mutate(`/api/v1/jobs/${id}/commit`, "POST"); setJobDetailOpen(false); } }, [mutate, requestConfirmation]);
-  const cancelJob = useCallback(async (id: string) => { if (await requestConfirmation({ kicker: "Job action", title: "Cancel this job?", message: "The scheduler will apply this state transition.", acceptLabel: "Cancel job", destructive: true })) { await mutate(`/api/v1/jobs/${id}/cancel`, "POST"); setJobDetailOpen(false); } }, [mutate, requestConfirmation]);
+  const commitJob = useCallback(async (id: string) => { if (await requestConfirmation({ kicker: uiMessage("confirm.jobAction"), title: uiMessage("confirm.commitTitle"), message: uiMessage("confirm.transition"), acceptLabel: uiMessage("jobs.commit"), destructive: false })) { await mutate(`/api/v1/jobs/${id}/commit`, "POST"); setJobDetailOpen(false); } }, [mutate, requestConfirmation]);
+  const cancelJob = useCallback(async (id: string) => { if (await requestConfirmation({ kicker: uiMessage("confirm.jobAction"), title: uiMessage("confirm.cancelTitle"), message: uiMessage("confirm.transition"), acceptLabel: uiMessage("jobs.cancel"), destructive: true })) { await mutate(`/api/v1/jobs/${id}/cancel`, "POST"); setJobDetailOpen(false); } }, [mutate, requestConfirmation]);
   const viewJobLogs = useCallback(async (id: string) => { setState((current) => ({ ...current, logs: { ...current.logs, jobId: id } })); setJobDetailOpen(false); navigate("logs"); await loadLogs(id); }, [loadLogs, navigate]);
   const setConfigurationDraft = useCallback((value: string | null) => setState((current) => ({ ...current, configurationDraft: value })), []);
-  const saveTimezone = useCallback(async (value: string) => { const result = await mutate<SettingsResponse>("/api/v1/config/timezone", "PUT", { value }, "Timezone updated."); if (result) setState((current) => ({ ...current, configurationDraft: null })); }, [mutate]);
-  const unsetTimezone = useCallback(async () => { const result = await mutate<SettingsResponse>("/api/v1/config/timezone", "DELETE", null, "System timezone enabled."); if (result) setState((current) => ({ ...current, configurationDraft: null })); }, [mutate]);
-  const createSnapshot = useCallback(async () => { await mutate("/api/v1/config/snapshot", "POST", null, "Configuration snapshot created."); }, [mutate]);
-  const restoreSnapshot = useCallback(async (path: string) => { if (await requestConfirmation({ kicker: "Configuration snapshot", title: "Restore this snapshot?", message: "The current configuration will be preserved before restore.", acceptLabel: "Restore snapshot", destructive: false })) await mutate("/api/v1/config/restore", "POST", { path }, "Configuration restored."); }, [mutate, requestConfirmation]);
-  const savePolicy = useCallback(async (key: string, value: number) => Boolean(await mutate<PolicyResponse>(`/api/v1/policy/${key}`, "PUT", { value }, "Policy updated.")), [mutate]);
-  const unsetPolicy = useCallback(async (key: string) => Boolean(await mutate<PolicyResponse>(`/api/v1/policy/${key}`, "DELETE", null, "Policy reset to its default.")), [mutate]);
+  const saveTimezone = useCallback(async (value: string) => { const result = await mutate<SettingsResponse>("/api/v1/config/timezone", "PUT", { value }, uiMessage("toast.timezone")); if (result) setState((current) => ({ ...current, configurationDraft: null })); }, [mutate]);
+  const unsetTimezone = useCallback(async () => { const result = await mutate<SettingsResponse>("/api/v1/config/timezone", "DELETE", null, uiMessage("toast.systemTimezone")); if (result) setState((current) => ({ ...current, configurationDraft: null })); }, [mutate]);
+  const createSnapshot = useCallback(async () => { await mutate("/api/v1/config/snapshot", "POST", null, uiMessage("toast.snapshot")); }, [mutate]);
+  const restoreSnapshot = useCallback(async (path: string) => { if (await requestConfirmation({ kicker: uiMessage("confirm.snapshot"), title: uiMessage("confirm.restoreTitle"), message: uiMessage("confirm.restoreMessage"), acceptLabel: uiMessage("confirm.restoreAccept"), destructive: false })) await mutate("/api/v1/config/restore", "POST", { path }, uiMessage("toast.restored")); }, [mutate, requestConfirmation]);
+  const savePolicy = useCallback(async (key: string, value: number) => Boolean(await mutate<PolicyResponse>(`/api/v1/policy/${key}`, "PUT", { value }, uiMessage("toast.policy"))), [mutate]);
+  const unsetPolicy = useCallback(async (key: string) => Boolean(await mutate<PolicyResponse>(`/api/v1/policy/${key}`, "DELETE", null, uiMessage("toast.policyReset"))), [mutate]);
   const actions = useMemo<WorkspaceActions>(() => ({ loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy }), [loadData, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy]);
   return <WorkspaceContext.Provider value={{ state, actions, jobFormOpen, jobDetailOpen, detailEditing, confirmation, toasts }}>{children}</WorkspaceContext.Provider>;
 }

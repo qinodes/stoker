@@ -2,14 +2,6 @@
 
 .scheduler-pill.running { border-color: rgba(117, 214, 163, .22); background: rgba(117, 214, 163, .08); color: var(--green); }
 
-.icon-button, .avatar-button { display: grid; place-items: center; border: 1px solid var(--border); cursor: pointer; transition: background .2s ease, border-color .2s ease, transform .2s ease; }
-
-.icon-button { width: 32px; height: 32px; border-radius: 9px; background: var(--surface); color: var(--text-muted); font-size: 20px; }
-
-.icon-button:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text); transform: rotate(18deg); }
-
-.avatar-button { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(140deg, #7060bc, #bd775d); color: white; font-size: 12px; font-weight: 800; }
-
 .page { width: min(1440px, 100%); margin: 0 auto; padding: 42px 44px 64px; }
 
 .page[data-view="jobs"], .page[data-view="queue"] { padding-top: 24px; padding-bottom: 24px; }

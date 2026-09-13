@@ -35,6 +35,7 @@
   .topbar { min-height: 68px; padding: 0 18px; }
   .breadcrumbs span:first-child, .crumb-separator { display: none; }
   .topbar-actions { gap: 6px; }
+  :is(html:lang(zh-TW), html:lang(ja)) .nav-item { font-size: 11px; line-height: 1.4; text-align: center; }
   .scheduler-pill { max-width: 38px; padding: 0 9px; }
   .scheduler-pill .status-dot { margin: 0; }
   .scheduler-pill #scheduler-label { display: none; }
@@ -79,10 +80,10 @@
   .filter-group { display: grid; grid-template-columns: 1fr 1fr; }
   .select-input { width: 100%; }
   .detail-grid { grid-template-columns: 1fr; }
-  .job-dialog { inset: 0; width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; }
+  .job-dialog { inset: 0; width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; }
   .job-dialog-shell { max-height: 100vh; }
   .job-card { padding: 19px; border-radius: 0; }
-  .job-detail-dialog { inset: 0; width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; }
+  .job-detail-dialog { inset: 0; width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; }
   .job-detail-shell { max-height: 100vh; }
   .job-detail-card { padding: 19px; border-radius: 0; }
   .job-detail-status { align-items: flex-start; flex-direction: column; }
@@ -100,6 +101,15 @@
   .job-field { margin-top: 14px; }
   .path-input-row, .fs-path-row { align-items: stretch; flex-direction: column; }
   .path-input-row .button, .fs-path-row .button { width: 100%; }
+  .path-input-row .text-input, .fs-path-row .text-input { flex: 0 0 auto; }
+}
+
+@media (max-width: 420px) {
+  .topbar { padding-right: 12px; padding-left: 12px; gap: 8px; }
+  .breadcrumbs { min-width: 0; }
+  .breadcrumbs strong { overflow-wrap: anywhere; }
+  .topbar-actions { flex-shrink: 0; }
+  :is(html:lang(zh-TW), html:lang(ja)) .nav-item { font-size: 10px; white-space: nowrap; }
 }
 
 @media (prefers-reduced-motion: reduce) {

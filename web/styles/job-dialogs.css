@@ -24,6 +24,8 @@
 
 .dialog-close:hover { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text); }
 
+.dialog-language { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+
 .job-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 
 .job-field { margin-top: 16px; }
@@ -207,4 +209,3 @@
 .fs-selected span { color: var(--text-subtle); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; }
 
 .fs-selected code { overflow-wrap: anywhere; color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
-
