@@ -1,12 +1,14 @@
-use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use chrono::{NaiveTime, TimeZone, Utc};
+use rusqlite::{Connection, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::domain::{Job, JobState};
 
 use super::connection::Store;
 use super::error::StoreError;
+use super::flow_mapping::fence_with;
 use super::mapping::{get_job_with, parse_uuid};
+use super::standalone::commit_standalone_definition;
 
 const COMMIT_DRAFT_SQL: &str =
     "UPDATE jobs SET state = 'QUEUED', queue_order = ?2, committed_at = ?3
@@ -29,6 +31,19 @@ impl Store {
     pub fn unlock_queue(&self) -> Result<(), StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if fence_with(&transaction)? {
+            let recovering: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM flow_runs WHERE state = 'RECOVERING'",
+                [],
+                |row| row.get(0),
+            )?;
+            if recovering > 0 {
+                return Err(StoreError::InvalidData(
+                    "queue recovery fence is active; reconcile recovery before unlocking".into(),
+                ));
+            }
+            transaction.execute("UPDATE settings SET recovery_fence = 0 WHERE id = 1", [])?;
+        }
         transaction.execute("UPDATE settings SET queue_locked = 0 WHERE id = 1", [])?;
         transaction.commit()?;
         Ok(())
@@ -175,23 +190,40 @@ impl Store {
             transaction.commit()?;
             return Ok(None);
         }
-        let selected: Option<String> = transaction
-            .query_row(
+        let now = Utc::now();
+        let candidates = transaction
+            .prepare(
                 "SELECT id FROM jobs WHERE state = 'QUEUED'
-                 ORDER BY queue_order, id LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?;
+                 AND mode = (SELECT mode FROM settings WHERE id = 1)
+                 AND (
+                     (mode = 'serial' AND retry = 0)
+                     OR (mode = 'scheduled' AND NOT EXISTS (
+                         SELECT 1 FROM flow_definitions f
+                         WHERE f.flow_id = 'standalone/' || jobs.id
+                     ))
+                 )
+                 ORDER BY queue_order, id",
+            )?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut selected = None;
+        for id_text in candidates {
+            let id = parse_uuid(&id_text)?;
+            if standalone_job_is_due(&transaction, id, now)? {
+                selected = Some(id_text);
+                break;
+            }
+        }
         let Some(id_text) = selected else {
             transaction.commit()?;
             return Ok(None);
         };
         let id = parse_uuid(&id_text)?;
         if transaction.execute(
-            "UPDATE jobs SET state = 'STARTING', queue_order = NULL
+            "UPDATE jobs SET state = 'STARTING', queue_order = NULL,
+             last_dispatch_sequence = CASE WHEN schedule_kind = 'daily' THEN CAST(strftime('%Y%m%d', ?2) AS INTEGER) ELSE last_dispatch_sequence END
              WHERE id = ?1 AND state = 'QUEUED'",
-            [id.to_string()],
+            params![id.to_string(), now.to_rfc3339()],
         )? != 1
         {
             return Err(StoreError::InvalidTransition {
@@ -204,6 +236,56 @@ impl Store {
         let job = get_job_with(&transaction, id)?;
         transaction.commit()?;
         Ok(Some(job))
+    }
+}
+
+fn standalone_job_is_due(
+    connection: &Connection,
+    id: Uuid,
+    now: chrono::DateTime<Utc>,
+) -> Result<bool, StoreError> {
+    let (mode, kind, at, daily, timezone, last_dispatch): (String, Option<String>, Option<String>, Option<String>, Option<String>, i64) = connection.query_row(
+        "SELECT mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, last_dispatch_sequence FROM jobs WHERE id = ?1",
+        [id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+    )?;
+    if mode == "serial" {
+        return Ok(true);
+    }
+    match kind.as_deref() {
+        Some("once") => Ok(at
+            .as_deref()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .is_some_and(|value| {
+                let at = value.with_timezone(&Utc);
+                at <= now && at >= now - chrono::Duration::hours(24)
+            })),
+        Some("daily") => {
+            let Some((daily, timezone)) = daily.zip(timezone) else {
+                return Ok(false);
+            };
+            let zone: chrono_tz::Tz = timezone
+                .parse()
+                .map_err(|_| StoreError::InvalidData(format!("unknown timezone {timezone:?}")))?;
+            let local = now.with_timezone(&zone);
+            let date = local.date_naive();
+            let wall_time = NaiveTime::parse_from_str(&daily, "%H:%M")
+                .map_err(|error| StoreError::InvalidData(error.to_string()))?;
+            let due = match zone.from_local_datetime(&date.and_time(wall_time)) {
+                chrono::LocalResult::None => return Ok(false),
+                chrono::LocalResult::Single(value) => value.with_timezone(&Utc),
+                chrono::LocalResult::Ambiguous(first, _) => first.with_timezone(&Utc),
+            };
+            let dispatch_key = date
+                .format("%Y%m%d")
+                .to_string()
+                .parse::<i64>()
+                .unwrap_or_default();
+            Ok(last_dispatch != dispatch_key
+                && due <= now
+                && now <= due + chrono::Duration::seconds(5))
+        }
+        _ => Ok(false),
     }
 }
 
@@ -263,6 +345,12 @@ fn commit_draft_ids(connection: &Connection, ids: &[Uuid]) -> Result<Vec<Job>, S
                 action: "commit",
             });
         }
+        commit_standalone_definition(
+            connection,
+            *id,
+            first_order + i64::try_from(index).expect("queue length fits i64"),
+            &committed_at,
+        )?;
     }
     if !ids.is_empty() {
         normalize_queue(connection)?;

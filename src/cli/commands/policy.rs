@@ -13,7 +13,9 @@ use super::super::{PolicyCommand, PolicyKey, print_success};
 pub(crate) fn policy(paths: &StokerPaths, command: PolicyCommand) -> anyhow::Result<()> {
     match command {
         PolicyCommand::Set { key, value } => {
-            if is_log_key(key) {
+            if matches!(key, PolicyKey::MaxConcurrency) {
+                set_max_concurrency(paths, value)?;
+            } else if is_log_key(key) {
                 set_log_policy(paths, key, value)?;
             } else {
                 set_runtime_policy(paths, key, value)?;
@@ -23,6 +25,7 @@ pub(crate) fn policy(paths: &StokerPaths, command: PolicyCommand) -> anyhow::Res
             let store = Store::open(&paths.database)?;
             let log = store.log_policy()?;
             let runtime = store.runtime_policy()?;
+            let max_concurrency = store.scheduled_concurrency()?;
             println!(
                 "{}",
                 output::paint_bold(
@@ -44,19 +47,49 @@ pub(crate) fn policy(paths: &StokerPaths, command: PolicyCommand) -> anyhow::Res
                         "disk_reserve_bytes": display_policy_value(log, PolicyKey::LogDiskReserveBytes),
                     },
                     "runtime": runtime,
+                    "scheduling": {
+                        "max_concurrency": max_concurrency,
+                    },
                 }))
                 .context("format Stoker scheduler policy")?
             );
         }
-        PolicyCommand::Get { key } => get_policy(paths, key)?,
+        PolicyCommand::Get { key } => {
+            if matches!(key, PolicyKey::MaxConcurrency) {
+                println!(
+                    "max-concurrency: {}",
+                    Store::open(&paths.database)?.scheduled_concurrency()?
+                );
+            } else {
+                get_policy(paths, key)?;
+            }
+        }
         PolicyCommand::Unset { key } => {
-            if is_log_key(key) {
+            if matches!(key, PolicyKey::MaxConcurrency) {
+                Store::open(&paths.database)?
+                    .set_scheduled_concurrency(crate::domain::flow::DEFAULT_SCHEDULED_CONCURRENCY)
+                    .map_err(runtime_cli_error)?;
+                print_success("Unset max-concurrency; using the built-in default.");
+            } else if is_log_key(key) {
                 unset_log_policy(paths, key)?;
             } else {
                 unset_runtime_policy(paths, key)?;
             }
         }
     }
+    Ok(())
+}
+
+fn set_max_concurrency(paths: &StokerPaths, value: Option<String>) -> anyhow::Result<()> {
+    let value = value.ok_or_else(|| anyhow::anyhow!("a value is required for max-concurrency"))?;
+    let parsed = value
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| anyhow::anyhow!("max-concurrency must be a positive integer"))?;
+    Store::open(&paths.database)?
+        .set_scheduled_concurrency(parsed)
+        .map_err(runtime_cli_error)?;
+    print_success(format!("Set max-concurrency to {parsed}."));
     Ok(())
 }
 
@@ -189,6 +222,7 @@ fn policy_key_name(key: PolicyKey) -> &'static str {
         PolicyKey::TerminationGraceMs => "termination-grace-ms",
         PolicyKey::MaxRuntimeMs => "max-runtime-ms",
         PolicyKey::StartupTimeoutMs => "startup-timeout-ms",
+        PolicyKey::MaxConcurrency => "max-concurrency",
     }
 }
 
@@ -210,7 +244,10 @@ fn policy_value(policy: LogPolicy, key: PolicyKey) -> u64 {
         PolicyKey::LogMaxBytesTotal => policy.max_bytes_total,
         PolicyKey::LogRetentionJobs => policy.retention_jobs,
         PolicyKey::LogDiskReserveBytes => policy.disk_reserve_bytes,
-        PolicyKey::TerminationGraceMs | PolicyKey::MaxRuntimeMs | PolicyKey::StartupTimeoutMs => {
+        PolicyKey::TerminationGraceMs
+        | PolicyKey::MaxRuntimeMs
+        | PolicyKey::StartupTimeoutMs
+        | PolicyKey::MaxConcurrency => {
             unreachable!("runtime policy key passed to log policy")
         }
     }
@@ -242,7 +279,10 @@ fn assign_policy_value(policy: &mut LogPolicy, key: PolicyKey, value: u64) {
         PolicyKey::LogMaxBytesTotal => policy.max_bytes_total = value,
         PolicyKey::LogRetentionJobs => policy.retention_jobs = value,
         PolicyKey::LogDiskReserveBytes => policy.disk_reserve_bytes = value,
-        PolicyKey::TerminationGraceMs | PolicyKey::MaxRuntimeMs | PolicyKey::StartupTimeoutMs => {
+        PolicyKey::TerminationGraceMs
+        | PolicyKey::MaxRuntimeMs
+        | PolicyKey::StartupTimeoutMs
+        | PolicyKey::MaxConcurrency => {
             unreachable!("runtime policy key passed to log policy")
         }
     }
@@ -253,6 +293,7 @@ fn runtime_value(policy: RuntimePolicy, key: PolicyKey) -> Option<u64> {
         PolicyKey::TerminationGraceMs => Some(policy.termination_grace_ms),
         PolicyKey::MaxRuntimeMs => policy.max_runtime_ms,
         PolicyKey::StartupTimeoutMs => Some(policy.startup_timeout_ms),
+        PolicyKey::MaxConcurrency => None,
         _ => None,
     }
 }
@@ -262,6 +303,7 @@ fn assign_runtime_value(policy: &mut RuntimePolicy, key: PolicyKey, value: Optio
         PolicyKey::TerminationGraceMs => policy.termination_grace_ms = value.unwrap_or_default(),
         PolicyKey::MaxRuntimeMs => policy.max_runtime_ms = value,
         PolicyKey::StartupTimeoutMs => policy.startup_timeout_ms = value.unwrap_or_default(),
+        PolicyKey::MaxConcurrency => unreachable!("scheduling policy key passed to runtime policy"),
         _ => unreachable!("not a runtime policy key"),
     }
 }

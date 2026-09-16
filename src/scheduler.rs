@@ -3,6 +3,7 @@
 mod cancellation;
 mod control;
 mod execution;
+mod flow_execution;
 mod logs;
 pub mod model;
 mod runner;

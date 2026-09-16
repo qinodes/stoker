@@ -79,6 +79,9 @@ pub(crate) fn queue_edit(paths: &StokerPaths) -> anyhow::Result<()> {
     }
 
     let store = Store::open(&paths.database)?;
+    if store.current_mode()? == crate::domain::flow::ExecutionMode::Scheduled {
+        anyhow::bail!("queue edit is unavailable in scheduled mode");
+    }
     let initial_jobs = application::jobs::query_jobs(
         &store,
         &JobFilter {

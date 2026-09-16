@@ -30,7 +30,7 @@ pub fn normalize_description(description: Option<String>) -> Option<String> {
 }
 
 pub fn parse_job_state(value: &str) -> Result<JobState, DomainError> {
-    match value {
+    match value.to_ascii_uppercase().as_str() {
         "DRAFT" => Ok(JobState::Draft),
         "QUEUED" => Ok(JobState::Queued),
         "STARTING" => Ok(JobState::Starting),

@@ -31,6 +31,9 @@ impl Scheduler {
     /// Request shutdown cancellation for the current execution and wait until
     /// its terminal state and cleanup have been persisted.
     pub async fn stop_active(&self) -> anyhow::Result<()> {
+        self.store
+            .cancel_all_flow_runs()
+            .context("cancel active flow runs")?;
         let id = self
             .active
             .lock()

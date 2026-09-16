@@ -5,12 +5,14 @@ mod v004_description;
 mod v005_text_constraints;
 mod v006_log_policy;
 mod v007_runtime_policy;
+mod v008_flows;
+mod v009_schedule_history;
 
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use super::error::StoreError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 7;
+pub const CURRENT_SCHEMA_VERSION: u32 = 9;
 
 type Migration = fn(&Transaction<'_>) -> Result<(), StoreError>;
 
@@ -22,6 +24,8 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (5, v005_text_constraints::apply),
     (6, v006_log_policy::apply),
     (7, v007_runtime_policy::apply),
+    (8, v008_flows::apply),
+    (9, v009_schedule_history::apply),
 ];
 
 pub(super) fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
@@ -127,6 +131,19 @@ fn validate_latest_schema(connection: &Connection) -> Result<(), StoreError> {
             )));
         }
     }
+    for required in [
+        "mode",
+        "schedule_generation",
+        "enabled",
+        "retry",
+        "internal_definition_id",
+    ] {
+        if !columns.iter().any(|column| column == required) {
+            return Err(StoreError::InvalidData(format!(
+                "schema version {CURRENT_SCHEMA_VERSION} is missing jobs.{required}"
+            )));
+        }
+    }
     let settings_columns = table_columns(connection, "settings")?;
     for required in [
         "log_max_bytes_per_job",
@@ -137,12 +154,59 @@ fn validate_latest_schema(connection: &Connection) -> Result<(), StoreError> {
         "termination_grace_ms",
         "max_runtime_ms",
         "startup_timeout_ms",
+        "mode",
+        "max_concurrency",
+        "dispatch_sequence",
+        "recovery_fence",
     ] {
         if !settings_columns.iter().any(|column| column == required) {
             return Err(StoreError::InvalidData(format!(
                 "schema version {CURRENT_SCHEMA_VERSION} is missing settings.{required}"
             )));
         }
+    }
+    for (table, required) in [
+        ("flow_definitions", "flow_id"),
+        ("flow_tasks", "task_id"),
+        ("flow_dependencies", "upstream_task_id"),
+        ("occurrences", "occurrence_id"),
+        ("flow_runs", "run_id"),
+        ("task_runs", "task_id"),
+        ("attempts", "attempt_id"),
+        ("manual_requests", "request_id"),
+    ] {
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            [table],
+            |row| row.get(0),
+        )?;
+        if !exists
+            || !table_columns(connection, table)?
+                .iter()
+                .any(|column| column == required)
+        {
+            return Err(StoreError::InvalidData(format!(
+                "schema version {CURRENT_SCHEMA_VERSION} is missing {table}.{required}"
+            )));
+        }
+    }
+    if !table_columns(connection, "flow_definitions")?
+        .iter()
+        .any(|column| column == "daily_cursor_date")
+    {
+        return Err(StoreError::InvalidData(format!(
+            "schema version {CURRENT_SCHEMA_VERSION} is missing flow_definitions.daily_cursor_date"
+        )));
+    }
+    let schedule_events_exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schedule_events')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !schedule_events_exists {
+        return Err(StoreError::InvalidData(format!(
+            "schema version {CURRENT_SCHEMA_VERSION} is missing schedule_events"
+        )));
     }
     Ok(())
 }

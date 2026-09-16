@@ -12,7 +12,8 @@ use crate::domain::JobState;
 #[command(
     name = "stoker",
     about = "Jobs run from the directory where you submit them.",
-    version = env!("CARGO_PKG_VERSION")
+    version = env!("CARGO_PKG_VERSION"),
+    after_help = "Extended commands: flow, mode, run, freeze, unfreeze, schedule, draft, disable, enable, runs, occurrences, recovery, request"
 )]
 pub struct Cli {
     #[arg(
@@ -209,6 +210,7 @@ pub enum PolicyKey {
     TerminationGraceMs,
     MaxRuntimeMs,
     StartupTimeoutMs,
+    MaxConcurrency,
 }
 
 #[derive(Debug, Subcommand)]

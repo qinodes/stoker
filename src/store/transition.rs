@@ -80,6 +80,22 @@ impl Store {
                 failure_detail,
             ],
         )?;
+        let daily_schedule: bool = transaction.query_row(
+            "SELECT COALESCE(schedule_kind = 'daily', 0) FROM jobs WHERE id = ?1",
+            [id.to_string()],
+            |row| row.get(0),
+        )?;
+        if daily_schedule {
+            let next_order: i64 = transaction.query_row(
+                "SELECT COALESCE(MAX(queue_order), 0) + 1 FROM jobs WHERE state = 'QUEUED'",
+                [],
+                |row| row.get(0),
+            )?;
+            transaction.execute(
+                "UPDATE jobs SET state = 'QUEUED', queue_order = ?2 WHERE id = ?1",
+                params![id.to_string(), next_order],
+            )?;
+        }
         let job = get_job_with(&transaction, id)?;
         transaction.commit()?;
         Ok(job)
@@ -91,7 +107,11 @@ impl Store {
         let state = self.current_state(&transaction, id)?;
         if !matches!(
             state,
-            JobState::Succeeded | JobState::Failed | JobState::Cancelled | JobState::Lost
+            JobState::Queued
+                | JobState::Succeeded
+                | JobState::Failed
+                | JobState::Cancelled
+                | JobState::Lost
         ) {
             return Err(StoreError::InvalidTransition {
                 id,
@@ -132,11 +152,84 @@ impl Store {
              WHERE state IN ('STARTING', 'RUNNING', 'CANCELLING')",
             [Utc::now().to_rfc3339()],
         )?;
-        if fence_queue && changed > 0 {
-            transaction.execute("UPDATE settings SET queue_locked = 1 WHERE id = 1", [])?;
+        let flow_changed = transaction.execute(
+            "UPDATE flow_runs SET state = 'RECOVERING'
+             WHERE state IN ('STARTING', 'RUNNING', 'CANCELLING')
+               AND EXISTS (
+                   SELECT 1 FROM attempts
+                   WHERE attempts.run_id = flow_runs.run_id
+                     AND attempts.state IN ('STARTING', 'RUNNING')
+               )",
+            [],
+        )?;
+        transaction.execute(
+            "UPDATE attempts SET state = 'LOST', failure_kind = 'RESTART',
+             failure_detail = 'service restarted before execution was confirmed stopped',
+             finished_at = ?1 WHERE state IN ('STARTING', 'RUNNING')",
+            [Utc::now().to_rfc3339()],
+        )?;
+        transaction.execute(
+            "UPDATE task_runs SET state = 'LOST' WHERE state IN ('STARTING', 'RUNNING', 'CANCELLING')",
+            [],
+        )?;
+        if flow_changed > 0 {
+            transaction.execute(
+                "UPDATE occurrences SET state = 'UNCERTAIN', reason = 'RESTART_RECOVERY'
+                 WHERE occurrence_id IN (SELECT occurrence_id FROM flow_runs WHERE state = 'RECOVERING' AND occurrence_id IS NOT NULL)",
+                [],
+            )?;
+        }
+        if fence_queue && (changed > 0 || flow_changed > 0) {
+            transaction.execute(
+                "UPDATE settings SET queue_locked = 1, recovery_fence = 1 WHERE id = 1",
+                [],
+            )?;
         }
         transaction.commit()?;
-        Ok(changed > 0)
+        Ok(changed > 0 || flow_changed > 0)
+    }
+
+    /// Resolve one flow left in RECOVERING after a restart.  The explicit
+    /// confirmation is the safety boundary that allows the recovery fence to
+    /// be lifted without accidentally duplicating a surviving process.
+    pub fn reconcile_recovery(
+        &self,
+        run_id: Uuid,
+        confirm_stopped: bool,
+    ) -> Result<(), StoreError> {
+        if !confirm_stopped {
+            return Err(StoreError::InvalidData(
+                "--confirm-stopped is required".into(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state: String = transaction.query_row(
+            "SELECT state FROM flow_runs WHERE run_id = ?1",
+            [run_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if state != "RECOVERING" {
+            return Err(StoreError::InvalidData(format!(
+                "flow run {run_id} is not recovering"
+            )));
+        }
+        let now = Utc::now().to_rfc3339();
+        transaction.execute(
+            "UPDATE flow_runs SET state = 'LOST', finished_at = ?2 WHERE run_id = ?1",
+            params![run_id.to_string(), now],
+        )?;
+        transaction.execute("UPDATE occurrences SET state = 'UNCERTAIN', reason = 'RECONCILED_STOPPED' WHERE occurrence_id = (SELECT occurrence_id FROM flow_runs WHERE run_id = ?1) AND state IN ('RESERVED','STARTED')", [run_id.to_string()])?;
+        let remaining: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM flow_runs WHERE state = 'RECOVERING'",
+            [],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            transaction.execute("UPDATE settings SET recovery_fence = 0 WHERE id = 1", [])?;
+        }
+        transaction.commit()?;
+        Ok(())
     }
 
     pub(super) fn current_state(

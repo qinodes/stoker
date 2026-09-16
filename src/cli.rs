@@ -25,6 +25,7 @@ use crate::submission::parse_command_line;
 use crate::{StokerPaths, Store};
 
 mod args;
+mod extended;
 
 #[cfg(test)]
 use args::parse_job_state;

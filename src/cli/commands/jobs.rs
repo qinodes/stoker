@@ -60,6 +60,12 @@ pub(crate) fn commit(
 }
 
 pub(crate) fn cancel(paths: &StokerPaths, id: Uuid, yes: bool) -> anyhow::Result<()> {
+    let store = Store::open(&paths.database)?;
+    if let Ok(definition) = store.standalone_definition(id)
+        && definition.mode == crate::domain::flow::ExecutionMode::Scheduled
+    {
+        anyhow::bail!("scheduled standalone cancel requires --run <RUN_ID>");
+    }
     if !yes && !request_confirmation(&format!("Cancel job {id}"))? {
         print_warning("Cancel cancelled.");
         return Ok(());
@@ -152,6 +158,16 @@ pub(crate) fn show(
     let store = Store::open(&paths.database)?;
     let job = application::jobs::job_detail(&store, id).map_err(application_cli_error)?;
     print_job(&job, &timezone);
+    if let Ok(definition) = store.standalone_definition(id) {
+        println!("mode={}", definition.mode);
+        if let Some(schedule) = definition.schedule {
+            println!("schedule={schedule:?}");
+        }
+        println!(
+            "retry={} enabled={} generation={}",
+            definition.retry, definition.enabled, definition.generation
+        );
+    }
     Ok(())
 }
 

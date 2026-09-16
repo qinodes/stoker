@@ -37,6 +37,14 @@ pub(crate) fn logs(paths: &StokerPaths, id: Uuid, follow: bool) -> anyhow::Resul
         });
     }
     let store = Store::open(&paths.database)?;
+    if let Ok(definition) = store.standalone_definition(id)
+        && definition.mode == crate::domain::flow::ExecutionMode::Scheduled
+    {
+        anyhow::bail!("scheduled standalone logs require --run <RUN_ID>");
+    }
+    if stream_hidden_attempt_logs(paths, &store, id)? {
+        return Ok(());
+    }
     // Read only metadata here; stream the actual bytes below so a large log
     // cannot be materialized as one Vec before it reaches the terminal.
     let logs =
@@ -77,6 +85,54 @@ pub(crate) fn logs(paths: &StokerPaths, id: Uuid, follow: bool) -> anyhow::Resul
         &mut std::io::stderr(),
     )?;
     Ok(())
+}
+
+fn stream_hidden_attempt_logs(
+    paths: &StokerPaths,
+    store: &Store,
+    job_id: Uuid,
+) -> anyhow::Result<bool> {
+    let flow_id = format!("standalone/{job_id}");
+    let Ok(flow) = store.get_flow(&flow_id) else {
+        return Ok(false);
+    };
+    let Some(task) = flow.tasks.first() else {
+        return Ok(false);
+    };
+    if task.retry == 0 {
+        return Ok(false);
+    }
+    let runs = store.list_flow_runs(&flow_id)?;
+    if runs.is_empty() {
+        return Ok(false);
+    }
+    let mut found = false;
+    for run in runs {
+        let Some(task_run) = run.tasks.iter().find(|task| task.task_id == "job") else {
+            continue;
+        };
+        for attempt in 1..=task_run.attempt_count {
+            let directory = paths
+                .runs
+                .join("flows")
+                .join(run.run_id.to_string())
+                .join("job")
+                .join(format!("attempt-{attempt}"));
+            for stream in ["stdout", "stderr"] {
+                let path = directory.join(format!("{stream}.log"));
+                if path.is_file() {
+                    found = true;
+                    println!("--- run={} attempt={} {} ---", run.run_id, attempt, stream);
+                    if stream == "stdout" {
+                        stream_log(&path, &mut std::io::stdout())?;
+                    } else {
+                        stream_log(&path, &mut std::io::stderr())?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(found)
 }
 
 fn stream_log(path: &Path, output: &mut impl Write) -> anyhow::Result<()> {

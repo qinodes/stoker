@@ -20,6 +20,9 @@ use super::lifecycle::service::{service_run, start, stop};
 use super::update::{uninstall, update};
 
 pub fn run() -> anyhow::Result<()> {
+    if let Some(result) = super::extended::maybe_run() {
+        return result;
+    }
     let cli = Cli::parse();
     run_command_with_timezone(cli.command, cli.timezone)
 }

@@ -4,10 +4,18 @@
 //! should use the typed validation API in [`validation`] and [`DomainError`].
 
 pub mod error;
+pub mod flow;
+mod flow_parsing;
+mod flow_schedule;
 pub mod job;
 pub mod validation;
 
 pub use error::{DomainError, DomainErrorCode, ValidationField};
+pub use flow::{
+    Attempt, AttemptState, Dependency, DependencyEvaluation, DependencyMode, DependencyStatus,
+    ExecutionMode, FlowDefinition, FlowRun, FlowRunState, FlowTask, Occurrence, OccurrenceState,
+    RETRY_DELAY, ScheduleSpec, TaskOutcome, TaskRun, TaskRunState,
+};
 pub use job::{Job, JobState, NewJob};
 pub use validation::{
     MAX_JOB_DESCRIPTION_LENGTH, MAX_JOB_NAME_LENGTH, MAX_JOB_USER_LENGTH, normalize_description,
