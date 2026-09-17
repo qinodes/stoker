@@ -3,32 +3,57 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
+use chrono::Utc;
 
 use crate::StokerPaths;
 use crate::domain::flow::{
-    Dependency, DependencyStatus, ScheduleSpec, parse_daily, parse_once, resolve_schedule_timezone,
+    Dependency, DependencyStatus, ScheduleSpec, parse_daily, parse_every, parse_first_at,
+    parse_once, resolve_schedule_timezone,
 };
 
 pub(super) fn parse_schedule(
     paths: &StokerPaths,
-    at: Option<&str>,
+    once_at: Option<&str>,
     daily: Option<&str>,
+    every: Option<&str>,
+    first_at: Option<&str>,
     explicit_timezone: Option<&str>,
 ) -> Result<Option<ScheduleSpec>> {
-    match (at, daily) {
-        (Some(at), None) => Ok(Some(ScheduleSpec::Once {
-            at: parse_once(at).map_err(|error| anyhow::anyhow!(error))?,
-        })),
-        (None, Some(daily)) => {
-            let time = parse_daily(daily).map_err(|error| anyhow::anyhow!(error))?;
-            let configured = paths.read_config()?.timezone;
-            let timezone = resolve_schedule_timezone(explicit_timezone, configured.as_deref())
-                .map_err(|error| anyhow::anyhow!(error))?;
-            Ok(Some(ScheduleSpec::Daily { time, timezone }))
-        }
-        (None, None) => Ok(None),
-        (Some(_), Some(_)) => anyhow::bail!("--at and --daily are mutually exclusive"),
+    let selected = usize::from(once_at.is_some())
+        + usize::from(daily.is_some())
+        + usize::from(every.is_some());
+    if selected > 1 {
+        anyhow::bail!("--once-at, --daily, and --every are mutually exclusive");
     }
+    if let Some(value) = once_at {
+        return Ok(Some(ScheduleSpec::Once {
+            at: parse_once(value).map_err(|error| anyhow::anyhow!(error))?,
+        }));
+    }
+    if let Some(value) = daily {
+        let time = parse_daily(value).map_err(|error| anyhow::anyhow!(error))?;
+        let configured = paths.read_config()?.timezone;
+        let timezone = resolve_schedule_timezone(explicit_timezone, configured.as_deref())
+            .map_err(|error| anyhow::anyhow!(error))?;
+        return Ok(Some(ScheduleSpec::Daily { time, timezone }));
+    }
+    if let Some(value) = every {
+        let first_at = first_at
+            .map(parse_first_at)
+            .transpose()
+            .map_err(|error| anyhow::anyhow!(error))?;
+        if first_at.is_some_and(|value| value <= Utc::now()) {
+            anyhow::bail!("--first-at must be in the future");
+        }
+        return Ok(Some(ScheduleSpec::Periodic {
+            every: parse_every(value).map_err(|error| anyhow::anyhow!(error))?,
+            first_at,
+        }));
+    }
+    if first_at.is_some() {
+        anyhow::bail!("--first-at is only valid with --every");
+    }
+    Ok(None)
 }
 
 pub(super) fn parse_named_dependencies(

@@ -7,12 +7,13 @@ mod v006_log_policy;
 mod v007_runtime_policy;
 mod v008_flows;
 mod v009_schedule_history;
+mod v010_periodic_schedules;
 
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use super::error::StoreError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 9;
+pub const CURRENT_SCHEMA_VERSION: u32 = 10;
 
 type Migration = fn(&Transaction<'_>) -> Result<(), StoreError>;
 
@@ -26,6 +27,7 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (7, v007_runtime_policy::apply),
     (8, v008_flows::apply),
     (9, v009_schedule_history::apply),
+    (10, v010_periodic_schedules::apply),
 ];
 
 pub(super) fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
@@ -196,6 +198,26 @@ fn validate_latest_schema(connection: &Connection) -> Result<(), StoreError> {
     {
         return Err(StoreError::InvalidData(format!(
             "schema version {CURRENT_SCHEMA_VERSION} is missing flow_definitions.daily_cursor_date"
+        )));
+    }
+    for table in ["jobs", "flow_definitions"] {
+        let columns = table_columns(connection, table)?;
+        for required in ["period_value", "period_unit", "period_first_at_utc"] {
+            if !columns.iter().any(|column| column == required) {
+                return Err(StoreError::InvalidData(format!(
+                    "schema version {CURRENT_SCHEMA_VERSION} is missing {table}.{required}"
+                )));
+            }
+        }
+    }
+    let occurrences_sql: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'occurrences'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !occurrences_sql.contains("'periodic'") {
+        return Err(StoreError::InvalidData(format!(
+            "schema version {CURRENT_SCHEMA_VERSION} does not support periodic occurrences"
         )));
     }
     let schedule_events_exists: bool = connection.query_row(

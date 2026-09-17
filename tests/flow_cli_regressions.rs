@@ -2,6 +2,8 @@ use assert_cmd::Command;
 use chrono::{Duration, NaiveTime, Utc};
 use predicates::prelude::*;
 use serde_json::Value;
+use std::process::Stdio;
+use std::sync::{Arc, Barrier};
 use stoker::domain::flow::{
     Dependency, DependencyMode, DependencyStatus, ExecutionMode, FlowRunState, ScheduleSpec,
     TaskRunState,
@@ -15,6 +17,17 @@ fn cli(home: &std::path::Path, cwd: &std::path::Path) -> Command {
         .env("STOKER_HOME", home)
         .env("NO_COLOR", "1")
         .current_dir(cwd);
+    command
+}
+
+fn cli_process(home: &std::path::Path, cwd: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(assert_cmd::cargo::cargo_bin("stoker"));
+    command
+        .env("STOKER_HOME", home)
+        .env("NO_COLOR", "1")
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     command
 }
 
@@ -75,11 +88,827 @@ fn extended_help_is_successful_and_top_level_mentions_the_extended_surface() {
             "Extended commands: flow, mode, run",
         ));
     cli(&home, directory.path())
+        .args(["flow", "create", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--once-at <RFC3339>"))
+        .stdout(predicate::str::contains("--daily <HH:mm>"))
+        .stdout(predicate::str::contains("--every <Nm|Nh>"))
+        .stdout(predicate::str::contains("--first-at <RFC3339>"))
+        .stdout(predicate::str::contains("--schedule-timezone <IANA_ZONE>"));
+    cli(&home, directory.path())
+        .args(["add", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--once-at <RFC3339>"))
+        .stdout(predicate::str::contains("--daily <HH:mm>"))
+        .stdout(predicate::str::contains("--every <Nm|Nh>"))
+        .stdout(predicate::str::contains("--first-at <RFC3339>"))
+        .stdout(predicate::str::contains("--schedule-timezone <IANA_ZONE>"));
+    for args in [
+        vec!["flow", "schedule", "set", "--help"],
+        vec!["schedule", "set", "--help"],
+    ] {
+        cli(&home, directory.path())
+            .args(args)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("--once-at <RFC3339>"))
+            .stdout(predicate::str::contains("--daily <HH:mm>"))
+            .stdout(predicate::str::contains("--every <Nm|Nh>"))
+            .stdout(predicate::str::contains("--first-at <RFC3339>"))
+            .stdout(predicate::str::contains("--schedule-timezone <IANA_ZONE>"));
+    }
+    cli(&home, directory.path())
+        .args(["flow", "run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--replace-next"));
+    cli(&home, directory.path())
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--skip-next"));
+    cli(&home, directory.path())
+        .args(["jobs", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--mode"));
+    cli(&home, directory.path())
         .args(["flow", "logs", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("--attempt"))
         .stdout(predicate::str::contains("--follow"));
+}
+
+#[test]
+fn periodic_cli_validates_units_persists_output_and_edits_with_first_at() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    cli(&home, directory.path())
+        .args(["queue", "lock"])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["mode", "set", "scheduled"])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["queue", "unlock"])
+        .assert()
+        .success();
+
+    for (index, invalid) in [
+        "0m",
+        "0h",
+        "30s",
+        "1.5h",
+        "1h30m",
+        " 1m",
+        "1m ",
+        "1M",
+        "1",
+        "4294967296m",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        cli(&home, directory.path())
+            .args([
+                "flow",
+                "create",
+                &format!("invalid-period-{index}"),
+                "--user",
+                "alice",
+                "--name",
+                "invalid",
+                "--every",
+                invalid,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--every"));
+    }
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "create",
+            "removed-at",
+            "--user",
+            "alice",
+            "--name",
+            "removed-at",
+            "--at",
+            "2099-01-01T00:00:00Z",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unexpected argument '--at'"));
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "create",
+            "missing-period",
+            "--user",
+            "alice",
+            "--name",
+            "missing-period",
+            "--first-at",
+            "2099-01-01T00:00:00Z",
+        ])
+        .assert()
+        .failure();
+
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "create",
+            "periodic-cli",
+            "--user",
+            "alice",
+            "--name",
+            "periodic-cli",
+            "--every",
+            "15m",
+            "--first-at",
+            "2099-01-01T00:00:00Z",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "task",
+            "add",
+            "periodic-cli",
+            "root",
+            "--name",
+            "root",
+            "--cmd",
+            "echo periodic",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["flow", "commit", "periodic-cli"])
+        .assert()
+        .success();
+    let shown = json_output(cli(&home, directory.path()).args(["flow", "show", "periodic-cli"]));
+    assert_eq!(shown["schedule"]["type"], "periodic");
+    assert_eq!(shown["schedule"]["every"], "15m");
+    assert_eq!(shown["schedule"]["first_at"], "2099-01-01T00:00:00+00:00");
+    cli(&home, directory.path())
+        .args(["flow", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "every 15m from 2099-01-01T00:00:00+00:00",
+        ));
+
+    cli(&home, directory.path())
+        .args(["flow", "edit", "begin", "periodic-cli"])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "periodic-cli",
+            "--every",
+            "2h",
+            "--first-at",
+            "2099-02-01T00:00:00Z",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "periodic-cli",
+            "--first-at",
+            "2099-03-01T00:00:00Z",
+            "--revision",
+            "1",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "periodic-cli",
+            "--daily",
+            "04:05",
+            "--schedule-timezone",
+            "UTC",
+            "--revision",
+            "2",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "switching between once, daily, and every schedules is not supported",
+        ));
+    cli(&home, directory.path())
+        .args(["flow", "edit", "apply", "periodic-cli", "--revision", "2"])
+        .assert()
+        .success();
+    let shown = json_output(cli(&home, directory.path()).args(["flow", "show", "periodic-cli"]));
+    assert_eq!(shown["schedule"]["every"], "2h");
+    assert_eq!(shown["schedule"]["first_at"], "2099-03-01T00:00:00+00:00");
+}
+
+#[test]
+fn scheduled_standalone_every_schedule_activates_on_commit() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    cli(&home, directory.path())
+        .args(["queue", "lock"])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["mode", "set", "scheduled"])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["queue", "unlock"])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "periodic-standalone",
+            "--cmd",
+            "echo periodic",
+            "--every",
+            "1h",
+        ])
+        .assert()
+        .success();
+
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    let jobs = store
+        .list_jobs_for_mode(None, None, Some(ExecutionMode::Scheduled))
+        .unwrap();
+    assert_eq!(jobs.len(), 1);
+    let before = Utc::now();
+    store.commit_job(jobs[0].id).unwrap();
+    let after = Utc::now();
+    let definition = store.standalone_definition(jobs[0].id).unwrap();
+    let first_at = match definition.schedule.unwrap() {
+        ScheduleSpec::Periodic {
+            first_at: Some(first_at),
+            ..
+        } => first_at,
+        other => panic!("unexpected schedule: {other:?}"),
+    };
+    assert!(first_at >= before + Duration::hours(1));
+    assert!(first_at <= after + Duration::hours(1));
+}
+
+#[test]
+fn standalone_schedule_cli_covers_normal_invalid_and_edit_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    store.lock_queue().unwrap();
+    store.set_mode(ExecutionMode::Scheduled).unwrap();
+    store.unlock_queue().unwrap();
+
+    for invalid in [
+        "0m",
+        "0h",
+        "30s",
+        "1.5h",
+        "1h30m",
+        " 1m",
+        "1m ",
+        "1M",
+        "m",
+        "1",
+        "4294967296m",
+    ] {
+        cli(&home, directory.path())
+            .args([
+                "add",
+                "--user",
+                "alice",
+                "--name",
+                "invalid-period",
+                "--cmd",
+                "echo invalid",
+                "--every",
+                invalid,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--every"));
+    }
+    assert!(
+        store
+            .list_jobs_for_mode(None, None, Some(ExecutionMode::Scheduled))
+            .unwrap()
+            .is_empty()
+    );
+
+    for (name, args) in [
+        ("once", vec!["--once-at", "2099-01-01T00:00:00Z"]),
+        (
+            "daily",
+            vec!["--daily", "04:05", "--schedule-timezone", "UTC"],
+        ),
+        (
+            "periodic",
+            vec!["--every", "1h", "--first-at", "2099-02-01T00:00:00Z"],
+        ),
+    ] {
+        let mut command = vec![
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            name,
+            "--cmd",
+            "echo valid",
+        ];
+        command.extend(args);
+        cli(&home, directory.path())
+            .args(command)
+            .assert()
+            .success();
+    }
+    let jobs = store
+        .list_jobs_for_mode(None, None, Some(ExecutionMode::Scheduled))
+        .unwrap();
+    assert_eq!(jobs.len(), 3);
+    for (name, expected) in [
+        ("once", "once"),
+        ("daily", "daily"),
+        ("periodic", "periodic"),
+    ] {
+        let job = jobs.iter().find(|job| job.name == name).unwrap();
+        let schedule = store
+            .standalone_definition(job.id)
+            .unwrap()
+            .schedule
+            .unwrap();
+        assert_eq!(
+            match schedule {
+                ScheduleSpec::Once { .. } => "once",
+                ScheduleSpec::Daily { .. } => "daily",
+                ScheduleSpec::Periodic { .. } => "periodic",
+            },
+            expected
+        );
+    }
+
+    let periodic_id = jobs.iter().find(|job| job.name == "periodic").unwrap().id;
+    store.commit_job(periodic_id).unwrap();
+    cli(&home, directory.path())
+        .args(["freeze", &periodic_id.to_string()])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["run", &periodic_id.to_string(), "--skip-next"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("flow is frozen"));
+
+    for invalid in [
+        "0m",
+        "0h",
+        "30s",
+        "1.5h",
+        "1h30m",
+        " 1m",
+        "1m ",
+        "1M",
+        "m",
+        "1",
+        "4294967296h",
+    ] {
+        cli(&home, directory.path())
+            .args([
+                "schedule",
+                "set",
+                &periodic_id.to_string(),
+                "--every",
+                invalid,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--every"));
+    }
+    cli(&home, directory.path())
+        .args([
+            "schedule",
+            "set",
+            &periodic_id.to_string(),
+            "--first-at",
+            "2000-01-01T00:00:00Z",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--first-at must be in the future"));
+    cli(&home, directory.path())
+        .args([
+            "schedule",
+            "set",
+            &periodic_id.to_string(),
+            "--first-at",
+            "2099-03-01T00:00:00Z",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("draft revision 1"));
+    cli(&home, directory.path())
+        .args([
+            "unfreeze",
+            &periodic_id.to_string(),
+            "--expected-draft-revision",
+            "1",
+        ])
+        .assert()
+        .success();
+    assert!(matches!(
+        store.standalone_definition(periodic_id).unwrap().schedule,
+        Some(ScheduleSpec::Periodic {
+            every: stoker::domain::flow::SchedulePeriod {
+                value: 1,
+                unit: stoker::domain::flow::SchedulePeriodUnit::Hours,
+            },
+            first_at: Some(_),
+        })
+    ));
+
+    let request_id = uuid::Uuid::new_v4();
+    for _ in 0..2 {
+        cli(&home, directory.path())
+            .args([
+                "run",
+                &periodic_id.to_string(),
+                "--skip-next",
+                "--request-id",
+                &request_id.to_string(),
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(request_id.to_string()));
+    }
+    let flow_id = format!("standalone/{periodic_id}");
+    let runs = store.list_flow_runs(&flow_id).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        store
+            .list_occurrences(&flow_id)
+            .unwrap()
+            .iter()
+            .filter(|item| item.state == stoker::domain::flow::OccurrenceState::Reserved)
+            .count(),
+        1
+    );
+    cli(&home, directory.path())
+        .args(["runs", &periodic_id.to_string()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(runs[0].run_id.to_string()));
+    cli(&home, directory.path())
+        .args(["occurrences", &periodic_id.to_string()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Reserved"));
+    cli(&home, directory.path())
+        .args([
+            "show",
+            &periodic_id.to_string(),
+            "--run",
+            &runs[0].run_id.to_string(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(runs[0].run_id.to_string()));
+}
+
+#[test]
+fn obsolete_at_and_schedule_selector_conflicts_fail_on_every_public_entry_point() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    let future = "2099-01-01T00:00:00Z";
+    let nil = uuid::Uuid::nil().to_string();
+
+    let rejected = [
+        vec![
+            "flow", "create", "obsolete", "--user", "alice", "--name", "obsolete", "--at", future,
+        ],
+        vec![
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "obsolete",
+            "--cmd",
+            "echo obsolete",
+            "--at",
+            future,
+        ],
+        vec!["flow", "schedule", "set", "obsolete", "--at", future],
+        vec!["schedule", "set", &nil, "--at", future],
+    ];
+    for args in rejected {
+        cli(&home, directory.path())
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("--at"));
+    }
+
+    let conflicts = [
+        vec![
+            "flow",
+            "create",
+            "conflict",
+            "--user",
+            "alice",
+            "--name",
+            "conflict",
+            "--once-at",
+            future,
+            "--every",
+            "1m",
+        ],
+        vec![
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "conflict",
+            "--cmd",
+            "echo conflict",
+            "--once-at",
+            future,
+            "--every",
+            "1m",
+        ],
+        vec![
+            "flow",
+            "schedule",
+            "set",
+            "conflict",
+            "--once-at",
+            future,
+            "--every",
+            "1m",
+        ],
+        vec![
+            "schedule",
+            "set",
+            &nil,
+            "--once-at",
+            future,
+            "--every",
+            "1m",
+        ],
+    ];
+    for args in conflicts {
+        cli(&home, directory.path())
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
+}
+
+#[test]
+fn concurrent_cli_callers_keep_periodic_commit_replacement_and_edit_atomic() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    store.lock_queue().unwrap();
+    store.set_mode(ExecutionMode::Scheduled).unwrap();
+    store.unlock_queue().unwrap();
+
+    cli(&home, directory.path())
+        .args([
+            "add",
+            "--user",
+            "tester",
+            "--name",
+            "standalone-request-race",
+            "--cmd",
+            "echo standalone",
+            "--every",
+            "1h",
+            "--first-at",
+            "2099-01-01T00:00:00Z",
+        ])
+        .assert()
+        .success();
+    let standalone_id = store
+        .list_jobs_for_mode(None, None, Some(ExecutionMode::Scheduled))
+        .unwrap()
+        .into_iter()
+        .find(|job| job.name == "standalone-request-race")
+        .unwrap()
+        .id;
+    store.commit_job(standalone_id).unwrap();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let barrier = Arc::new(Barrier::new(5));
+    let handles = (0..4)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            let home = home.clone();
+            let cwd = directory.path().to_path_buf();
+            let request_id = request_id.clone();
+            std::thread::spawn(move || {
+                let mut command = cli_process(&home, &cwd);
+                command.args([
+                    "run",
+                    &standalone_id.to_string(),
+                    "--skip-next",
+                    "--request-id",
+                    &request_id,
+                ]);
+                barrier.wait();
+                command.output().unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let outputs = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert!(outputs.iter().all(|output| output.status.success()));
+    let standalone_flow_id = format!("standalone/{standalone_id}");
+    assert_eq!(store.list_flow_runs(&standalone_flow_id).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .list_occurrences(&standalone_flow_id)
+            .unwrap()
+            .iter()
+            .filter(|item| item.state == stoker::domain::flow::OccurrenceState::Reserved)
+            .count(),
+        1
+    );
+
+    let first_at = Utc::now() + Duration::hours(2);
+    store
+        .create_flow(
+            "cli-request-race".into(),
+            "cli-request-race".into(),
+            "tester".into(),
+            ScheduleSpec::Periodic {
+                every: stoker::domain::flow::SchedulePeriod {
+                    value: 1,
+                    unit: stoker::domain::flow::SchedulePeriodUnit::Hours,
+                },
+                first_at: Some(first_at),
+            },
+        )
+        .unwrap();
+    add_task(&store, directory.path(), "cli-request-race", "root");
+    store.commit_flow("cli-request-race").unwrap();
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let barrier = Arc::new(Barrier::new(9));
+    let handles = (0..8)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            let home = home.clone();
+            let cwd = directory.path().to_path_buf();
+            let request_id = request_id.clone();
+            std::thread::spawn(move || {
+                let mut command = cli_process(&home, &cwd);
+                command.args([
+                    "flow",
+                    "run",
+                    "cli-request-race",
+                    "--replace-next",
+                    "--request-id",
+                    &request_id,
+                ]);
+                barrier.wait();
+                command.output().unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let outputs = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert!(outputs.iter().all(|output| output.status.success()));
+    assert_eq!(store.list_flow_runs("cli-request-race").unwrap().len(), 1);
+    let occurrences = store.list_occurrences("cli-request-race").unwrap();
+    assert_eq!(
+        occurrences
+            .iter()
+            .filter(|item| item.state == stoker::domain::flow::OccurrenceState::Reserved)
+            .count(),
+        1
+    );
+
+    store
+        .create_flow(
+            "cli-commit-race".into(),
+            "cli-commit-race".into(),
+            "tester".into(),
+            ScheduleSpec::Periodic {
+                every: stoker::domain::flow::SchedulePeriod {
+                    value: 1,
+                    unit: stoker::domain::flow::SchedulePeriodUnit::Minutes,
+                },
+                first_at: Some(Utc::now() + Duration::hours(3)),
+            },
+        )
+        .unwrap();
+    add_task(&store, directory.path(), "cli-commit-race", "root");
+    let barrier = Arc::new(Barrier::new(3));
+    let handles = (0..2)
+        .map(|_| {
+            let barrier = Arc::clone(&barrier);
+            let home = home.clone();
+            let cwd = directory.path().to_path_buf();
+            std::thread::spawn(move || {
+                let mut command = cli_process(&home, &cwd);
+                command.args(["flow", "commit", "cli-commit-race"]);
+                barrier.wait();
+                command.output().unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let outputs = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|output| output.status.success())
+            .count(),
+        1
+    );
+    assert_eq!(store.list_occurrences("cli-commit-race").unwrap().len(), 1);
+
+    cli(&home, directory.path())
+        .args(["flow", "edit", "begin", "cli-commit-race"])
+        .assert()
+        .success();
+    let barrier = Arc::new(Barrier::new(3));
+    let handles = ["2h", "3h"]
+        .into_iter()
+        .map(|period| {
+            let barrier = Arc::clone(&barrier);
+            let home = home.clone();
+            let cwd = directory.path().to_path_buf();
+            std::thread::spawn(move || {
+                let mut command = cli_process(&home, &cwd);
+                command.args([
+                    "flow",
+                    "schedule",
+                    "set",
+                    "cli-commit-race",
+                    "--every",
+                    period,
+                    "--first-at",
+                    "2099-04-01T00:00:00Z",
+                    "--revision",
+                    "0",
+                ]);
+                barrier.wait();
+                command.output().unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    let outputs = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outputs
+            .iter()
+            .filter(|output| output.status.success())
+            .count(),
+        1
+    );
+    let failure = outputs
+        .iter()
+        .find(|output| !output.status.success())
+        .unwrap();
+    assert!(String::from_utf8_lossy(&failure.stderr).contains("revision conflict"));
+    assert_eq!(store.get_flow("cli-commit-race").unwrap().draft_revision, 1);
 }
 
 #[test]
@@ -107,7 +936,7 @@ fn flow_task_submission_keeps_a_shell_compatible_working_directory() {
             "tester",
             "--name",
             "Build: nightly",
-            "--at",
+            "--once-at",
             "2099-01-01T00:00:00Z",
         ])
         .assert()
@@ -341,7 +1170,7 @@ fn public_flows_require_scheduled_mode_and_list_has_no_mode_option() {
             "tester",
             "--name",
             "serial-flow",
-            "--at",
+            "--once-at",
             "2099-01-01T00:00:00Z",
         ])
         .assert()
@@ -638,7 +1467,7 @@ fn adding_a_task_preserves_earlier_frozen_draft_edits() {
             "schedule",
             "set",
             "draft-merge",
-            "--at",
+            "--once-at",
             "2099-01-01T00:00:00Z",
             "--revision",
             "1",
@@ -1150,7 +1979,7 @@ fn every_flow_edit_command_has_success_and_validation_coverage() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "schedule set requires --at or --daily",
+            "schedule set requires --once-at, --daily, --every, --first-at, or --schedule-timezone",
         ));
     cli(&home, directory.path())
         .args([
@@ -1179,7 +2008,7 @@ fn every_flow_edit_command_has_success_and_validation_coverage() {
             "schedule",
             "set",
             "edit-matrix",
-            "--at",
+            "--once-at",
             "2099-02-03T04:05:06Z",
             "--revision",
             "3",
@@ -1192,7 +2021,7 @@ fn every_flow_edit_command_has_success_and_validation_coverage() {
             "schedule",
             "set",
             "edit-matrix",
-            "--at",
+            "--once-at",
             "2099-02-03T04:05:06Z",
             "--daily",
             "04:05",
@@ -1260,7 +2089,7 @@ fn every_flow_edit_command_has_success_and_validation_coverage() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "switching between once and daily schedules is not supported",
+            "switching between once, daily, and every schedules is not supported",
         ));
     cli(&home, directory.path())
         .args(["flow", "edit", "apply", "edit-matrix"])

@@ -53,27 +53,27 @@ fn add(paths: &StokerPaths, store: &Store, args: AddExtendedArgs) -> Result<()> 
     }
     let schedule = parse_schedule(
         paths,
-        args.at.as_deref(),
+        args.once_at.as_deref(),
         args.daily.as_deref(),
+        args.every.as_deref(),
+        args.first_at.as_deref(),
         args.schedule_timezone.as_deref(),
     )?;
     let mode = store.current_mode()?;
     if mode == ExecutionMode::Serial && schedule.is_some() {
         anyhow::bail!(
-            "serial workspace mode does not accept --at, --daily, or --schedule-timezone"
+            "serial workspace mode does not accept --once-at, --daily, --every, --first-at, or --schedule-timezone"
         );
     }
     if mode == ExecutionMode::Scheduled && schedule.is_none() {
-        anyhow::bail!("scheduled workspace mode requires --at or --daily");
+        anyhow::bail!("scheduled workspace mode requires --once-at, --daily, or --every");
     }
     let cwd = std::env::current_dir()?.canonicalize()?;
     let job = crate::application::jobs::create_job(
         store,
         &crate::adapters::SystemWorkingDirectoryResolver,
         crate::application::CreateJobInput {
-            user: args
-                .user
-                .context("--user is required for a standalone job")?,
+            user: args.user,
             name: args.name,
             description: args.description,
             cwd,
@@ -90,10 +90,14 @@ fn schedule_standalone(store: &Store, command: StandaloneScheduleCommand) -> Res
         StandaloneScheduleCommand::Set(args) => extended_flow::set_schedule(
             store,
             &standalone_flow_id(args.id),
-            args.at,
-            args.daily,
-            args.schedule_timezone,
-            args.expected_draft_revision,
+            extended_flow::ScheduleUpdate {
+                once_at: args.once_at,
+                daily: args.daily,
+                every: args.every,
+                first_at: args.first_at,
+                timezone: args.schedule_timezone,
+                revision: args.expected_draft_revision,
+            },
         ),
     }
 }

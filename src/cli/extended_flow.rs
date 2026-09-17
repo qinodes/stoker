@@ -5,7 +5,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
-use crate::domain::flow::{ExecutionMode, ScheduleSpec, parse_daily, parse_once};
+use crate::domain::flow::{
+    ExecutionMode, ScheduleSpec, parse_daily, parse_every, parse_first_at, parse_once,
+};
 use crate::store::FlowTaskInput;
 use crate::{StokerPaths, Store};
 
@@ -24,11 +26,13 @@ pub(super) fn run(paths: &StokerPaths, store: &Store, command: FlowCommand) -> R
             }
             let schedule = parse_schedule(
                 paths,
-                args.at.as_deref(),
+                args.once_at.as_deref(),
                 args.daily.as_deref(),
+                args.every.as_deref(),
+                args.first_at.as_deref(),
                 args.schedule_timezone.as_deref(),
             )?
-            .context("flow create requires --at or --daily")?;
+            .context("flow create requires --once-at, --daily, or --every")?;
             let flow = store.create_flow(args.flow_id, args.name, args.user, schedule)?;
             println!(
                 "Created flow {} (DRAFT, draft revision {}).",
@@ -179,30 +183,37 @@ fn schedule(store: &Store, command: FlowScheduleCommand) -> Result<()> {
         FlowScheduleCommand::Set(args) => set_schedule(
             store,
             &args.flow_id,
-            args.at,
-            args.daily,
-            args.schedule_timezone,
-            args.revision,
+            ScheduleUpdate {
+                once_at: args.once_at,
+                daily: args.daily,
+                every: args.every,
+                first_at: args.first_at,
+                timezone: args.schedule_timezone,
+                revision: args.revision,
+            },
         ),
     }
 }
 
-pub(super) fn set_schedule(
-    store: &Store,
-    flow_id: &str,
-    at: Option<String>,
-    daily: Option<String>,
-    schedule_timezone: Option<String>,
-    revision: Option<i64>,
-) -> Result<()> {
+pub(super) struct ScheduleUpdate {
+    pub(super) once_at: Option<String>,
+    pub(super) daily: Option<String>,
+    pub(super) every: Option<String>,
+    pub(super) first_at: Option<String>,
+    pub(super) timezone: Option<String>,
+    pub(super) revision: Option<i64>,
+}
+
+pub(super) fn set_schedule(store: &Store, flow_id: &str, update: ScheduleUpdate) -> Result<()> {
     let current = store.get_flow(flow_id)?;
-    let schedule = if let Some(at) = at {
+    let schedule = if let Some(at) = update.once_at {
         ScheduleSpec::Once {
             at: parse_once(&at).map_err(|error| anyhow::anyhow!(error))?,
         }
-    } else if let Some(daily) = daily {
+    } else if let Some(daily) = update.daily {
         let time = parse_daily(&daily).map_err(|error| anyhow::anyhow!(error))?;
-        let timezone = schedule_timezone
+        let timezone = update
+            .timezone
             .or_else(|| {
                 current
                     .schedule
@@ -213,16 +224,38 @@ pub(super) fn set_schedule(
                 "--schedule-timezone is required for a daily schedule without an existing timezone",
             )?;
         ScheduleSpec::Daily { time, timezone }
-    } else if let Some(timezone) = schedule_timezone {
+    } else if let Some(value) = update.every {
+        let first_at = update
+            .first_at
+            .as_deref()
+            .map(parse_first_at)
+            .transpose()
+            .map_err(|error| anyhow::anyhow!(error))?;
+        ScheduleSpec::Periodic {
+            every: parse_every(&value).map_err(|error| anyhow::anyhow!(error))?,
+            first_at,
+        }
+    } else if let Some(value) = update.first_at {
+        let every = match current.schedule.as_ref() {
+            Some(ScheduleSpec::Periodic { every, .. }) => *every,
+            _ => anyhow::bail!("--first-at can only modify an existing every schedule"),
+        };
+        ScheduleSpec::Periodic {
+            every,
+            first_at: Some(parse_first_at(&value).map_err(|error| anyhow::anyhow!(error))?),
+        }
+    } else if let Some(timezone) = update.timezone {
         let time = match current.schedule.as_ref() {
             Some(ScheduleSpec::Daily { time, .. }) => *time,
             _ => anyhow::bail!("--schedule-timezone can only modify an existing daily schedule"),
         };
         ScheduleSpec::Daily { time, timezone }
     } else {
-        anyhow::bail!("schedule set requires --at or --daily");
+        anyhow::bail!(
+            "schedule set requires --once-at, --daily, --every, --first-at, or --schedule-timezone"
+        );
     };
-    let flow = store.set_flow_schedule_draft(flow_id, schedule, revision)?;
+    let flow = store.set_flow_schedule_draft(flow_id, schedule, update.revision)?;
     println!(
         "Updated flow {} draft revision {}.",
         flow.flow_id, flow.draft_revision

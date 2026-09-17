@@ -12,6 +12,8 @@ use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub use super::flow_schedule::{SchedulePeriod, SchedulePeriodUnit};
+
 pub const MAX_FLOW_ID_LENGTH: usize = 128;
 pub const MAX_TASK_ID_LENGTH: usize = 128;
 pub const MAX_FLOW_NAME_LENGTH: usize = 128;
@@ -51,8 +53,17 @@ impl FromStr for ExecutionMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScheduleSpec {
-    Once { at: DateTime<Utc> },
-    Daily { time: NaiveTime, timezone: String },
+    Once {
+        at: DateTime<Utc>,
+    },
+    Daily {
+        time: NaiveTime,
+        timezone: String,
+    },
+    Periodic {
+        every: SchedulePeriod,
+        first_at: Option<DateTime<Utc>>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,7 +269,7 @@ pub struct Attempt {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OccurrenceState {
     Pending,
@@ -357,7 +368,7 @@ pub fn validate_definition(definition: &FlowDefinition) -> Result<(), String> {
         return Err("serial standalone definitions cannot have a schedule".to_owned());
     }
     if definition.mode == ExecutionMode::Scheduled && definition.schedule.is_none() {
-        return Err("scheduled flows require --at or --daily".to_owned());
+        return Err("scheduled flows require --once-at, --daily, or --every".to_owned());
     }
     Ok(())
 }
@@ -483,7 +494,8 @@ pub fn aggregate_flow_state(tasks: &[TaskRun], cancel_requested: bool) -> Option
 }
 
 pub use super::flow_parsing::{
-    next_local_date_after, parse_daily, parse_once, resolve_schedule_timezone,
+    next_local_date_after, parse_daily, parse_every, parse_first_at, parse_once,
+    resolve_schedule_timezone,
 };
 #[cfg(test)]
 mod tests {
@@ -509,6 +521,81 @@ mod tests {
         assert_eq!(a, b);
         assert!(parse_once("2026-09-15T08:00:00").is_err());
         assert!(parse_once("2026-09-15T08:00").is_err());
+        assert_eq!(parse_first_at("2026-09-15T08:00:00+09:00").unwrap(), a);
+    }
+
+    #[test]
+    fn parses_period_boundaries_and_rejects_unsupported_forms() {
+        assert_eq!(
+            parse_every("1m").unwrap(),
+            SchedulePeriod {
+                value: 1,
+                unit: SchedulePeriodUnit::Minutes,
+            }
+        );
+        assert_eq!(
+            parse_every("2h").unwrap(),
+            SchedulePeriod {
+                value: 2,
+                unit: SchedulePeriodUnit::Hours,
+            }
+        );
+        for invalid in [
+            "0m",
+            "0h",
+            "30s",
+            "1.5h",
+            "1h30m",
+            " 1m",
+            "1m ",
+            "1M",
+            "m",
+            "1",
+            "4294967296m",
+        ] {
+            assert!(
+                parse_every(invalid).is_err(),
+                "{invalid} unexpectedly parsed"
+            );
+        }
+    }
+
+    #[test]
+    fn periodic_windows_stay_anchored_to_elapsed_utc_time() {
+        let first_at = DateTime::parse_from_rfc3339("2026-03-08T06:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let schedule = ScheduleSpec::Periodic {
+            every: SchedulePeriod {
+                value: 1,
+                unit: SchedulePeriodUnit::Hours,
+            },
+            first_at: Some(first_at),
+        };
+        assert_eq!(
+            schedule
+                .periodic_window(first_at - Duration::seconds(1))
+                .unwrap(),
+            (None, first_at)
+        );
+        assert_eq!(
+            schedule
+                .periodic_window(first_at + Duration::minutes(90))
+                .unwrap(),
+            (
+                Some(first_at + Duration::hours(1)),
+                first_at + Duration::hours(2)
+            )
+        );
+
+        let invalid = ScheduleSpec::Periodic {
+            every: SchedulePeriod {
+                value: 0,
+                unit: SchedulePeriodUnit::Minutes,
+            },
+            first_at: Some(first_at),
+        };
+        assert!(invalid.periodic_window(first_at).is_err());
     }
 
     #[test]

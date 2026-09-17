@@ -13,6 +13,7 @@ use crate::store::{FlowAttemptResult, FlowTaskExecution};
 use super::connection::Store;
 use super::error::StoreError;
 use super::flow_mapping::*;
+use super::flow_run_dispatch::*;
 use super::flow_runtime_mapping::*;
 
 impl Store {
@@ -87,10 +88,14 @@ impl Store {
             ));
         }
         let occurrence_id = if skip_next {
-            if definition.schedule.as_ref().is_some_and(|schedule| {
-                matches!(schedule, crate::domain::flow::ScheduleSpec::Daily { .. })
-            }) {
-                ensure_next_daily_occurrence(&transaction, &definition, Utc::now())?;
+            match definition.schedule.as_ref() {
+                Some(crate::domain::flow::ScheduleSpec::Daily { .. }) => {
+                    ensure_next_daily_occurrence(&transaction, &definition, Utc::now())?;
+                }
+                Some(crate::domain::flow::ScheduleSpec::Periodic { .. }) => {
+                    ensure_next_periodic_occurrence(&transaction, &definition, Utc::now())?;
+                }
+                _ => {}
             }
             Some(reserve_next_occurrence(&transaction, &definition)?)
         } else {
@@ -139,7 +144,7 @@ impl Store {
         Ok(connection.prepare("SELECT occurrence_id, flow_id, schedule_generation, local_date, due_at, state, reason FROM occurrences WHERE flow_id = ?1 ORDER BY due_at, occurrence_id")?.query_map([flow_id], occurrence_from_row)?.collect::<Result<Vec<_>, _>>()?)
     }
 
-    /// Atomically materialise due daily occurrences, claim one eligible task,
+    /// Atomically materialise due recurring occurrences, claim one eligible task,
     /// and create its attempt.  A task claim is not a flow start: the flow
     /// remains STARTING until the first root process is acknowledged.
     pub fn claim_flow_task(
@@ -150,19 +155,22 @@ impl Store {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if queue_locked_with(&transaction)? {
             materialize_daily_occurrences(&transaction, now)?;
+            materialize_periodic_occurrences(&transaction, now)?;
             expire_occurrences(&transaction, now)?;
-            settle_daily_occurrences(&transaction, now, false, Some("SKIPPED_LOCKED"))?;
+            settle_recurring_occurrences(&transaction, now, false, Some("SKIPPED_LOCKED"))?;
             transaction.commit()?;
             return Ok(None);
         }
         if fence_with(&transaction)? {
             materialize_daily_occurrences(&transaction, now)?;
+            materialize_periodic_occurrences(&transaction, now)?;
             expire_occurrences(&transaction, now)?;
-            settle_daily_occurrences(&transaction, now, false, Some("SKIPPED_RECOVERY"))?;
+            settle_recurring_occurrences(&transaction, now, false, Some("SKIPPED_RECOVERY"))?;
             transaction.commit()?;
             return Ok(None);
         }
         materialize_daily_occurrences(&transaction, now)?;
+        materialize_periodic_occurrences(&transaction, now)?;
         expire_occurrences(&transaction, now)?;
         let mode = parse_mode(&transaction.query_row(
             "SELECT mode FROM settings WHERE id = 1",
@@ -173,7 +181,7 @@ impl Store {
             start_serial_standalone_run(&transaction)?;
         }
         start_due_flow_run(&transaction, now, mode)?;
-        settle_daily_occurrences(&transaction, now, false, None)?;
+        settle_recurring_occurrences(&transaction, now, false, None)?;
         let mut run_rows = transaction.prepare("SELECT run_id, flow_id, source, state, definition_snapshot FROM flow_runs WHERE state IN ('STARTING','RUNNING') ORDER BY created_at, run_id")?.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)))?.collect::<Result<Vec<_>, _>>()?;
         let mut candidates: Vec<(Uuid, String, FlowTask, TaskRun, bool)> = Vec::new();
         for (run_id_text, flow_id, run_source, run_state, snapshot) in run_rows.drain(..) {
@@ -266,14 +274,14 @@ impl Store {
         }))
     }
 
-    pub fn settle_daily_occurrences(
+    pub fn settle_recurring_occurrences(
         &self,
         now: DateTime<Utc>,
         capacity_full: bool,
     ) -> Result<(), StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        settle_daily_occurrences(&transaction, now, capacity_full, None)?;
+        settle_recurring_occurrences(&transaction, now, capacity_full, None)?;
         transaction.commit()?;
         Ok(())
     }

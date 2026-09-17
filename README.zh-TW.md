@@ -397,8 +397,9 @@ Flow 可以把多個 task 組成一次執行，並宣告成功或失敗相依關
 以下是目前提供給使用者的完整 Flow command tree。`FLOW_ID` 與 `TASK_ID` 是 positional argument；用來選擇執行紀錄的 `RUN_ID`、task 與 attempt 則固定使用 option。
 
 ~~~text
-stoker flow create <FLOW_ID> --user <USER> --name <NAME> --at <RFC3339>
-stoker flow create <FLOW_ID> --user <USER> --name <NAME> --daily <HH:mm> [--schedule-timezone <ZONE>]
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --once-at <RFC3339>
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>]
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --every <Nm|Nh> [--first-at <RFC3339>]
 stoker flow commit <FLOW_ID>
 stoker flow list [--user <USER>]
 stoker flow show <FLOW_ID> [--run <RUN_ID> [--task <TASK_ID>]]
@@ -421,9 +422,11 @@ stoker flow task update <FLOW_ID> <TASK_ID>
 stoker flow task remove <FLOW_ID> <TASK_ID>
     [--scope future|current|both] [--run <RUN_ID>] [--revision <N>]
 
-stoker flow schedule set <FLOW_ID> --at <RFC3339> [--revision <N>]
-stoker flow schedule set <FLOW_ID> --daily <HH:mm> [--schedule-timezone <ZONE>] [--revision <N>]
-stoker flow schedule set <FLOW_ID> --schedule-timezone <ZONE> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --once-at <RFC3339> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--revision <N>]
+stoker flow schedule set <FLOW_ID> --every <Nm|Nh> [--first-at <RFC3339>] [--revision <N>]
+stoker flow schedule set <FLOW_ID> --first-at <RFC3339> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --schedule-timezone <IANA_ZONE> [--revision <N>]
 
 stoker flow edit begin <FLOW_ID>
 stoker flow edit apply <FLOW_ID> [--revision <N>]
@@ -431,6 +434,58 @@ stoker flow edit discard <FLOW_ID> --revision <N>
 
 stoker flow disable <FLOW_ID>
 stoker flow enable <FLOW_ID>
+~~~
+
+### 正式 standalone 排程 Job 命令接口
+
+Standalone Job 使用 `stoker add` 輸出的 UUID。在 `scheduled` mode 建立 Job 時，必須使用
+下列三種排程形式之一；其餘命令則使用同一個 Job UUID 查詢或管理該 Job 與執行紀錄。
+
+~~~text
+stoker add --user <USER> --name <NAME> --cmd <COMMAND> [--description <TEXT>]
+    --once-at <RFC3339> [--retry <N>]
+stoker add --user <USER> --name <NAME> --cmd <COMMAND> [--description <TEXT>]
+    --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--retry <N>]
+stoker add --user <USER> --name <NAME> --cmd <COMMAND> [--description <TEXT>]
+    --every <Nm|Nh> [--first-at <RFC3339>] [--retry <N>]
+stoker commit <JOB_ID>
+stoker jobs [--user <USER>] [--state <STATE>] [--mode serial|scheduled]
+stoker show <JOB_ID> [--run <RUN_ID>]
+stoker runs <JOB_ID>
+stoker occurrences <JOB_ID>
+
+stoker run <JOB_ID> [--skip-next] [--request-id <UUID>]
+stoker logs <JOB_ID> --run <RUN_ID> [--attempt <N>] [--follow]
+stoker cancel <JOB_ID> --run <RUN_ID>
+
+stoker freeze <JOB_ID>
+stoker schedule set <JOB_ID> --once-at <RFC3339> [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --every <Nm|Nh> [--first-at <RFC3339>] [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --first-at <RFC3339> [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --schedule-timezone <IANA_ZONE> [--expected-draft-revision <N>]
+stoker draft discard <JOB_ID> --expected-draft-revision <N>
+stoker unfreeze <JOB_ID> [--expected-draft-revision <N>]
+
+stoker disable <JOB_ID>
+stoker enable <JOB_ID>
+~~~
+
+Standalone 排程 Job 採用下方 Flow 說明中的相同 once、daily、periodic、UTC／DST、錯過執行與
+排程類型限制。`stoker add` 會建立 DRAFT；執行 `stoker commit JOB_ID` 後才會啟用。
+`--retry` 是 standalone 的重試次數，Flow task 則使用 `--retries`。若要修改已 commit 的排程，
+先執行 `freeze`，使用 `schedule set` 修改，再執行 `unfreeze`；可用 expected draft revision
+避免過期修改。`draft discard` 只會丟棄 draft，Job 仍保持 frozen。
+
+`stoker run --skip-next` 會建立 manual run，並在該 run 啟動後取代一個明確的未來 occurrence。
+重送相同的 `--request-id` 會取得同一個 run。停用 Job 只會停止 automatic trigger，不會阻止
+其他有效的 manual run。頂層 scheduled-job 命令只接受 standalone Job UUID；Flow ID 必須使用
+`stoker flow` 命令。
+
+~~~bash
+stoker add --user alice --name frequent --cmd "python refresh.py" --every 15m --first-at 2026-09-20T10:00:00+09:00
+stoker commit <JOB_ID>
+stoker run <JOB_ID> --skip-next --request-id <UUID>
 ~~~
 
 重要參數規則：
@@ -468,7 +523,7 @@ stoker flow commit nightly
 |---|---|---|---|
 | 查看模式 | `stoker mode show` | 顯示目前 workspace 的 `serial` 或 `scheduled` 模式。 | `scheduled` |
 | 切換模式 | `stoker queue lock`<br>`stoker mode set serial` 或 `stoker mode set scheduled`<br>`stoker queue unlock` | 必須先自行鎖住 queue；有 execution 正在啟動、執行、取消、清理或 recovery 時會拒絕切換。`mode set` 不會自動 lock／unlock，成功後 queue 仍保持 locked，確認完成後再解除。 | `Mode set to scheduled; queue remains locked.` |
-| 建立 Flow | `stoker flow create nightly --user alice --name nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo` | Flow 只適用於 `scheduled` mode，必須選擇 `--at RFC3339` 或 `--daily HH:mm`；daily timezone 使用 IANA 名稱。省略 `--schedule-timezone` 時，依序使用設定檔的 timezone 與系統本地 timezone；若系統 timezone 無法判定，必須明確指定。serial 立即執行請使用 standalone `stoker add`。 | `Created flow nightly (DRAFT, draft revision 0).` |
+| 建立 Flow | `stoker flow create nightly --user alice --name nightly --once-at 2026-09-20T10:00:00+09:00`<br>`stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow create frequent --user alice --name frequent --every 15m --first-at 2026-09-20T10:00:00+09:00` | Flow 只適用於 `scheduled` mode，必須選擇 `--once-at RFC3339`、`--daily HH:mm` 或 `--every Nm\|Nh`。`--first-at` 只能搭配 `--every`。daily timezone 使用 IANA 名稱；省略時依序使用設定檔的 timezone 與系統本地 timezone，若系統 timezone 無法判定則必須明確指定。serial 立即執行請使用 standalone `stoker add`。 | `Created flow nightly (DRAFT, draft revision 0).` |
 | 新增 task | `stoker flow task add nightly prepare --name prepare --cmd "python prepare.py"` | 從目前目錄新增 task。可加 `--retries N`、重複的 `--after TASK_ID`／`--after-failure TASK_ID`、`--match all\|any` 及 `--revision N`。 | `Added task to flow nightly (draft revision 0).` |
 | 提交 Flow | `stoker flow commit nightly` | 驗證完整 task graph 並提交 draft；提交後 scheduler 才能執行。 | `Committed flow nightly (2 task(s)).` |
 | 列出 Flow | `stoker flow list [--user alice]` | 每個 Flow 顯示一列對齊摘要，包含排程、狀態、active run 與下次觸發時間，不展開 tasks。 | `FLOW_ID  NAME  USER  SCHEDULE  STATUS  ACTIVE  NEXT` |
@@ -484,7 +539,7 @@ stoker flow commit nightly
 | 開始編輯 | `stoker flow edit begin nightly` | 凍結已提交 Flow，暫停新的 run、task 與 retry intake。future draft 會在第一次 future 修改時建立；執行中的程序會繼續。 | `Flow 'nightly' is frozen for editing.` |
 | 修改 task | `stoker flow task update nightly train [--cmd CMD] [--cwd DIR] [--retries N] [--after TASK] [--after-failure TASK] [--match all\|any] [--clear-dependencies] [--revision N]` | 修改 future draft；至少指定一個欄位，相依選項可重複。 | `Updated task train in flow nightly (draft revision 1).` |
 | 移除 task | `stoker flow task remove nightly train [--scope future\|current\|both] [--run RUN_UUID] [--revision N]` | 預設修改 `future`。`current`／`both` 用於指定的 active run，必須提供 `--run`；操作要求 Flow 已 freeze。 | `Draft revision 2 for flow nightly.` |
-| 修改排程 | `stoker flow schedule set nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow schedule set nightly --schedule-timezone UTC` | 修改 frozen Flow 的 future 排程；可加 `--revision N`。既有 once Flow 只能改成另一個 future once 時間，既有 daily Flow 只能修改 daily 時間／時區，不能在 once 與 daily 之間互換。timezone-only 只適用於 daily；已產生非 pending occurrence 的 terminal once Flow 不能再排程，請建立新 Flow。 | `Updated flow nightly draft revision 2.` |
+| 修改排程 | `stoker flow schedule set nightly --once-at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow schedule set nightly --schedule-timezone UTC`<br>`stoker flow schedule set frequent --every 2h --first-at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set frequent --first-at 2026-09-21T10:00:00+09:00` | 修改 frozen Flow 的 future 排程；可加 `--revision N`。once、daily、every 三種排程不能互換，只能修改同類排程。daily 可修改時間／時區；every 可修改週期與首次時間，也可只用 `--first-at` 保留原週期。timezone-only 只適用於 daily。已產生非 pending occurrence 的 terminal once Flow 不能再排程，請建立新 Flow。 | `Updated flow nightly draft revision 2.` |
 | 放棄 draft | `stoker flow edit discard nightly --revision N` | 放棄尚未套用的 future 修改；Flow 仍保持 frozen。 | `Discarded draft for nightly (still frozen=true).` |
 | 套用編輯 | `stoker flow edit apply nightly [--revision N]` | 有 future draft 時，驗證並套用 draft、增加 graph revision，然後解除 Flow freeze。若只有 current-scope 操作、尚未建立 future draft，請省略 `--revision` 以直接解除 freeze。此命令不會解除全域 queue lock。 | `Applied edits to nightly (graph revision 2).` |
 | 停用自動觸發 | `stoker flow disable nightly` | 停止未來的 automatic trigger；合法的 manual run 仍可執行。 | `Disabled nightly.` |
@@ -512,9 +567,15 @@ Flow 命令一律以 `stoker flow` 開頭；頂層 scheduled-job 命令只接受
 
 
 One-time schedule 使用包含秒數與明確 UTC offset 的 RFC 3339，例如
-2026-09-15T23:30:00+09:00。Daily schedule 使用 HH:mm 與 IANA timezone。
+`2026-09-15T23:30:00+09:00`。Daily schedule 使用 `HH:mm` 與 IANA timezone。
 錯過的 daily occurrence 不會補跑；DST 不存在的時間會跳過，重複的時間採用
 較早的 instant。
+
+週期排程的 `--every` 只接受小寫整數分鐘或小時，例如 `1m`、`15m`、`1h`、`2h`；
+最小值分別是 1 分鐘與 1 小時。省略 `--first-at` 時，第一次執行是 commit／套用排程後
+的一個完整週期，不會在 commit 當下立即執行。指定 `--first-at` 時必須是未來的 RFC 3339
+時間，之後的 occurrence 固定以該時間為基準，按 UTC 經過時間推進，不隨 DST 偏移。
+停機期間錯過的週期不會補跑；恢復後仍維持原本的時間基準。
 
 要修改已 commit 的 flow，先開始 edit，再修改 future draft，最後套用；可使用
 draft revision 做 compare-and-swap：

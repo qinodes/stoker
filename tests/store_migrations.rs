@@ -256,6 +256,77 @@ fn cloned_store_handles_share_one_reusable_connection() {
     assert_eq!(cloned.get_job(id).unwrap().name, "shared");
 }
 
+#[test]
+fn v10_periodic_migration_preserves_existing_occurrences() {
+    let directory = TempDir::new().unwrap();
+    let database = directory.path().join("v009-periodic-upgrade.db");
+    drop(Store::open(&database).unwrap());
+    let occurrence_id = Uuid::new_v4();
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "INSERT INTO occurrences (occurrence_id, internal_definition_id, flow_id, schedule_generation, kind, occurrence_key, local_date, due_at, state, reason, created_at) VALUES (?1, 'definition', 'flow', 1, 'once', 'once', NULL, '2099-01-01T00:00:00+00:00', 'PENDING', NULL, '2026-01-01T00:00:00+00:00')",
+            [occurrence_id.to_string()],
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            r#"
+DROP INDEX occurrences_due;
+ALTER TABLE occurrences RENAME TO occurrences_v10;
+CREATE TABLE occurrences (
+    occurrence_id TEXT PRIMARY KEY NOT NULL,
+    internal_definition_id TEXT NOT NULL,
+    flow_id TEXT NOT NULL,
+    schedule_generation INTEGER NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('once', 'daily')),
+    occurrence_key TEXT NOT NULL,
+    local_date TEXT,
+    due_at TEXT NOT NULL,
+    state TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (internal_definition_id, schedule_generation, kind, occurrence_key)
+);
+INSERT INTO occurrences SELECT * FROM occurrences_v10;
+DROP TABLE occurrences_v10;
+CREATE INDEX occurrences_due ON occurrences(state, due_at, flow_id);
+ALTER TABLE jobs DROP COLUMN period_value;
+ALTER TABLE jobs DROP COLUMN period_unit;
+ALTER TABLE jobs DROP COLUMN period_first_at_utc;
+ALTER TABLE flow_definitions DROP COLUMN period_value;
+ALTER TABLE flow_definitions DROP COLUMN period_unit;
+ALTER TABLE flow_definitions DROP COLUMN period_first_at_utc;
+PRAGMA user_version = 9;
+            "#,
+        )
+        .unwrap();
+    drop(connection);
+
+    let store = Store::open(&database).unwrap();
+    assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+    drop(store);
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT state FROM occurrences WHERE occurrence_id = ?1",
+                [occurrence_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "PENDING"
+    );
+    let sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'occurrences'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(sql.contains("'periodic'"));
+}
+
 fn insert_fixture_job(
     connection: &Connection,
     root: &Path,
@@ -309,6 +380,9 @@ fn assert_latest_schema(database: &Path) {
         "queue_order",
         "description",
         "description_revision",
+        "period_value",
+        "period_unit",
+        "period_first_at_utc",
     ] {
         assert!(columns.iter().any(|column| column == required));
     }

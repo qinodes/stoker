@@ -15,6 +15,7 @@ use super::connection::Store;
 use super::error::StoreError;
 use super::flow_mapping::*;
 use super::flow_runtime_mapping::*;
+use super::flow_schedule_mapping::*;
 use super::standalone::sync_standalone_job_from_flow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,10 +93,10 @@ impl Store {
         }
         let internal_id = Uuid::new_v4();
         let now = Utc::now();
-        let (kind, at, daily, timezone) = schedule_columns(Some(&schedule));
+        let columns = schedule_columns(Some(&schedule));
         transaction.execute(
-            "INSERT INTO flow_definitions (flow_id, internal_definition_id, name, owner, mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, schedule_generation, committed, frozen, enabled, graph_revision, draft_revision, created_at, last_dispatch_sequence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 0, 0, 1, 0, 0, ?10, 0)",
-            params![flow_id, internal_id.to_string(), name, owner, mode.to_string(), kind, at, daily, timezone, now.to_rfc3339()],
+            "INSERT INTO flow_definitions (flow_id, internal_definition_id, name, owner, mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, period_value, period_unit, period_first_at_utc, schedule_generation, committed, frozen, enabled, graph_revision, draft_revision, created_at, last_dispatch_sequence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, 0, 0, 1, 0, 0, ?13, 0)",
+            params![flow_id, internal_id.to_string(), name, owner, mode.to_string(), columns.kind, columns.at, columns.daily, columns.timezone, columns.period_value, columns.period_unit, columns.period_first_at, now.to_rfc3339()],
         )?;
         let definition = load_flow(&transaction, &flow_id)?;
         transaction.commit()?;
@@ -106,22 +107,29 @@ impl Store {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_queue_unlocked(&transaction)?;
-        let definition = load_flow_current(&transaction, flow_id)?;
+        let mut definition = load_flow_current(&transaction, flow_id)?;
         if definition.committed {
             return Err(StoreError::InvalidData(format!(
                 "flow {flow_id:?} is already committed"
             )));
         }
+        let now = Utc::now();
+        activate_periodic_schedule(&mut definition.schedule, now)?;
         validate_definition(&definition).map_err(StoreError::InvalidData)?;
         let queue_order = next_definition_order(&transaction)?;
-        let now = Utc::now();
-        transaction.execute("UPDATE flow_definitions SET committed = 1, queue_order = ?2, committed_at = ?3, graph_revision = 1 WHERE flow_id = ?1", params![flow_id, queue_order, now.to_rfc3339()])?;
-        if let Some(ScheduleSpec::Once { at }) = definition.schedule.as_ref() {
+        let columns = schedule_columns(definition.schedule.as_ref());
+        transaction.execute("UPDATE flow_definitions SET committed = 1, queue_order = ?2, committed_at = ?3, graph_revision = 1, schedule_kind = ?4, schedule_at_utc = ?5, daily_time = ?6, schedule_timezone = ?7, period_value = ?8, period_unit = ?9, period_first_at_utc = ?10 WHERE flow_id = ?1", params![flow_id, queue_order, now.to_rfc3339(), columns.kind, columns.at, columns.daily, columns.timezone, columns.period_value, columns.period_unit, columns.period_first_at])?;
+        let first_occurrence = match definition.schedule.as_ref() {
+            Some(ScheduleSpec::Once { at }) => Some(*at),
+            Some(ScheduleSpec::Periodic { first_at, .. }) => *first_at,
+            _ => None,
+        };
+        if let Some(at) = first_occurrence {
             insert_occurrence(
                 &transaction,
                 &definition,
                 None,
-                *at,
+                at,
                 OccurrenceState::Pending,
                 None,
             )?;
@@ -248,8 +256,12 @@ impl Store {
         }
         let mut draft: FlowDefinition = serde_json::from_str(&json)?;
         draft.frozen = false;
-        validate_definition(&draft).map_err(StoreError::InvalidData)?;
+        let now = Utc::now();
         let schedule_changed = current.schedule != draft.schedule;
+        if schedule_changed {
+            activate_periodic_schedule(&mut draft.schedule, now)?;
+        }
+        validate_definition(&draft).map_err(StoreError::InvalidData)?;
         let current_effective_from: Option<String> = transaction.query_row(
             "SELECT schedule_effective_from FROM flow_definitions WHERE flow_id = ?1",
             [flow_id],
@@ -264,7 +276,6 @@ impl Store {
         } else {
             current.schedule_generation
         };
-        let now = Utc::now();
         let effective_from = if schedule_changed {
             match draft.schedule.as_ref() {
                 Some(ScheduleSpec::Daily { timezone, .. }) => {
@@ -286,12 +297,14 @@ impl Store {
         } else {
             current_effective_from
         };
-        let (kind, at, daily, timezone) = schedule_columns(draft.schedule.as_ref());
-        transaction.execute("UPDATE flow_definitions SET name = ?2, schedule_kind = ?3, schedule_at_utc = ?4, daily_time = ?5, schedule_timezone = ?6, schedule_generation = ?7, schedule_effective_from = ?8, graph_revision = graph_revision + 1, draft_json = NULL, frozen = 0 WHERE flow_id = ?1", params![flow_id, draft.name, kind, at, daily, timezone, generation, effective_from])?;
-        if schedule_changed
-            && let Some(ScheduleSpec::Once { at }) = draft.schedule.as_ref()
-            && *at > Utc::now()
-        {
+        let columns = schedule_columns(draft.schedule.as_ref());
+        transaction.execute("UPDATE flow_definitions SET name = ?2, schedule_kind = ?3, schedule_at_utc = ?4, daily_time = ?5, schedule_timezone = ?6, period_value = ?7, period_unit = ?8, period_first_at_utc = ?9, schedule_generation = ?10, schedule_effective_from = ?11, graph_revision = graph_revision + 1, draft_json = NULL, frozen = 0 WHERE flow_id = ?1", params![flow_id, draft.name, columns.kind, columns.at, columns.daily, columns.timezone, columns.period_value, columns.period_unit, columns.period_first_at, generation, effective_from])?;
+        let first_occurrence = match draft.schedule.as_ref() {
+            Some(ScheduleSpec::Once { at }) => Some(*at),
+            Some(ScheduleSpec::Periodic { first_at, .. }) => *first_at,
+            _ => None,
+        };
+        if schedule_changed && let Some(at) = first_occurrence {
             insert_occurrence(
                 &transaction,
                 &FlowDefinition {
@@ -299,7 +312,7 @@ impl Store {
                     ..draft.clone()
                 },
                 None,
-                *at,
+                at,
                 OccurrenceState::Pending,
                 None,
             )?;

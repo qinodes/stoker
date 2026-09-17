@@ -57,7 +57,7 @@ impl Scheduler {
                     let scheduler = Arc::clone(&self);
                     flow_tasks.spawn(async move { scheduler.execute_flow_task(flow_task).await });
                 }
-                self.store.settle_daily_occurrences(
+                self.store.settle_recurring_occurrences(
                     chrono::Utc::now(),
                     flow_tasks.len() >= concurrency,
                 )?;

@@ -244,6 +244,11 @@ fn schedule_value(schedule: &ScheduleSpec) -> Value {
             "time": time.format("%H:%M").to_string(),
             "timezone": timezone,
         }),
+        ScheduleSpec::Periodic { every, first_at } => json!({
+            "type": "periodic",
+            "every": every.to_string(),
+            "first_at": first_at.map(|value| value.to_rfc3339()),
+        }),
     }
 }
 
@@ -378,6 +383,10 @@ pub(super) fn print_flow_list(store: &Store, owner: Option<&str>) -> Result<()> 
             Some(ScheduleSpec::Daily { time, timezone }) => {
                 format!("daily {} {timezone}", time.format("%H:%M"))
             }
+            Some(ScheduleSpec::Periodic { every, first_at }) => first_at.map_or_else(
+                || format!("every {every} after commit"),
+                |value| format!("every {every} from {}", value.to_rfc3339()),
+            ),
             None => "-".to_owned(),
         };
         rows.push([

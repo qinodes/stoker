@@ -398,8 +398,9 @@ Flow は複数の task を 1 回の実行にまとめ、上流 task の成功ま
 以下は現在ユーザー向けに提供している完全な Flow コマンドツリーです。`FLOW_ID` と `TASK_ID` は位置引数です。実行記録を選択する `RUN_ID`、task、attempt は常に option で指定します。
 
 ~~~text
-stoker flow create <FLOW_ID> --user <USER> --name <NAME> --at <RFC3339>
-stoker flow create <FLOW_ID> --user <USER> --name <NAME> --daily <HH:mm> [--schedule-timezone <ZONE>]
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --once-at <RFC3339>
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>]
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --every <Nm|Nh> [--first-at <RFC3339>]
 stoker flow commit <FLOW_ID>
 stoker flow list [--user <USER>]
 stoker flow show <FLOW_ID> [--run <RUN_ID> [--task <TASK_ID>]]
@@ -422,9 +423,11 @@ stoker flow task update <FLOW_ID> <TASK_ID>
 stoker flow task remove <FLOW_ID> <TASK_ID>
     [--scope future|current|both] [--run <RUN_ID>] [--revision <N>]
 
-stoker flow schedule set <FLOW_ID> --at <RFC3339> [--revision <N>]
-stoker flow schedule set <FLOW_ID> --daily <HH:mm> [--schedule-timezone <ZONE>] [--revision <N>]
-stoker flow schedule set <FLOW_ID> --schedule-timezone <ZONE> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --once-at <RFC3339> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--revision <N>]
+stoker flow schedule set <FLOW_ID> --every <Nm|Nh> [--first-at <RFC3339>] [--revision <N>]
+stoker flow schedule set <FLOW_ID> --first-at <RFC3339> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --schedule-timezone <IANA_ZONE> [--revision <N>]
 
 stoker flow edit begin <FLOW_ID>
 stoker flow edit apply <FLOW_ID> [--revision <N>]
@@ -432,6 +435,62 @@ stoker flow edit discard <FLOW_ID> --revision <N>
 
 stoker flow disable <FLOW_ID>
 stoker flow enable <FLOW_ID>
+~~~
+
+### 正式な standalone scheduled Job コマンドインターフェース
+
+Standalone Job では、`stoker add` が出力する UUID を使用します。`scheduled` mode で Job を
+作成するときは、次の 3 種類の schedule 形式から 1 つを指定します。残りのコマンドも同じ
+Job UUID を使って、その Job と実行記録を確認または管理します。
+
+~~~text
+stoker add --user <USER> --name <NAME> --cmd <COMMAND> [--description <TEXT>]
+    --once-at <RFC3339> [--retry <N>]
+stoker add --user <USER> --name <NAME> --cmd <COMMAND> [--description <TEXT>]
+    --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--retry <N>]
+stoker add --user <USER> --name <NAME> --cmd <COMMAND> [--description <TEXT>]
+    --every <Nm|Nh> [--first-at <RFC3339>] [--retry <N>]
+stoker commit <JOB_ID>
+stoker jobs [--user <USER>] [--state <STATE>] [--mode serial|scheduled]
+stoker show <JOB_ID> [--run <RUN_ID>]
+stoker runs <JOB_ID>
+stoker occurrences <JOB_ID>
+
+stoker run <JOB_ID> [--skip-next] [--request-id <UUID>]
+stoker logs <JOB_ID> --run <RUN_ID> [--attempt <N>] [--follow]
+stoker cancel <JOB_ID> --run <RUN_ID>
+
+stoker freeze <JOB_ID>
+stoker schedule set <JOB_ID> --once-at <RFC3339> [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --every <Nm|Nh> [--first-at <RFC3339>] [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --first-at <RFC3339> [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --schedule-timezone <IANA_ZONE> [--expected-draft-revision <N>]
+stoker draft discard <JOB_ID> --expected-draft-revision <N>
+stoker unfreeze <JOB_ID> [--expected-draft-revision <N>]
+
+stoker disable <JOB_ID>
+stoker enable <JOB_ID>
+~~~
+
+Standalone scheduled Job には、下記の Flow の説明と同じ once、daily、periodic、UTC／DST、
+実行できなかった期間、および schedule type の制約が適用されます。`stoker add` は DRAFT を
+作成し、`stoker commit JOB_ID` を実行すると有効になります。`--retry` は standalone の
+retry 回数で、Flow task では `--retries` を使用します。commit 済み schedule を変更するには、
+`freeze` を実行し、`schedule set` で変更してから `unfreeze` を実行します。古い変更を防ぐには
+expected draft revision を使用します。`draft discard` は draft だけを破棄し、Job は frozen の
+ままです。
+
+`stoker run --skip-next` は manual run を作成し、その run の開始後に具体的な次回 occurrence を
+1 つ置き換えます。同じ `--request-id` を再送すると同じ run が返ります。Job を無効にすると
+automatic trigger は停止しますが、それ以外の条件を満たす manual run は実行できます。
+トップレベルの scheduled-job コマンドは standalone Job の UUID だけを受け付けます。Flow ID
+には `stoker flow` コマンドを使用してください。
+
+~~~bash
+stoker add --user alice --name frequent --cmd "python refresh.py" --every 15m --first-at 2026-09-20T10:00:00+09:00
+stoker commit <JOB_ID>
+stoker run <JOB_ID> --skip-next --request-id <UUID>
 ~~~
 
 重要な option の規則：
@@ -469,7 +528,7 @@ stoker flow commit nightly
 |---|---|---|---|
 | mode を表示 | `stoker mode show` | 現在の workspace が `serial` または `scheduled` mode のどちらかを表示します。 | `scheduled` |
 | mode を切り替え | `stoker queue lock`<br>`stoker mode set serial` または `stoker mode set scheduled`<br>`stoker queue unlock` | 先に queue を手動で lock する必要があります。execution が開始中、実行中、キャンセル中、クリーンアップ中、または recovery 中の場合は切り替えを拒否します。`mode set` は自動的に lock／unlock しません。成功後も queue は locked のため、確認してから解除してください。 | `Mode set to scheduled; queue remains locked.` |
-| Flow を作成 | `stoker flow create nightly --user alice --name nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo` | Flow は `scheduled` mode でのみ使用できます。`--at RFC3339` または `--daily HH:mm` のどちらかを指定してください。daily timezone には IANA 名を使用します。`--schedule-timezone` を省略すると、設定ファイルの timezone、次にシステムのローカル timezone を使用します。システム timezone を判定できない場合は明示的な指定が必要です。serial ですぐに実行する場合は standalone の `stoker add` を使用してください。 | `Created flow nightly (DRAFT, draft revision 0).` |
+| Flow を作成 | `stoker flow create nightly --user alice --name nightly --once-at 2026-09-20T10:00:00+09:00`<br>`stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow create frequent --user alice --name frequent --every 15m --first-at 2026-09-20T10:00:00+09:00` | Flow は `scheduled` mode でのみ使用できます。`--once-at RFC3339`、`--daily HH:mm`、`--every Nm\|Nh` のいずれかを指定します。`--first-at` は `--every` とだけ併用できます。daily timezone には IANA 名を使用します。省略時は設定ファイルの timezone、次にシステムのローカル timezone を使用し、判定できない場合は明示的な指定が必要です。serial ですぐに実行する場合は standalone の `stoker add` を使用してください。 | `Created flow nightly (DRAFT, draft revision 0).` |
 | task を追加 | `stoker flow task add nightly prepare --name prepare --cmd "python prepare.py"` | 現在のディレクトリを作業ディレクトリとする task を追加します。`--retries N`、複数の `--after TASK_ID`／`--after-failure TASK_ID`、`--match all\|any`、`--revision N` を指定できます。 | `Added task to flow nightly (draft revision 0).` |
 | Flow を commit | `stoker flow commit nightly` | 完全な task graph を検証して draft を commit します。scheduler が実行できるのは commit 後です。 | `Committed flow nightly (2 task(s)).` |
 | Flow を一覧表示 | `stoker flow list [--user alice]` | Flow ごとに schedule、status、active run、次回の trigger 時刻を含む 1 行の整列済み概要を表示します。task は展開しません。 | `FLOW_ID  NAME  USER  SCHEDULE  STATUS  ACTIVE  NEXT` |
@@ -485,7 +544,7 @@ stoker flow commit nightly
 | 編集を開始 | `stoker flow edit begin nightly` | commit 済み Flow を freeze し、新しい run、task、retry の intake を一時停止します。future draft は最初の future-scope 変更時に作成されます。実行中のプロセスは継続します。 | `Flow 'nightly' is frozen for editing.` |
 | task を更新 | `stoker flow task update nightly train [--cmd CMD] [--cwd DIR] [--retries N] [--after TASK] [--after-failure TASK] [--match all\|any] [--clear-dependencies] [--revision N]` | future draft を更新します。少なくとも 1 つの項目が必要で、dependency option は複数回指定できます。 | `Updated task train in flow nightly (draft revision 1).` |
 | task を削除 | `stoker flow task remove nightly train [--scope future\|current\|both] [--run RUN_UUID] [--revision N]` | 既定の scope は `future` です。`current`／`both` は指定した active run に適用され、`--run` が必要です。Flow は frozen でなければなりません。 | `Draft revision 2 for flow nightly.` |
-| schedule を変更 | `stoker flow schedule set nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow schedule set nightly --schedule-timezone UTC` | frozen Flow の future schedule を変更し、`--revision N` を指定できます。既存の once Flow は別の future once 時刻にのみ変更でき、daily Flow は daily 時刻または timezone のみ変更できます。once と daily は相互に変更できません。timezone だけの変更は daily Flow にのみ使用できます。non-pending occurrence がある terminal once Flow は再度 schedule できないため、新しい Flow を作成してください。 | `Updated flow nightly draft revision 2.` |
+| schedule を変更 | `stoker flow schedule set nightly --once-at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow schedule set nightly --schedule-timezone UTC`<br>`stoker flow schedule set frequent --every 2h --first-at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set frequent --first-at 2026-09-21T10:00:00+09:00` | frozen Flow の future schedule を変更し、`--revision N` を指定できます。once、daily、every の schedule type は相互に変更できず、同じ type のみ変更できます。daily は時刻または timezone、every は周期と初回時刻を変更できます。`--first-at` だけを指定すると周期を維持します。timezone だけの変更は daily Flow にのみ使用できます。non-pending occurrence がある terminal once Flow は再度 schedule できないため、新しい Flow を作成してください。 | `Updated flow nightly draft revision 2.` |
 | draft を破棄 | `stoker flow edit discard nightly --revision N` | 未適用の future 変更を破棄します。Flow は frozen のままです。 | `Discarded draft for nightly (still frozen=true).` |
 | 編集を適用 | `stoker flow edit apply nightly [--revision N]` | future draft がある場合は、検証して適用し、graph revision を増やして Flow の freeze を解除します。current-scope の操作だけを行い future draft がない場合は、`--revision` を省略して直接 freeze を解除します。このコマンドはグローバル queue lock を解除しません。 | `Applied edits to nightly (graph revision 2).` |
 | 自動 trigger を無効化 | `stoker flow disable nightly` | 今後の automatic trigger を停止します。有効な manual run は引き続き実行できます。 | `Disabled nightly.` |
@@ -515,6 +574,13 @@ One-time schedule は秒と明示的な UTC offset を含む RFC 3339 を使用�
 `2026-09-15T23:30:00+09:00`。Daily schedule は `HH:mm` と IANA timezone を使用します。
 実行時刻を過ぎた daily occurrence は再実行しません。DST に存在しない時刻はスキップし、
 重複する時刻では早い方の instant を使用します。
+
+周期 schedule の `--every` は、小文字の整数による分または時間だけを受け付けます。
+例は `1m`、`15m`、`1h`、`2h` で、最小値はそれぞれ 1 分と 1 時間です。
+`--first-at` を省略すると、最初の実行は commit または schedule の適用から 1 周期後となり、
+commit 直後には実行されません。指定する場合は未来の RFC 3339 時刻でなければなりません。
+以後の occurrence はその時刻を基準に UTC の経過時間で進み、DST ではずれません。
+停止中に逃した周期は再実行せず、元の時刻基準を維持します。
 
 commit 済み Flow を変更するには、編集を開始して future draft を変更し、最後に適用します。
 draft revision を compare-and-swap に使用できます。

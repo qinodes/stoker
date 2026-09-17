@@ -31,14 +31,18 @@ impl Store {
                 "only scheduled flows have a schedule".into(),
             ));
         }
-        if current
-            .schedule
-            .as_ref()
-            .is_some_and(|current_schedule| matches!(current_schedule, ScheduleSpec::Once { .. }))
-            != matches!(schedule, ScheduleSpec::Once { .. })
-        {
+        let same_family = matches!(
+            (current.schedule.as_ref(), &schedule),
+            (Some(ScheduleSpec::Once { .. }), ScheduleSpec::Once { .. })
+                | (Some(ScheduleSpec::Daily { .. }), ScheduleSpec::Daily { .. })
+                | (
+                    Some(ScheduleSpec::Periodic { .. }),
+                    ScheduleSpec::Periodic { .. }
+                )
+        );
+        if !same_family {
             return Err(StoreError::InvalidData(
-                "switching between once and daily schedules is not supported".into(),
+                "switching between once, daily, and every schedules is not supported".into(),
             ));
         }
         if matches!(current.schedule, Some(ScheduleSpec::Once { .. }))
@@ -77,12 +81,21 @@ impl Store {
         if draft.schedule == Some(schedule.clone()) {
             return Ok(draft);
         }
-        if let ScheduleSpec::Once { at } = schedule
-            && at <= Utc::now()
-        {
-            return Err(StoreError::InvalidData(
-                "new one-time schedule must be in the future".into(),
-            ));
+        match &schedule {
+            ScheduleSpec::Once { at } if *at <= Utc::now() => {
+                return Err(StoreError::InvalidData(
+                    "new one-time schedule must be in the future".into(),
+                ));
+            }
+            ScheduleSpec::Periodic {
+                first_at: Some(first_at),
+                ..
+            } if *first_at <= Utc::now() => {
+                return Err(StoreError::InvalidData(
+                    "--first-at must be in the future".into(),
+                ));
+            }
+            _ => {}
         }
         draft.schedule = Some(schedule);
         save_draft(&transaction, &draft, current.draft_revision + 1)?;

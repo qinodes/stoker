@@ -5,16 +5,17 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use uuid::Uuid;
 
 use crate::domain::flow::{
-    DependencyMode, ExecutionMode, FlowTask, OccurrenceState, ScheduleSpec, validate_definition,
+    DependencyMode, ExecutionMode, FlowTask, OccurrenceState, SchedulePeriod, SchedulePeriodUnit,
+    ScheduleSpec, validate_definition,
 };
 
 use super::connection::Store;
 use super::error::StoreError;
-use super::flow_mapping::{
-    insert_task, load_flow_base, parse_datetime, parse_mode, parse_uuid, schedule_columns,
-    validate_schedule,
-};
+use super::flow_mapping::{insert_task, load_flow_base, parse_datetime, parse_mode, parse_uuid};
 use super::flow_runtime_mapping::{insert_occurrence, schedule_from_row};
+use super::flow_schedule_mapping::{
+    activate_periodic_schedule, schedule_columns, validate_schedule,
+};
 use super::flows::StandaloneDefinition;
 use super::mapping::get_job_with;
 
@@ -26,7 +27,7 @@ fn standalone_definition_from(
     connection: &Connection,
     job_id: Uuid,
 ) -> Result<StandaloneDefinition, StoreError> {
-    connection.query_row("SELECT mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, retry, enabled, schedule_generation FROM jobs WHERE id = ?1", [job_id.to_string()], |row| Ok(StandaloneDefinition { job_id, mode: parse_mode(&row.get::<_, String>(0)?).map_err(|error| super::flow_mapping::to_sql_error(error.to_string()))?, schedule: schedule_from_row(row, 1).map_err(super::flow_mapping::to_sql_error)?, retry: u32::try_from(row.get::<_, i64>(5)?).map_err(|_| rusqlite::Error::InvalidQuery)?, enabled: row.get::<_, i64>(6)? != 0, generation: row.get(7)? })).optional()?.ok_or(StoreError::NotFound { id: job_id })
+    connection.query_row("SELECT mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, period_value, period_unit, period_first_at_utc, retry, enabled, schedule_generation FROM jobs WHERE id = ?1", [job_id.to_string()], |row| Ok(StandaloneDefinition { job_id, mode: parse_mode(&row.get::<_, String>(0)?).map_err(|error| super::flow_mapping::to_sql_error(error.to_string()))?, schedule: schedule_from_row(row, 1).map_err(super::flow_mapping::to_sql_error)?, retry: u32::try_from(row.get::<_, i64>(8)?).map_err(|_| rusqlite::Error::InvalidQuery)?, enabled: row.get::<_, i64>(9)? != 0, generation: row.get(10)? })).optional()?.ok_or(StoreError::NotFound { id: job_id })
 }
 
 impl Store {
@@ -55,8 +56,8 @@ impl Store {
                 "schedule options can only be set on a DRAFT job".into(),
             ));
         }
-        let (kind, at, daily, timezone) = schedule_columns(schedule.as_ref());
-        transaction.execute("UPDATE jobs SET mode = ?2, schedule_kind = ?3, schedule_at_utc = ?4, daily_time = ?5, schedule_timezone = ?6, retry = ?7 WHERE id = ?1", params![job_id.to_string(), mode.to_string(), kind, at, daily, timezone, i64::from(retry)])?;
+        let columns = schedule_columns(schedule.as_ref());
+        transaction.execute("UPDATE jobs SET mode = ?2, schedule_kind = ?3, schedule_at_utc = ?4, daily_time = ?5, schedule_timezone = ?6, period_value = ?7, period_unit = ?8, period_first_at_utc = ?9, retry = ?10 WHERE id = ?1", params![job_id.to_string(), mode.to_string(), columns.kind, columns.at, columns.daily, columns.timezone, columns.period_value, columns.period_unit, columns.period_first_at, i64::from(retry)])?;
         sync_standalone_flow(&transaction, job_id)?;
         let definition = standalone_definition_from(&transaction, job_id)?;
         transaction.commit()?;
@@ -85,7 +86,7 @@ impl Store {
 /// user-created flows.
 #[allow(clippy::type_complexity)]
 fn sync_standalone_flow(transaction: &Transaction<'_>, job_id: Uuid) -> Result<(), StoreError> {
-    let (name, owner, cwd, command_line, command_json, retry, mode, kind, at, daily, timezone, generation): (
+    let (name, owner, cwd, command_line, command_json, retry, mode, kind, at, daily, timezone, period_value, period_unit, period_first_at, generation): (
         String,
         String,
         String,
@@ -95,15 +96,19 @@ fn sync_standalone_flow(transaction: &Transaction<'_>, job_id: Uuid) -> Result<(
         String,
         Option<String>,
         Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
         Option<String>,
         Option<String>,
         i64,
     ) = transaction.query_row(
-        "SELECT name, user, cwd, command_line, command, retry, mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, schedule_generation FROM jobs WHERE id = ?1",
+        "SELECT name, user, cwd, command_line, command, retry, mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, period_value, period_unit, period_first_at_utc, schedule_generation FROM jobs WHERE id = ?1",
         [job_id.to_string()],
         |row| Ok((
             row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?,
             row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?,
+            row.get(12)?, row.get(13)?, row.get(14)?,
         )),
     )?;
     let mode = parse_mode(&mode)?;
@@ -123,6 +128,24 @@ fn sync_standalone_flow(transaction: &Transaction<'_>, job_id: Uuid) -> Result<(
             .map_err(|error| StoreError::InvalidData(error.to_string()))?,
             timezone: timezone
                 .ok_or_else(|| StoreError::InvalidData("daily schedule has no timezone".into()))?,
+        }),
+        Some("periodic") => Some(ScheduleSpec::Periodic {
+            every: SchedulePeriod {
+                value: u32::try_from(period_value.ok_or_else(|| {
+                    StoreError::InvalidData("periodic schedule has no value".into())
+                })?)
+                .map_err(|_| StoreError::InvalidData("invalid periodic schedule value".into()))?,
+                unit: match period_unit.as_deref() {
+                    Some("minutes") => SchedulePeriodUnit::Minutes,
+                    Some("hours") => SchedulePeriodUnit::Hours,
+                    _ => {
+                        return Err(StoreError::InvalidData(
+                            "periodic schedule has an invalid unit".into(),
+                        ));
+                    }
+                },
+            },
+            first_at: period_first_at.as_deref().map(parse_datetime).transpose()?,
         }),
         Some(other) => {
             return Err(StoreError::InvalidData(format!(
@@ -153,19 +176,18 @@ fn sync_standalone_flow(transaction: &Transaction<'_>, job_id: Uuid) -> Result<(
         |row| row.get(0),
     )?;
     let now = Utc::now().to_rfc3339();
-    let (schedule_kind, schedule_at, daily_time, schedule_timezone) =
-        schedule_columns(schedule.as_ref());
+    let columns = schedule_columns(schedule.as_ref());
     if exists {
         transaction.execute(
-            "UPDATE flow_definitions SET name = ?2, owner = ?3, mode = ?4, schedule_kind = ?5, schedule_at_utc = ?6, daily_time = ?7, schedule_timezone = ?8, schedule_generation = ?9, committed = 0, frozen = 0, enabled = 1, graph_revision = 0, draft_revision = 0, draft_json = NULL, queue_order = NULL, committed_at = NULL WHERE flow_id = ?1",
-            params![flow_id, name, owner, mode.to_string(), schedule_kind, schedule_at, daily_time, schedule_timezone, generation],
+            "UPDATE flow_definitions SET name = ?2, owner = ?3, mode = ?4, schedule_kind = ?5, schedule_at_utc = ?6, daily_time = ?7, schedule_timezone = ?8, period_value = ?9, period_unit = ?10, period_first_at_utc = ?11, schedule_generation = ?12, committed = 0, frozen = 0, enabled = 1, graph_revision = 0, draft_revision = 0, draft_json = NULL, queue_order = NULL, committed_at = NULL WHERE flow_id = ?1",
+            params![flow_id, name, owner, mode.to_string(), columns.kind, columns.at, columns.daily, columns.timezone, columns.period_value, columns.period_unit, columns.period_first_at, generation],
         )?;
         transaction.execute("DELETE FROM occurrences WHERE flow_id = ?1", [&flow_id])?;
         transaction.execute("DELETE FROM flow_tasks WHERE flow_id = ?1", [&flow_id])?;
     } else {
         transaction.execute(
-            "INSERT INTO flow_definitions (flow_id, internal_definition_id, name, owner, mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, schedule_generation, committed, frozen, enabled, graph_revision, draft_revision, created_at, last_dispatch_sequence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, 0, 1, 0, 0, ?11, 0)",
-            params![flow_id, job_id.to_string(), name, owner, mode.to_string(), schedule_kind, schedule_at, daily_time, schedule_timezone, generation, now],
+            "INSERT INTO flow_definitions (flow_id, internal_definition_id, name, owner, mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, period_value, period_unit, period_first_at_utc, schedule_generation, committed, frozen, enabled, graph_revision, draft_revision, created_at, last_dispatch_sequence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, 0, 1, 0, 0, ?14, 0)",
+            params![flow_id, job_id.to_string(), name, owner, mode.to_string(), columns.kind, columns.at, columns.daily, columns.timezone, columns.period_value, columns.period_unit, columns.period_first_at, generation, now],
         )?;
     }
     insert_task(transaction, &flow_id, &task)?;
@@ -189,13 +211,25 @@ pub(super) fn commit_standalone_definition(
     if !exists {
         return Ok(());
     }
-    let definition = load_flow_base(connection, &flow_id)?;
+    let mut definition = load_flow_base(connection, &flow_id)?;
+    let commit_instant = parse_datetime(committed_at)?;
+    activate_periodic_schedule(&mut definition.schedule, commit_instant)?;
     validate_definition(&definition).map_err(StoreError::InvalidData)?;
+    let columns = schedule_columns(definition.schedule.as_ref());
     connection.execute(
-        "UPDATE flow_definitions SET committed = 1, queue_order = ?2, committed_at = ?3, graph_revision = 1, frozen = 0 WHERE flow_id = ?1",
-        params![flow_id, queue_order, committed_at],
+        "UPDATE flow_definitions SET committed = 1, queue_order = ?2, committed_at = ?3, graph_revision = 1, frozen = 0, schedule_kind = ?4, schedule_at_utc = ?5, daily_time = ?6, schedule_timezone = ?7, period_value = ?8, period_unit = ?9, period_first_at_utc = ?10 WHERE flow_id = ?1",
+        params![flow_id, queue_order, committed_at, columns.kind, columns.at, columns.daily, columns.timezone, columns.period_value, columns.period_unit, columns.period_first_at],
     )?;
-    if let Some(ScheduleSpec::Once { at }) = definition.schedule {
+    connection.execute(
+        "UPDATE jobs SET schedule_kind = ?2, schedule_at_utc = ?3, daily_time = ?4, schedule_timezone = ?5, period_value = ?6, period_unit = ?7, period_first_at_utc = ?8 WHERE id = ?1",
+        params![job_id.to_string(), columns.kind, columns.at, columns.daily, columns.timezone, columns.period_value, columns.period_unit, columns.period_first_at],
+    )?;
+    let first_occurrence = match definition.schedule.as_ref() {
+        Some(ScheduleSpec::Once { at }) => Some(*at),
+        Some(ScheduleSpec::Periodic { first_at, .. }) => *first_at,
+        _ => None,
+    };
+    if let Some(at) = first_occurrence {
         insert_occurrence(
             connection,
             &definition,
@@ -223,21 +257,24 @@ pub(super) fn sync_standalone_job_from_flow(
     let Some(task) = definition.tasks.first() else {
         return Ok(());
     };
-    let (kind, at, daily, timezone) = schedule_columns(definition.schedule.as_ref());
+    let columns = schedule_columns(definition.schedule.as_ref());
     let next_order: i64 = connection.query_row(
         "SELECT COALESCE(MAX(queue_order), 0) + 1 FROM jobs WHERE state = 'QUEUED'",
         [],
         |row| row.get(0),
     )?;
     connection.execute(
-        "UPDATE jobs SET mode = ?2, schedule_kind = ?3, schedule_at_utc = ?4, daily_time = ?5, schedule_timezone = ?6, schedule_generation = ?7, retry = ?8, enabled = ?9, queue_order = CASE WHEN ?10 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?9 = 1 THEN ?11 ELSE queue_order END, state = CASE WHEN ?10 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?9 = 1 THEN 'QUEUED' ELSE state END, started_at = CASE WHEN ?10 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?9 = 1 THEN NULL ELSE started_at END, finished_at = CASE WHEN ?10 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?9 = 1 THEN NULL ELSE finished_at END, exit_code = CASE WHEN ?10 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?9 = 1 THEN NULL ELSE exit_code END WHERE id = ?1",
+        "UPDATE jobs SET mode = ?2, schedule_kind = ?3, schedule_at_utc = ?4, daily_time = ?5, schedule_timezone = ?6, period_value = ?7, period_unit = ?8, period_first_at_utc = ?9, schedule_generation = ?10, retry = ?11, enabled = ?12, queue_order = CASE WHEN ?13 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?12 = 1 THEN ?14 ELSE queue_order END, state = CASE WHEN ?13 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?12 = 1 THEN 'QUEUED' ELSE state END, started_at = CASE WHEN ?13 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?12 = 1 THEN NULL ELSE started_at END, finished_at = CASE WHEN ?13 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?12 = 1 THEN NULL ELSE finished_at END, exit_code = CASE WHEN ?13 = 1 AND state NOT IN ('STARTING','RUNNING','CANCELLING') AND ?12 = 1 THEN NULL ELSE exit_code END WHERE id = ?1",
         params![
             job_id.to_string(),
             definition.mode.to_string(),
-            kind,
-            at,
-            daily,
-            timezone,
+            columns.kind,
+            columns.at,
+            columns.daily,
+            columns.timezone,
+            columns.period_value,
+            columns.period_unit,
+            columns.period_first_at,
             definition.schedule_generation,
             i64::from(task.retry),
             i64::from(definition.enabled),

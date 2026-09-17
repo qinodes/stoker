@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use crate::domain::flow::{
     AttemptState, Dependency, DependencyEvaluation, DependencyStatus, ExecutionMode,
-    FlowDefinition, FlowRun, FlowRunState, FlowTask, Occurrence, OccurrenceState, ScheduleSpec,
-    TaskOutcome, TaskRun, TaskRunState, evaluate_dependencies,
+    FlowDefinition, FlowRun, FlowRunState, FlowTask, Occurrence, OccurrenceState, SchedulePeriod,
+    SchedulePeriodUnit, ScheduleSpec, TaskOutcome, TaskRun, TaskRunState, evaluate_dependencies,
 };
 
 use super::error::StoreError;
@@ -61,47 +61,6 @@ pub(super) fn has_active_work(connection: &Connection) -> Result<bool, StoreErro
     )?;
     let runs: i64 = connection.query_row("SELECT COUNT(*) FROM flow_runs WHERE state IN ('STARTING','RUNNING','CANCELLING','RECOVERING')", [], |row| row.get(0))?;
     Ok(jobs != 0 || runs != 0 || fence_with(connection)?)
-}
-
-pub(super) fn validate_schedule(
-    mode: ExecutionMode,
-    schedule: Option<&ScheduleSpec>,
-) -> Result<(), StoreError> {
-    match (mode, schedule) {
-        (ExecutionMode::Serial, Some(_)) => Err(StoreError::InvalidData(
-            "serial definitions cannot have --at, --daily, or --schedule-timezone".into(),
-        )),
-        (ExecutionMode::Scheduled, None) => Err(StoreError::InvalidData(
-            "scheduled definitions require --at or --daily".into(),
-        )),
-        (ExecutionMode::Scheduled, Some(ScheduleSpec::Daily { timezone, .. })) => {
-            timezone
-                .parse::<chrono_tz::Tz>()
-                .map_err(|_| StoreError::InvalidData(format!("unknown timezone {timezone:?}")))?;
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
-pub(super) fn schedule_columns(
-    schedule: Option<&ScheduleSpec>,
-) -> (
-    Option<&'static str>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
-    match schedule {
-        None => (None, None, None, None),
-        Some(ScheduleSpec::Once { at }) => (Some("once"), Some(at.to_rfc3339()), None, None),
-        Some(ScheduleSpec::Daily { time, timezone }) => (
-            Some("daily"),
-            None,
-            Some(time.format("%H:%M").to_string()),
-            Some(timezone.clone()),
-        ),
-    }
 }
 
 pub(super) fn parse_uuid(value: &str) -> Result<Uuid, StoreError> {
@@ -218,7 +177,7 @@ pub(super) fn load_flow_base(
     connection: &Connection,
     flow_id: &str,
 ) -> Result<FlowDefinition, StoreError> {
-    let row: Option<(String,String,String,String,String,Option<String>,Option<String>,Option<String>,Option<String>,i64,i64,i64,i64,i64,i64,Option<i64>)> = connection.query_row("SELECT flow_id, internal_definition_id, name, owner, mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, schedule_generation, committed, frozen, enabled, graph_revision, draft_revision, queue_order FROM flow_definitions WHERE flow_id = ?1", [flow_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?,row.get(12)?,row.get(13)?,row.get(14)?,row.get(15)?))).optional()?;
+    let row: Option<(String,String,String,String,String,Option<String>,Option<String>,Option<String>,Option<String>,Option<i64>,Option<String>,Option<String>,i64,i64,i64,i64,i64,i64,Option<i64>)> = connection.query_row("SELECT flow_id, internal_definition_id, name, owner, mode, schedule_kind, schedule_at_utc, daily_time, schedule_timezone, period_value, period_unit, period_first_at_utc, schedule_generation, committed, frozen, enabled, graph_revision, draft_revision, queue_order FROM flow_definitions WHERE flow_id = ?1", [flow_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?,row.get(9)?,row.get(10)?,row.get(11)?,row.get(12)?,row.get(13)?,row.get(14)?,row.get(15)?,row.get(16)?,row.get(17)?,row.get(18)?))).optional()?;
     let Some((
         flow_id,
         internal,
@@ -229,6 +188,9 @@ pub(super) fn load_flow_base(
         at,
         daily,
         timezone,
+        period_value,
+        period_unit,
+        period_first_at,
         generation,
         committed,
         frozen,
@@ -258,6 +220,24 @@ pub(super) fn load_flow_base(
             .map_err(|error| StoreError::InvalidData(error.to_string()))?,
             timezone: timezone
                 .ok_or_else(|| StoreError::InvalidData("daily schedule has no timezone".into()))?,
+        }),
+        Some("periodic") => Some(ScheduleSpec::Periodic {
+            every: SchedulePeriod {
+                value: u32::try_from(period_value.ok_or_else(|| {
+                    StoreError::InvalidData("periodic schedule has no value".into())
+                })?)
+                .map_err(|_| StoreError::InvalidData("invalid periodic schedule value".into()))?,
+                unit: match period_unit.as_deref() {
+                    Some("minutes") => SchedulePeriodUnit::Minutes,
+                    Some("hours") => SchedulePeriodUnit::Hours,
+                    _ => {
+                        return Err(StoreError::InvalidData(
+                            "periodic schedule has an invalid unit".into(),
+                        ));
+                    }
+                },
+            },
+            first_at: period_first_at.as_deref().map(parse_datetime).transpose()?,
         }),
         Some(other) => {
             return Err(StoreError::InvalidData(format!(

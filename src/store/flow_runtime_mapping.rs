@@ -5,165 +5,11 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
 use uuid::Uuid;
 
 use crate::domain::flow::{
-    ExecutionMode, FlowDefinition, OccurrenceState, ScheduleSpec, TaskRunState,
+    FlowDefinition, OccurrenceState, SchedulePeriod, SchedulePeriodUnit, ScheduleSpec,
 };
 
 use super::error::StoreError;
 use super::flow_mapping::*;
-
-pub(super) fn has_active_run(transaction: &Connection, flow_id: &str) -> Result<bool, StoreError> {
-    Ok(transaction.query_row("SELECT EXISTS(SELECT 1 FROM flow_runs WHERE flow_id = ?1 AND state IN ('STARTING','RUNNING','CANCELLING','RECOVERING'))", [flow_id], |row| row.get(0))?)
-}
-
-pub(super) fn settle_daily_occurrences(
-    transaction: &Connection,
-    now: DateTime<Utc>,
-    capacity_full: bool,
-    gate_reason: Option<&str>,
-) -> Result<(), StoreError> {
-    let workspace_mode = parse_mode(&transaction.query_row(
-        "SELECT mode FROM settings WHERE id = 1",
-        [],
-        |row| row.get::<_, String>(0),
-    )?)?;
-    let rows = transaction
-        .prepare("SELECT occurrence_id, flow_id FROM occurrences WHERE kind = 'daily' AND state = 'PENDING' AND due_at <= ?1 AND due_at >= ?2 ORDER BY due_at, occurrence_id")?
-        .query_map(
-            params![
-                now.to_rfc3339(),
-                (now - chrono::Duration::seconds(5)).to_rfc3339()
-            ],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        )?
-        .collect::<Result<Vec<_>, _>>()?;
-    for (occurrence_id, flow_id) in rows {
-        if let Some(reason) = gate_reason {
-            transaction.execute(
-                "UPDATE occurrences SET state = 'SKIPPED', reason = ?2 WHERE occurrence_id = ?1 AND state = 'PENDING'",
-                params![occurrence_id, reason],
-            )?;
-            continue;
-        }
-        let definition = load_flow_base(transaction, &flow_id)?;
-        let reason = if !definition.enabled {
-            Some("SKIPPED_DISABLED")
-        } else if workspace_mode != ExecutionMode::Scheduled
-            || definition.mode != ExecutionMode::Scheduled
-        {
-            Some("SKIPPED_MODE")
-        } else if definition.frozen {
-            Some("SKIPPED_FROZEN")
-        } else if has_active_run(transaction, &flow_id)? {
-            Some("SKIPPED_OVERLAP")
-        } else if capacity_full {
-            Some("SKIPPED_CAPACITY")
-        } else {
-            None
-        };
-        if let Some(reason) = reason {
-            transaction.execute(
-                "UPDATE occurrences SET state = 'SKIPPED', reason = ?2 WHERE occurrence_id = ?1 AND state = 'PENDING'",
-                params![occurrence_id, reason],
-            )?;
-        }
-    }
-    Ok(())
-}
-
-/// Claim one due scheduled occurrence as a new run while holding the queue
-/// transaction.  This is the single-writer fence that prevents duplicate
-/// automatic runs when several scheduler ticks race on the same database.
-pub(super) fn start_due_flow_run(
-    transaction: &Transaction<'_>,
-    now: DateTime<Utc>,
-    mode: ExecutionMode,
-) -> Result<(), StoreError> {
-    let candidates = transaction.prepare("SELECT o.occurrence_id, o.flow_id FROM occurrences o JOIN flow_definitions f ON f.flow_id = o.flow_id WHERE o.state = 'PENDING' AND o.due_at <= ?1 AND o.due_at >= ?2 ORDER BY o.due_at, f.last_dispatch_sequence, f.committed_at, f.internal_definition_id")?.query_map(params![now.to_rfc3339(), (now - chrono::Duration::hours(24)).to_rfc3339()], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
-    for (occurrence_id, flow_id) in candidates {
-        let definition = load_flow_base(transaction, &flow_id)?;
-        if definition.mode != mode
-            || definition.mode != ExecutionMode::Scheduled
-            || !definition.committed
-            || definition.frozen
-            || !definition.enabled
-            || has_active_run(transaction, &flow_id)?
-        {
-            continue;
-        }
-        let run_id = Uuid::new_v4();
-        transaction.execute("INSERT INTO flow_runs (run_id, flow_id, internal_definition_id, schedule_generation, source, state, occurrence_id, definition_snapshot, created_at) VALUES (?1, ?2, ?3, ?4, 'AUTOMATIC', 'STARTING', ?5, ?6, ?7)", params![run_id.to_string(), flow_id, definition.internal_id.to_string(), definition.schedule_generation, occurrence_id, serde_json::to_string(&definition)?, now.to_rfc3339()])?;
-        for task in &definition.tasks {
-            let state = if task.dependencies.is_empty() {
-                TaskRunState::Ready
-            } else {
-                TaskRunState::Waiting
-            };
-            transaction.execute(
-                "INSERT INTO task_runs (run_id, task_id, state) VALUES (?1, ?2, ?3)",
-                params![run_id.to_string(), task.task_id, task_state_string(state)],
-            )?;
-        }
-        transaction.execute("UPDATE occurrences SET state = 'RESERVED' WHERE occurrence_id = ?1 AND state = 'PENDING'", [&occurrence_id])?;
-        let sequence: i64 = transaction.query_row(
-            "SELECT dispatch_sequence + 1 FROM settings WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )?;
-        transaction.execute(
-            "UPDATE settings SET dispatch_sequence = ?1 WHERE id = 1",
-            [sequence],
-        )?;
-        transaction.execute(
-            "UPDATE flow_definitions SET last_dispatch_sequence = ?2 WHERE flow_id = ?1",
-            params![flow_id, sequence],
-        )?;
-        sync_standalone_job_start(transaction, &flow_id)?;
-        break;
-    }
-    Ok(())
-}
-
-pub(super) fn start_serial_standalone_run(transaction: &Transaction<'_>) -> Result<(), StoreError> {
-    let candidate: Option<(String, String)> = transaction
-        .query_row(
-            "SELECT j.id, f.flow_id FROM jobs j JOIN flow_definitions f ON f.flow_id = 'standalone/' || j.id WHERE j.state = 'QUEUED' AND j.mode = 'serial' AND j.retry > 0 AND f.committed = 1 AND f.enabled = 1 ORDER BY j.queue_order, j.id LIMIT 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    let Some((job_id, flow_id)) = candidate else {
-        return Ok(());
-    };
-    if has_active_run(transaction, &flow_id)? {
-        return Ok(());
-    }
-    let definition = load_flow_base(transaction, &flow_id)?;
-    let run_id = Uuid::new_v4();
-    let now = Utc::now();
-    transaction.execute(
-        "INSERT INTO flow_runs (run_id, flow_id, internal_definition_id, schedule_generation, source, state, definition_snapshot, created_at) VALUES (?1, ?2, ?3, ?4, 'AUTOMATIC', 'STARTING', ?5, ?6)",
-        params![
-            run_id.to_string(),
-            flow_id,
-            definition.internal_id.to_string(),
-            definition.schedule_generation,
-            serde_json::to_string(&definition)?,
-            now.to_rfc3339(),
-        ],
-    )?;
-    for task in &definition.tasks {
-        transaction.execute(
-            "INSERT INTO task_runs (run_id, task_id, state) VALUES (?1, ?2, ?3)",
-            params![
-                run_id.to_string(),
-                task.task_id,
-                task_state_string(TaskRunState::Ready)
-            ],
-        )?;
-    }
-    sync_standalone_job_start(transaction, &format!("standalone/{job_id}"))?;
-    Ok(())
-}
 
 fn standalone_job_id(flow_id: &str) -> Option<Uuid> {
     let value = flow_id.strip_prefix("standalone/")?;
@@ -261,7 +107,7 @@ pub(super) fn reserve_next_occurrence(
     definition: &FlowDefinition,
 ) -> Result<Uuid, StoreError> {
     let now = Utc::now();
-    let row: Option<String> = transaction.query_row("SELECT occurrence_id FROM occurrences WHERE flow_id = ?1 AND schedule_generation = ?2 AND state = 'PENDING' AND ((kind = 'daily' AND due_at > ?3) OR (kind = 'once' AND due_at > ?4)) ORDER BY due_at LIMIT 1", params![definition.flow_id, definition.schedule_generation, now.to_rfc3339(), (now - chrono::Duration::hours(24)).to_rfc3339()], |row| row.get(0)).optional()?;
+    let row: Option<String> = transaction.query_row("SELECT occurrence_id FROM occurrences WHERE flow_id = ?1 AND schedule_generation = ?2 AND state = 'PENDING' AND ((kind IN ('daily','periodic') AND due_at > ?3) OR (kind = 'once' AND due_at > ?4)) ORDER BY due_at LIMIT 1", params![definition.flow_id, definition.schedule_generation, now.to_rfc3339(), (now - chrono::Duration::hours(24)).to_rfc3339()], |row| row.get(0)).optional()?;
     let Some(value) = row else {
         return Err(StoreError::InvalidData(
             "no future occurrence is available to replace".into(),
@@ -289,6 +135,7 @@ pub(super) fn ensure_next_daily_occurrence(
         transaction,
         &definition.internal_id.to_string(),
         definition.schedule_generation,
+        "daily",
         &next.local_date.to_string(),
     )? {
         insert_occurrence(
@@ -300,6 +147,27 @@ pub(super) fn ensure_next_daily_occurrence(
             None,
         )?;
     }
+    Ok(())
+}
+
+pub(super) fn ensure_next_periodic_occurrence(
+    transaction: &Transaction<'_>,
+    definition: &FlowDefinition,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    let Some(schedule @ ScheduleSpec::Periodic { .. }) = definition.schedule.as_ref() else {
+        return Ok(());
+    };
+    let (_, next) = schedule
+        .periodic_window(now)
+        .map_err(StoreError::InvalidData)?;
+    insert_periodic_occurrence_if_missing(
+        transaction,
+        definition,
+        next,
+        OccurrenceState::Pending,
+        None,
+    )?;
     Ok(())
 }
 
@@ -316,10 +184,22 @@ pub(super) fn insert_occurrence(
     reason: Option<&str>,
 ) -> Result<(), StoreError> {
     let occurrence_id = Uuid::new_v4();
-    let key = local_date
-        .map(|date| date.to_string())
-        .unwrap_or_else(|| "once".into());
-    transaction.execute("INSERT OR IGNORE INTO occurrences (occurrence_id, internal_definition_id, flow_id, schedule_generation, kind, occurrence_key, local_date, due_at, state, reason, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", params![occurrence_id.to_string(), definition.internal_id.to_string(), definition.flow_id, definition.schedule_generation, if local_date.is_some() { "daily" } else { "once" }, key, local_date.map(|date| date.to_string()), due_at.to_rfc3339(), occurrence_state_string(state), reason, Utc::now().to_rfc3339()])?;
+    let (kind, key, local_date) = match definition.schedule.as_ref() {
+        Some(ScheduleSpec::Once { .. }) => ("once", "once".to_owned(), None),
+        Some(ScheduleSpec::Daily { .. }) => {
+            let date = local_date.ok_or_else(|| {
+                StoreError::InvalidData("daily occurrence requires a local date".into())
+            })?;
+            ("daily", date.to_string(), Some(date.to_string()))
+        }
+        Some(ScheduleSpec::Periodic { .. }) => ("periodic", due_at.to_rfc3339(), None),
+        None => {
+            return Err(StoreError::InvalidData(
+                "cannot create an occurrence without a schedule".into(),
+            ));
+        }
+    };
+    transaction.execute("INSERT OR IGNORE INTO occurrences (occurrence_id, internal_definition_id, flow_id, schedule_generation, kind, occurrence_key, local_date, due_at, state, reason, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)", params![occurrence_id.to_string(), definition.internal_id.to_string(), definition.flow_id, definition.schedule_generation, kind, key, local_date, due_at.to_rfc3339(), occurrence_state_string(state), reason, Utc::now().to_rfc3339()])?;
     Ok(())
 }
 
@@ -387,7 +267,13 @@ pub(super) fn materialize_daily_occurrences(
                     processed_through = Some(date);
                 } else if due > now {
                     break;
-                } else if !occurrence_exists(transaction, &internal_id, generation, &date_key)? {
+                } else if !occurrence_exists(
+                    transaction,
+                    &internal_id,
+                    generation,
+                    "daily",
+                    &date_key,
+                )? {
                     let (state, reason) = if due + chrono::Duration::seconds(5) < now {
                         (OccurrenceState::Skipped, Some("SKIPPED_MISSED"))
                     } else {
@@ -415,7 +301,8 @@ pub(super) fn materialize_daily_occurrences(
                 } else {
                     processed_through = Some(date);
                 }
-            } else if !occurrence_exists(transaction, &internal_id, generation, &date_key)? {
+            } else if !occurrence_exists(transaction, &internal_id, generation, "daily", &date_key)?
+            {
                 let definition = load_flow_base(transaction, &flow_id)?;
                 insert_occurrence(
                     transaction,
@@ -452,13 +339,85 @@ pub(super) fn materialize_daily_occurrences(
     Ok(())
 }
 
+pub(super) fn materialize_periodic_occurrences(
+    transaction: &Transaction<'_>,
+    now: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    let flow_ids = transaction
+        .prepare("SELECT flow_id FROM flow_definitions WHERE committed = 1 AND mode = 'scheduled' AND schedule_kind = 'periodic'")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for flow_id in flow_ids {
+        let definition = load_flow_base(transaction, &flow_id)?;
+        let Some(schedule @ ScheduleSpec::Periodic { .. }) = definition.schedule.as_ref() else {
+            continue;
+        };
+        let (current, next) = schedule
+            .periodic_window(now)
+            .map_err(StoreError::InvalidData)?;
+        if let Some(due) = current {
+            let (state, reason) = if due + chrono::Duration::seconds(5) < now {
+                (OccurrenceState::Skipped, Some("SKIPPED_MISSED"))
+            } else {
+                (OccurrenceState::Pending, None)
+            };
+            insert_periodic_occurrence_if_missing(transaction, &definition, due, state, reason)?;
+        }
+        insert_periodic_occurrence_if_missing(
+            transaction,
+            &definition,
+            next,
+            OccurrenceState::Pending,
+            None,
+        )?;
+    }
+    Ok(())
+}
+
+fn insert_periodic_occurrence_if_missing(
+    transaction: &Transaction<'_>,
+    definition: &FlowDefinition,
+    due_at: DateTime<Utc>,
+    state: OccurrenceState,
+    reason: Option<&str>,
+) -> Result<(), StoreError> {
+    let key = due_at.to_rfc3339();
+    if occurrence_exists(
+        transaction,
+        &definition.internal_id.to_string(),
+        definition.schedule_generation,
+        "periodic",
+        &key,
+    )? {
+        return Ok(());
+    }
+    insert_occurrence(transaction, definition, None, due_at, state, reason)?;
+    transaction.execute(
+        "INSERT INTO schedule_events (flow_id, internal_definition_id, schedule_generation, event, detail, occurred_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            definition.flow_id,
+            definition.internal_id.to_string(),
+            definition.schedule_generation,
+            if state == OccurrenceState::Pending {
+                "OCCURRENCE_PENDING"
+            } else {
+                "OCCURRENCE_SKIPPED"
+            },
+            reason,
+            Utc::now().to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
 pub(super) fn occurrence_exists(
     transaction: &Transaction<'_>,
     internal_id: &str,
     generation: i64,
+    kind: &str,
     key: &str,
 ) -> Result<bool, StoreError> {
-    Ok(transaction.query_row("SELECT EXISTS(SELECT 1 FROM occurrences WHERE internal_definition_id = ?1 AND schedule_generation = ?2 AND kind = 'daily' AND occurrence_key = ?3)", params![internal_id, generation, key], |row| row.get(0))?)
+    Ok(transaction.query_row("SELECT EXISTS(SELECT 1 FROM occurrences WHERE internal_definition_id = ?1 AND schedule_generation = ?2 AND kind = ?3 AND occurrence_key = ?4)", params![internal_id, generation, kind, key], |row| row.get(0))?)
 }
 pub(super) fn expire_occurrences(
     transaction: &Transaction<'_>,
@@ -466,6 +425,7 @@ pub(super) fn expire_occurrences(
 ) -> Result<(), StoreError> {
     transaction.execute("UPDATE occurrences SET state = 'EXPIRED', reason = 'EXPIRED' WHERE kind = 'once' AND state = 'PENDING' AND due_at < ?1", [(now - chrono::Duration::hours(24)).to_rfc3339()])?;
     transaction.execute("UPDATE occurrences SET state = 'SKIPPED', reason = 'SKIPPED_MISSED' WHERE kind = 'daily' AND state = 'PENDING' AND due_at < ?1", [(now - chrono::Duration::seconds(5)).to_rfc3339()])?;
+    transaction.execute("UPDATE occurrences SET state = 'SKIPPED', reason = 'SKIPPED_MISSED' WHERE kind = 'periodic' AND state = 'PENDING' AND due_at < ?1", [(now - chrono::Duration::seconds(5)).to_rfc3339()])?;
     Ok(())
 }
 
@@ -491,6 +451,31 @@ pub(super) fn schedule_from_row(
             )
             .map_err(|error| error.to_string())?,
             timezone: row.get(index + 3).map_err(|error| error.to_string())?,
+        })),
+        Some("periodic") => Ok(Some(ScheduleSpec::Periodic {
+            every: SchedulePeriod {
+                value: u32::try_from(
+                    row.get::<_, i64>(index + 4)
+                        .map_err(|error| error.to_string())?,
+                )
+                .map_err(|_| "invalid periodic schedule value".to_owned())?,
+                unit: match row
+                    .get::<_, String>(index + 5)
+                    .map_err(|error| error.to_string())?
+                    .as_str()
+                {
+                    "minutes" => SchedulePeriodUnit::Minutes,
+                    "hours" => SchedulePeriodUnit::Hours,
+                    other => return Err(format!("unknown periodic schedule unit {other}")),
+                },
+            },
+            first_at: row
+                .get::<_, Option<String>>(index + 6)
+                .map_err(|error| error.to_string())?
+                .as_deref()
+                .map(parse_datetime)
+                .transpose()
+                .map_err(|error| error.to_string())?,
         })),
         Some(other) => Err(format!("unknown schedule kind {other}")),
     }

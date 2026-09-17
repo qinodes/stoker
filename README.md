@@ -405,8 +405,9 @@ A flow groups multiple tasks into one run and can declare dependencies on upstre
 The following is the complete user-facing Flow command tree. `FLOW_ID` and `TASK_ID` are positional arguments; `RUN_ID`, task, and attempt selectors for execution records are always options.
 
 ~~~text
-stoker flow create <FLOW_ID> --user <USER> --name <NAME> --at <RFC3339>
-stoker flow create <FLOW_ID> --user <USER> --name <NAME> --daily <HH:mm> [--schedule-timezone <ZONE>]
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --once-at <RFC3339>
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>]
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --every <Nm|Nh> [--first-at <RFC3339>]
 stoker flow commit <FLOW_ID>
 stoker flow list [--user <USER>]
 stoker flow show <FLOW_ID> [--run <RUN_ID> [--task <TASK_ID>]]
@@ -429,9 +430,11 @@ stoker flow task update <FLOW_ID> <TASK_ID>
 stoker flow task remove <FLOW_ID> <TASK_ID>
     [--scope future|current|both] [--run <RUN_ID>] [--revision <N>]
 
-stoker flow schedule set <FLOW_ID> --at <RFC3339> [--revision <N>]
-stoker flow schedule set <FLOW_ID> --daily <HH:mm> [--schedule-timezone <ZONE>] [--revision <N>]
-stoker flow schedule set <FLOW_ID> --schedule-timezone <ZONE> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --once-at <RFC3339> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--revision <N>]
+stoker flow schedule set <FLOW_ID> --every <Nm|Nh> [--first-at <RFC3339>] [--revision <N>]
+stoker flow schedule set <FLOW_ID> --first-at <RFC3339> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --schedule-timezone <IANA_ZONE> [--revision <N>]
 
 stoker flow edit begin <FLOW_ID>
 stoker flow edit apply <FLOW_ID> [--revision <N>]
@@ -439,6 +442,60 @@ stoker flow edit discard <FLOW_ID> --revision <N>
 
 stoker flow disable <FLOW_ID>
 stoker flow enable <FLOW_ID>
+~~~
+
+### Official standalone scheduled-job command interface
+
+Standalone Jobs use UUIDs printed by `stoker add`. In `scheduled` mode, use one of these
+three schedule forms when creating a Job. The remaining commands inspect or manage that
+same Job UUID and its runs.
+
+~~~text
+stoker add --user <USER> --name <NAME> --cmd <COMMAND> [--description <TEXT>]
+    --once-at <RFC3339> [--retry <N>]
+stoker add --user <USER> --name <NAME> --cmd <COMMAND> [--description <TEXT>]
+    --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--retry <N>]
+stoker add --user <USER> --name <NAME> --cmd <COMMAND> [--description <TEXT>]
+    --every <Nm|Nh> [--first-at <RFC3339>] [--retry <N>]
+stoker commit <JOB_ID>
+stoker jobs [--user <USER>] [--state <STATE>] [--mode serial|scheduled]
+stoker show <JOB_ID> [--run <RUN_ID>]
+stoker runs <JOB_ID>
+stoker occurrences <JOB_ID>
+
+stoker run <JOB_ID> [--skip-next] [--request-id <UUID>]
+stoker logs <JOB_ID> --run <RUN_ID> [--attempt <N>] [--follow]
+stoker cancel <JOB_ID> --run <RUN_ID>
+
+stoker freeze <JOB_ID>
+stoker schedule set <JOB_ID> --once-at <RFC3339> [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --every <Nm|Nh> [--first-at <RFC3339>] [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --first-at <RFC3339> [--expected-draft-revision <N>]
+stoker schedule set <JOB_ID> --schedule-timezone <IANA_ZONE> [--expected-draft-revision <N>]
+stoker draft discard <JOB_ID> --expected-draft-revision <N>
+stoker unfreeze <JOB_ID> [--expected-draft-revision <N>]
+
+stoker disable <JOB_ID>
+stoker enable <JOB_ID>
+~~~
+
+Scheduled standalone Jobs follow the same once, daily, periodic, UTC/DST, missed-run,
+and schedule-family rules described below for Flows. `stoker add` creates a DRAFT; run
+`stoker commit JOB_ID` to activate it. `--retry` is the standalone retry count, while Flow
+tasks use `--retries`. To edit a committed schedule, run `freeze`, make the change with
+`schedule set`, and then run `unfreeze`; use the expected draft revision to prevent stale
+updates. `draft discard` removes the draft but keeps the Job frozen.
+
+`stoker run --skip-next` creates a manual run and replaces one concrete future occurrence
+after the run starts. Reusing the same `--request-id` returns the same run. Disabling a Job
+stops automatic triggers but does not block otherwise valid manual runs. Top-level
+scheduled-job commands accept standalone Job UUIDs only; Flow IDs must use `stoker flow`.
+
+~~~bash
+stoker add --user alice --name frequent --cmd "python refresh.py" --every 15m --first-at 2026-09-20T10:00:00+09:00
+stoker commit <JOB_ID>
+stoker run <JOB_ID> --skip-next --request-id <UUID>
 ~~~
 
 Important option rules:
@@ -476,7 +533,7 @@ The table uses `nightly` as the `FLOW_ID` and `prepare`/`train` as `TASK_ID` val
 |---|---|---|---|
 | Show mode | `stoker mode show` | Shows whether the workspace is in `serial` or `scheduled` mode. | `scheduled` |
 | Change mode | `stoker queue lock`<br>`stoker mode set serial` or `stoker mode set scheduled`<br>`stoker queue unlock` | You must lock the queue first. The change is rejected while an execution is starting, running, cancelling, being cleaned up, or recovering. `mode set` does not lock or unlock automatically; after success, verify the change and then unlock the queue. | `Mode set to scheduled; queue remains locked.` |
-| Create a flow | `stoker flow create nightly --user alice --name nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo` | Flows are available only in `scheduled` mode. Choose either `--at RFC3339` or `--daily HH:mm`; daily timezones use IANA names. If `--schedule-timezone` is omitted, Stoker uses the configured timezone and then the system timezone; if the system timezone cannot be determined, specify one explicitly. For immediate serial execution, use standalone `stoker add`. | `Created flow nightly (DRAFT, draft revision 0).` |
+| Create a flow | `stoker flow create nightly --user alice --name nightly --once-at 2026-09-20T10:00:00+09:00`<br>`stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow create frequent --user alice --name frequent --every 15m --first-at 2026-09-20T10:00:00+09:00` | Flows are available only in `scheduled` mode. Choose `--once-at RFC3339`, `--daily HH:mm`, or `--every Nm\|Nh`. `--first-at` is valid only with `--every`. Daily timezones use IANA names; if omitted, Stoker uses the configured timezone and then the system timezone. If the system timezone cannot be determined, specify one explicitly. For immediate serial execution, use standalone `stoker add`. | `Created flow nightly (DRAFT, draft revision 0).` |
 | Add a task | `stoker flow task add nightly prepare --name prepare --cmd "python prepare.py"` | Adds a task whose working directory is the current directory. Supports `--retries N`, repeated `--after TASK_ID`/`--after-failure TASK_ID`, `--match all\|any`, and `--revision N`. | `Added task to flow nightly (draft revision 0).` |
 | Commit a flow | `stoker flow commit nightly` | Validates the complete task graph and commits the draft. The scheduler can run it only after this step. | `Committed flow nightly (2 task(s)).` |
 | List flows | `stoker flow list [--user alice]` | Shows one aligned summary row per flow, including its schedule, status, active run, and next trigger time, without expanding tasks. | `FLOW_ID  NAME  USER  SCHEDULE  STATUS  ACTIVE  NEXT` |
@@ -492,7 +549,7 @@ The table uses `nightly` as the `FLOW_ID` and `prepare`/`train` as `TASK_ID` val
 | Begin editing | `stoker flow edit begin nightly` | Freezes a committed flow and pauses intake of new runs, tasks, and retries. The future draft is created by the first future-scope change; already running processes continue. | `Flow 'nightly' is frozen for editing.` |
 | Update a task | `stoker flow task update nightly train [--cmd CMD] [--cwd DIR] [--retries N] [--after TASK] [--after-failure TASK] [--match all\|any] [--clear-dependencies] [--revision N]` | Updates the future draft. At least one field is required, and dependency options may be repeated. | `Updated task train in flow nightly (draft revision 1).` |
 | Remove a task | `stoker flow task remove nightly train [--scope future\|current\|both] [--run RUN_UUID] [--revision N]` | The default scope is `future`. `current` and `both` apply to the specified active run and require `--run`; the flow must be frozen. | `Draft revision 2 for flow nightly.` |
-| Change the schedule | `stoker flow schedule set nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow schedule set nightly --schedule-timezone UTC` | Updates the frozen flow's future schedule and supports `--revision N`. An existing once flow can only move to another future once time, while a daily flow can only change its daily time or timezone; the two schedule types cannot be exchanged. Timezone-only changes apply only to daily flows. A terminal once flow with a non-pending occurrence cannot be scheduled again; create a new flow instead. | `Updated flow nightly draft revision 2.` |
+| Change the schedule | `stoker flow schedule set nightly --once-at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow schedule set nightly --schedule-timezone UTC`<br>`stoker flow schedule set frequent --every 2h --first-at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set frequent --first-at 2026-09-21T10:00:00+09:00` | Updates the frozen flow's future schedule and supports `--revision N`. Once, daily, and every schedules cannot be exchanged; only the same schedule family can be changed. Daily schedules can change their time or timezone. Every schedules can change the period and first time, or use only `--first-at` to retain the period. Timezone-only changes apply only to daily flows. A terminal once flow with a non-pending occurrence cannot be scheduled again; create a new flow instead. | `Updated flow nightly draft revision 2.` |
 | Discard a draft | `stoker flow edit discard nightly --revision N` | Discards unapplied future changes; the flow remains frozen. | `Discarded draft for nightly (still frozen=true).` |
 | Apply edits | `stoker flow edit apply nightly [--revision N]` | If a future draft exists, validates and applies it, increments the graph revision, and unfreezes the flow. If only current-scope changes were made and no future draft exists, omit `--revision` to unfreeze directly. This command does not unlock the global queue. | `Applied edits to nightly (graph revision 2).` |
 | Disable automatic triggers | `stoker flow disable nightly` | Stops future automatic triggers; valid manual runs are still allowed. | `Disabled nightly.` |
@@ -522,6 +579,13 @@ One-time schedules use RFC 3339 with seconds and an explicit UTC offset, for exa
 `2026-09-15T23:30:00+09:00`. Daily schedules use `HH:mm` and an IANA timezone.
 Missed daily occurrences are not replayed. A nonexistent DST time is skipped, and an
 ambiguous repeated time uses the earlier instant.
+
+Periodic `--every` values accept only lower-case integer minutes or hours, such as `1m`,
+`15m`, `1h`, or `2h`; the minimums are one minute and one hour respectively. Without
+`--first-at`, the first run occurs one complete period after commit or schedule apply, not
+immediately at commit. With `--first-at`, the RFC 3339 time must be in the future and later
+occurrences stay anchored to it using elapsed UTC time, without DST shifts. Periods missed
+while Stoker is stopped are not replayed; the original time anchor remains unchanged.
 
 To modify a committed flow, begin editing, change the future draft, and then apply it.
 You can use the draft revision for compare-and-swap:

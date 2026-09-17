@@ -2,7 +2,7 @@ use chrono::{DateTime, Duration, NaiveTime, Timelike, Utc};
 use std::sync::{Arc, Barrier};
 use stoker::domain::flow::{
     Dependency, DependencyMode, DependencyStatus, ExecutionMode, FlowRunState, OccurrenceState,
-    ScheduleSpec, TaskRunState, parse_once,
+    SchedulePeriod, SchedulePeriodUnit, ScheduleSpec, TaskRunState, parse_once,
 };
 use stoker::store::{FlowAttemptResult, FlowTaskInput};
 use stoker::{NewJob, Store, StoreError};
@@ -53,6 +53,16 @@ fn use_scheduled_mode(store: &Store) {
 fn future_once() -> ScheduleSpec {
     ScheduleSpec::Once {
         at: Utc::now() + Duration::hours(2),
+    }
+}
+
+fn every_minute(first_at: Option<DateTime<Utc>>) -> ScheduleSpec {
+    ScheduleSpec::Periodic {
+        every: SchedulePeriod {
+            value: 1,
+            unit: SchedulePeriodUnit::Minutes,
+        },
+        first_at,
     }
 }
 
@@ -391,6 +401,145 @@ fn daily_due_records_disabled_and_workspace_mode_skip_reasons() {
 }
 
 #[test]
+fn periodic_commit_delays_the_first_run_and_keeps_a_fixed_anchor() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    store
+        .create_flow(
+            "periodic-anchor".into(),
+            "periodic-anchor".into(),
+            "tester".into(),
+            every_minute(None),
+        )
+        .unwrap();
+    add_task(
+        &store,
+        directory.path(),
+        "periodic-anchor",
+        "root",
+        vec![],
+        DependencyMode::All,
+        0,
+    );
+    let before = Utc::now();
+    let committed = store.commit_flow("periodic-anchor").unwrap();
+    let after = Utc::now();
+    let first_at = match committed.schedule.unwrap() {
+        ScheduleSpec::Periodic {
+            first_at: Some(first_at),
+            ..
+        } => first_at,
+        other => panic!("unexpected schedule: {other:?}"),
+    };
+    assert!(first_at >= before + Duration::minutes(1));
+    assert!(first_at <= after + Duration::minutes(1));
+    assert_eq!(store.list_occurrences("periodic-anchor").unwrap().len(), 1);
+    assert!(
+        store
+            .claim_flow_task(first_at - Duration::seconds(1))
+            .unwrap()
+            .is_none()
+    );
+
+    use_scheduled_mode(&store);
+    let first = store
+        .claim_flow_task(first_at + Duration::seconds(1))
+        .unwrap()
+        .unwrap();
+    store.mark_flow_attempt_running(first.attempt_id).unwrap();
+    store
+        .finish_flow_attempt(
+            first.attempt_id,
+            FlowAttemptResult::Succeeded { exit_code: 0 },
+        )
+        .unwrap();
+
+    let occurrences = store.list_occurrences("periodic-anchor").unwrap();
+    assert!(occurrences.iter().any(|item| item.due_at == first_at));
+    assert!(
+        occurrences
+            .iter()
+            .any(|item| item.due_at == first_at + Duration::minutes(1))
+    );
+    let second = store
+        .claim_flow_task(first_at + Duration::minutes(1) + Duration::seconds(1))
+        .unwrap()
+        .unwrap();
+    assert_ne!(first.run_id, second.run_id);
+}
+
+#[test]
+fn periodic_downtime_skips_missed_work_without_drifting_or_catching_up() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    let first_at = Utc::now() + Duration::minutes(1);
+    create_scheduled_flow(
+        &store,
+        directory.path(),
+        "periodic-missed",
+        every_minute(Some(first_at)),
+    );
+    use_scheduled_mode(&store);
+
+    let resumed_at = first_at + Duration::minutes(10) + Duration::seconds(10);
+    assert!(store.claim_flow_task(resumed_at).unwrap().is_none());
+    assert!(store.list_flow_runs("periodic-missed").unwrap().is_empty());
+    let occurrences = store.list_occurrences("periodic-missed").unwrap();
+    assert!(
+        occurrences
+            .iter()
+            .all(|item| item.state != OccurrenceState::Started)
+    );
+    assert!(occurrences.iter().any(|item| {
+        item.due_at == first_at + Duration::minutes(10)
+            && item.state == OccurrenceState::Skipped
+            && item.reason.as_deref() == Some("SKIPPED_MISSED")
+    }));
+    assert!(occurrences.iter().any(|item| {
+        item.due_at == first_at + Duration::minutes(11) && item.state == OccurrenceState::Pending
+    }));
+}
+
+#[test]
+fn periodic_replace_next_reserves_the_concrete_first_occurrence() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    let first_at = Utc::now() + Duration::minutes(2);
+    create_scheduled_flow(
+        &store,
+        directory.path(),
+        "periodic-replace",
+        every_minute(Some(first_at)),
+    );
+    use_scheduled_mode(&store);
+    let run = store
+        .create_flow_run("periodic-replace", "MANUAL", true, None)
+        .unwrap();
+    let reserved = store
+        .list_occurrences("periodic-replace")
+        .unwrap()
+        .into_iter()
+        .find(|item| item.due_at == first_at)
+        .unwrap();
+    assert_eq!(reserved.state, OccurrenceState::Reserved);
+    let execution = store.claim_flow_task(Utc::now()).unwrap().unwrap();
+    assert_eq!(execution.run_id, run.run_id);
+    store
+        .mark_flow_attempt_running(execution.attempt_id)
+        .unwrap();
+    assert_eq!(
+        store
+            .list_occurrences("periodic-replace")
+            .unwrap()
+            .into_iter()
+            .find(|item| item.due_at == first_at)
+            .unwrap()
+            .state,
+        OccurrenceState::Replaced
+    );
+}
+
+#[test]
 fn skip_next_is_replaced_on_spawn_acknowledgement() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path().join("stoker.db")).unwrap();
@@ -600,6 +749,113 @@ fn concurrent_claimers_create_only_one_run_and_attempt_for_one_occurrence() {
             .unwrap()
             .tasks[0]
             .attempt_count,
+        1
+    );
+}
+
+#[test]
+fn task_only_periodic_edit_preserves_an_elapsed_anchor() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("stoker.db");
+    let store = Store::open(&database).unwrap();
+    create_scheduled_flow(
+        &store,
+        directory.path(),
+        "periodic-task-edit",
+        every_minute(None),
+    );
+
+    let elapsed_anchor = (Utc::now() - Duration::hours(1))
+        .with_nanosecond(0)
+        .unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "UPDATE flow_definitions SET period_first_at_utc = ?2 WHERE flow_id = ?1",
+            rusqlite::params!["periodic-task-edit", elapsed_anchor.to_rfc3339()],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE occurrences SET due_at = ?2, occurrence_key = ?2 WHERE flow_id = ?1",
+            rusqlite::params!["periodic-task-edit", elapsed_anchor.to_rfc3339()],
+        )
+        .unwrap();
+    drop(connection);
+
+    store.freeze_flow("periodic-task-edit").unwrap();
+    let draft = store
+        .set_flow_task_draft(
+            "periodic-task-edit",
+            "root",
+            Some("echo changed"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let applied = store
+        .unfreeze_flow("periodic-task-edit", Some(draft.draft_revision))
+        .unwrap();
+
+    assert_eq!(applied.schedule, Some(every_minute(Some(elapsed_anchor))));
+    assert_eq!(applied.tasks[0].command, "echo changed");
+}
+
+#[test]
+fn concurrent_periodic_claimers_create_only_one_run_for_the_due_occurrence() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("stoker.db");
+    let setup = Store::open(&database).unwrap();
+    let first_at = Utc::now() + Duration::minutes(1);
+    create_scheduled_flow(
+        &setup,
+        directory.path(),
+        "periodic-claim-race",
+        every_minute(Some(first_at)),
+    );
+    use_scheduled_mode(&setup);
+    let first_store = Arc::new(Store::open(&database).unwrap());
+    let second_store = Arc::new(Store::open(&database).unwrap());
+    let barrier = Arc::new(Barrier::new(3));
+    let claim_at = first_at + Duration::seconds(1);
+
+    let first_barrier = Arc::clone(&barrier);
+    let first = Arc::clone(&first_store);
+    let first_handle = std::thread::spawn(move || {
+        first_barrier.wait();
+        first.claim_flow_task(claim_at)
+    });
+    let second_barrier = Arc::clone(&barrier);
+    let second = Arc::clone(&second_store);
+    let second_handle = std::thread::spawn(move || {
+        second_barrier.wait();
+        second.claim_flow_task(claim_at)
+    });
+    barrier.wait();
+
+    let results = [first_handle.join().unwrap(), second_handle.join().unwrap()];
+    assert!(results.iter().all(Result::is_ok));
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| result.as_ref().unwrap().is_some())
+            .count(),
+        1
+    );
+    assert_eq!(
+        setup.list_flow_runs("periodic-claim-race").unwrap().len(),
+        1
+    );
+    assert_eq!(
+        setup
+            .list_occurrences("periodic-claim-race")
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.due_at == first_at)
+            .count(),
         1
     );
 }

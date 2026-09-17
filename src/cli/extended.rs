@@ -19,6 +19,8 @@ mod extended_flow;
 mod extended_output;
 #[path = "extended_parsing.rs"]
 mod extended_parsing;
+#[path = "extended_standalone_args.rs"]
+mod extended_standalone_args;
 
 use extended_args::ExtendedCli;
 
@@ -62,13 +64,19 @@ fn is_extended(args: &[String]) -> bool {
         }
         index += 1;
     }
-    positionals
-        .first()
-        .is_some_and(|command| names.contains(command))
+    let command = positionals.first().copied();
+    let asks_for_help = args
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "-h" | "--help"));
+    command.is_some_and(|command| names.contains(&command))
+        || asks_for_help && matches!(command, Some("add" | "jobs"))
         || args.iter().any(|arg| {
             [
-                "--at",
+                "--once-at",
                 "--daily",
+                "--every",
+                "--first-at",
+                "--schedule-timezone",
                 "--flow-id",
                 "--task-id",
                 "--retry",
