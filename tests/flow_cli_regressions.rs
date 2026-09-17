@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use chrono::{Duration, NaiveTime, Utc};
 use predicates::prelude::*;
+use serde_json::Value;
 use stoker::domain::flow::{
     Dependency, DependencyMode, DependencyStatus, ExecutionMode, FlowRunState, ScheduleSpec,
     TaskRunState,
@@ -50,6 +51,16 @@ fn runnable_flow(store: &Store, root: &std::path::Path, id: &str) {
         store.set_mode(ExecutionMode::Scheduled).unwrap();
         store.unlock_queue().unwrap();
     }
+}
+
+fn json_output(command: &mut Command) -> Value {
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("flow show output should be valid JSON")
 }
 
 #[test]
@@ -618,7 +629,7 @@ fn flow_selectors_filter_show_logs_and_cancel_without_task_subcommands() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("task_id=root"));
+        .stdout(predicate::str::contains("\"task_id\": \"root\""));
     cli(&home, directory.path())
         .args(["flow", "show", "selectors", "--task", "root"])
         .assert()
@@ -678,6 +689,80 @@ fn flow_selectors_filter_show_logs_and_cancel_without_task_subcommands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Cancelled task root"));
+}
+
+#[test]
+fn flow_show_uses_nested_json_like_shapes_for_definition_run_and_task() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    store
+        .create_flow(
+            "json-shape".into(),
+            "JSON shape".into(),
+            "tester".into(),
+            ScheduleSpec::Once {
+                at: Utc::now() + Duration::hours(2),
+            },
+        )
+        .unwrap();
+    add_task(&store, directory.path(), "json-shape", "root");
+    store
+        .add_flow_task(FlowTaskInput {
+            flow_id: "json-shape".into(),
+            task_id: "child".into(),
+            name: "child".into(),
+            cwd: directory.path().to_string_lossy().into_owned(),
+            command: "echo child".into(),
+            retry: 1,
+            dependencies: vec![Dependency {
+                upstream_task_id: "root".into(),
+                status: DependencyStatus::Succeeded,
+            }],
+            depend_mode: DependencyMode::All,
+        })
+        .unwrap();
+    store.commit_flow("json-shape").unwrap();
+    if store.current_mode().unwrap() != ExecutionMode::Scheduled {
+        store.lock_queue().unwrap();
+        store.set_mode(ExecutionMode::Scheduled).unwrap();
+        store.unlock_queue().unwrap();
+    }
+    let definition = json_output(cli(&home, directory.path()).args(["flow", "show", "json-shape"]));
+    assert_eq!(definition["flow_id"], "json-shape");
+    assert_eq!(definition["schedule"]["type"], "once");
+    assert_eq!(definition["tasks"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        definition["tasks"][1]["depends_on"][0]["status"],
+        "succeeded"
+    );
+
+    let run = store
+        .create_flow_run("json-shape", "MANUAL", false, None)
+        .unwrap();
+    let run_value = json_output(cli(&home, directory.path()).args([
+        "flow",
+        "show",
+        "json-shape",
+        "--run",
+        &run.run_id.to_string(),
+    ]));
+    assert_eq!(run_value["run_id"], run.run_id.to_string());
+    assert_eq!(run_value["state"], "STARTING");
+    assert_eq!(run_value["tasks"].as_array().unwrap().len(), 2);
+
+    let task_value = json_output(cli(&home, directory.path()).args([
+        "flow",
+        "show",
+        "json-shape",
+        "--run",
+        &run.run_id.to_string(),
+        "--task",
+        "child",
+    ]));
+    assert_eq!(task_value["tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(task_value["tasks"][0]["task_id"], "child");
 }
 
 #[test]
@@ -837,8 +922,8 @@ fn every_flow_edit_command_has_success_and_validation_coverage() {
         .args(["flow", "show", "edit-matrix"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("flow_id=edit-matrix"))
-        .stdout(predicate::str::contains("task_id=child"));
+        .stdout(predicate::str::contains("\"flow_id\": \"edit-matrix\""))
+        .stdout(predicate::str::contains("\"task_id\": \"child\""));
     cli(&home, directory.path())
         .args(["flow", "list", "--user", "alice"])
         .assert()
@@ -1136,8 +1221,11 @@ fn flow_run_query_log_follow_and_whole_run_cancel_use_the_public_cli() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains(format!("run_id={}", run.run_id)))
-        .stdout(predicate::str::contains("task_id=root"));
+        .stdout(predicate::str::contains(format!(
+            "\"run_id\": \"{}\"",
+            run.run_id
+        )))
+        .stdout(predicate::str::contains("\"task_id\": \"root\""));
 
     let execution = store.claim_flow_task(Utc::now()).unwrap().unwrap();
     store

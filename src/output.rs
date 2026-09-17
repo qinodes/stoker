@@ -71,10 +71,31 @@ pub fn paint_state(state: JobState, enabled: bool) -> String {
     paint(state, state_color(state), enabled)
 }
 
+/// Paints a Flow or task state using the same terminal palette as standalone
+/// job states. The CLI keeps these values as strings at the output boundary,
+/// so this helper accepts both the persisted upper-case names and the lower-
+/// case dependency status names.
+pub(crate) fn paint_state_name(value: &str, enabled: bool) -> String {
+    paint(value, state_color_name(value), enabled)
+}
+
+fn state_color_name(value: &str) -> Color {
+    match value.to_ascii_uppercase().as_str() {
+        "DRAFT" | "WAITING" | "SKIPPED" => Color::DarkGrey,
+        "READY" | "QUEUED" => Color::Cyan,
+        "SUCCEEDED" => Color::Green,
+        "STARTING" | "RUNNING" | "RETRY_WAIT" | "RECOVERING" => Color::Yellow,
+        "CANCELLING" | "CANCELLED" => Color::Magenta,
+        "FAILED" | "FAILED_TO_START" | "LOST" => Color::Red,
+        _ => Color::White,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        colors_enabled, paint, paint_bold, paint_state, state_color, stderr_color_enabled,
+        colors_enabled, paint, paint_bold, paint_state, paint_state_name, state_color,
+        stderr_color_enabled,
     };
     use crate::JobState;
     use crossterm::style::Color;
@@ -109,6 +130,13 @@ mod tests {
         assert_eq!(state_color(JobState::Starting), Color::Yellow);
         assert_eq!(state_color(JobState::Cancelling), Color::Magenta);
         assert_eq!(state_color(JobState::Cancelled), Color::Magenta);
+    }
+
+    #[test]
+    fn flow_state_names_use_the_standalone_palette() {
+        assert!(paint_state_name("SUCCEEDED", true).contains("\u{1b}["));
+        assert!(paint_state_name("FAILED_TO_START", true).contains("\u{1b}["));
+        assert_eq!(paint_state_name("succeeded", false), "succeeded");
     }
 
     #[test]

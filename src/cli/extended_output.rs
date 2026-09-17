@@ -2,10 +2,11 @@
 
 use anyhow::{Context, Result};
 use chrono_tz::Tz;
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::domain::flow::{OccurrenceState, ScheduleSpec};
-use crate::{StokerPaths, Store};
+use crate::{StokerPaths, Store, output};
 
 use super::extended_args::LogsArgs;
 
@@ -168,57 +169,172 @@ pub(super) fn print_task_logs(
 }
 
 pub(super) fn print_flow(flow: &crate::domain::FlowDefinition) {
-    println!(
-        "flow_id={} name={} owner={} mode={} committed={} frozen={} enabled={} graph_revision={} draft_revision={} generation={}",
-        flow.flow_id,
-        flow.name,
-        flow.owner,
-        flow.mode,
-        flow.committed,
-        flow.frozen,
-        flow.enabled,
-        flow.graph_revision,
-        flow.draft_revision,
-        flow.schedule_generation
-    );
-    if let Some(schedule) = &flow.schedule {
-        println!("schedule={schedule:?}");
-    }
-    for task in &flow.tasks {
-        let dependencies = task
-            .dependencies
-            .iter()
-            .map(|edge| format!("{}:{}", edge.upstream_task_id, edge.status))
-            .collect::<Vec<_>>()
-            .join(",");
-        println!(
-            "task_id={} name={} retry={} depend_mode={} depends_on={}",
-            task.task_id, task.name, task.retry, task.depend_mode, dependencies
-        );
-    }
+    let tasks = flow
+        .tasks
+        .iter()
+        .map(|task| {
+            json!({
+                "task_id": task.task_id,
+                "name": task.name,
+                "retry": task.retry,
+                "depend_mode": task.depend_mode.to_string(),
+                "depends_on": task
+                    .dependencies
+                    .iter()
+                    .map(|edge| json!({
+                        "task_id": edge.upstream_task_id,
+                        "status": edge.status.to_string(),
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let schedule = flow.schedule.as_ref().map(schedule_value);
+    print_json(&json!({
+        "flow_id": flow.flow_id,
+        "name": flow.name,
+        "owner": flow.owner,
+        "mode": flow.mode.to_string(),
+        "committed": flow.committed,
+        "frozen": flow.frozen,
+        "enabled": flow.enabled,
+        "graph_revision": flow.graph_revision,
+        "draft_revision": flow.draft_revision,
+        "generation": flow.schedule_generation,
+        "schedule": schedule,
+        "tasks": tasks,
+    }));
 }
 
 pub(super) fn print_run(store: &Store, run_id: Uuid, task_id: Option<&str>) -> Result<()> {
     let run = store.get_flow_run(run_id)?;
-    println!(
-        "run_id={} flow_id={} source={} state={:?}",
-        run.run_id, run.flow_id, run.source, run.state
-    );
-    let mut matched = task_id.is_none();
-    for task in run.tasks {
-        if task_id.is_some_and(|selected| selected != task.task_id) {
-            continue;
-        }
-        matched = true;
-        println!(
-            "task_id={} state={:?} attempts={}",
-            task.task_id, task.state, task.attempt_count
-        );
-    }
-    if !matched {
+    let tasks = run
+        .tasks
+        .iter()
+        .filter(|task| task_id.is_none_or(|selected| selected == task.task_id))
+        .map(|task| {
+            json!({
+                "task_id": task.task_id,
+                "state": serde_json::to_value(task.state).expect("task state is serializable"),
+                "attempts": task.attempt_count,
+            })
+        })
+        .collect::<Vec<_>>();
+    if task_id.is_some() && tasks.is_empty() {
         anyhow::bail!("task does not exist in run");
     }
+    print_json(&json!({
+        "run_id": run.run_id,
+        "flow_id": run.flow_id,
+        "source": run.source,
+        "state": serde_json::to_value(run.state).expect("flow state is serializable"),
+        "tasks": tasks,
+    }));
     Ok(())
+}
+
+fn schedule_value(schedule: &ScheduleSpec) -> Value {
+    match schedule {
+        ScheduleSpec::Once { at } => json!({
+            "type": "once",
+            "at": at.to_rfc3339(),
+        }),
+        ScheduleSpec::Daily { time, timezone } => json!({
+            "type": "daily",
+            "time": time.format("%H:%M").to_string(),
+            "timezone": timezone,
+        }),
+    }
+}
+
+fn print_json(value: &Value) {
+    let mut rendered = String::new();
+    render_json(
+        value,
+        0,
+        None,
+        output::stdout_color_enabled(),
+        &mut rendered,
+    );
+    rendered.push('\n');
+    print!("{rendered}");
+}
+
+fn render_json(
+    value: &Value,
+    indent: usize,
+    key: Option<&str>,
+    colors_enabled: bool,
+    rendered: &mut String,
+) {
+    match value {
+        Value::Object(fields) => {
+            rendered.push('{');
+            if !fields.is_empty() {
+                rendered.push('\n');
+                let last = fields.len() - 1;
+                for (index, (field, field_value)) in fields.iter().enumerate() {
+                    rendered.push_str(&" ".repeat(indent + 2));
+                    rendered.push_str(&output::paint_bold(
+                        json_string(field),
+                        crossterm::style::Color::Cyan,
+                        colors_enabled,
+                    ));
+                    rendered.push_str(": ");
+                    render_json(
+                        field_value,
+                        indent + 2,
+                        Some(field),
+                        colors_enabled,
+                        rendered,
+                    );
+                    if index != last {
+                        rendered.push(',');
+                    }
+                    rendered.push('\n');
+                }
+                rendered.push_str(&" ".repeat(indent));
+            }
+            rendered.push('}');
+        }
+        Value::Array(values) => {
+            rendered.push('[');
+            if !values.is_empty() {
+                rendered.push('\n');
+                let last = values.len() - 1;
+                for (index, item) in values.iter().enumerate() {
+                    rendered.push_str(&" ".repeat(indent + 2));
+                    render_json(item, indent + 2, key, colors_enabled, rendered);
+                    if index != last {
+                        rendered.push(',');
+                    }
+                    rendered.push('\n');
+                }
+                rendered.push_str(&" ".repeat(indent));
+            }
+            rendered.push(']');
+        }
+        Value::String(value) => {
+            let value = json_string(value);
+            if matches!(key, Some("state" | "status")) {
+                rendered.push('"');
+                rendered.push_str(&output::paint_state_name(
+                    &value[1..value.len() - 1],
+                    colors_enabled,
+                ));
+                rendered.push('"');
+            } else {
+                rendered.push_str(&value);
+            }
+        }
+        Value::Bool(value) => rendered.push_str(if *value { "true" } else { "false" }),
+        Value::Number(value) => rendered.push_str(&value.to_string()),
+        Value::Null => rendered.push_str("null"),
+    }
+}
+
+fn json_string(value: &str) -> String {
+    serde_json::to_string(value).expect("JSON string serialization cannot fail")
 }
 
 pub(super) fn print_flow_list(store: &Store, owner: Option<&str>) -> Result<()> {
@@ -353,4 +469,20 @@ fn print_table_row<const N: usize>(cells: &[String; N], widths: &[usize; N]) {
         }
     }
     println!("{line}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_json;
+    use serde_json::json;
+
+    #[test]
+    fn renderer_keeps_colored_states_as_quoted_json_strings() {
+        let mut rendered = String::new();
+        render_json(&json!({"state": "SUCCEEDED"}), 0, None, true, &mut rendered);
+        assert!(rendered.contains("\u{1b}["));
+        assert!(rendered.contains("\"state\""));
+        assert!(rendered.contains(": \"\u{1b}["));
+        assert!(rendered.ends_with("\n}"));
+    }
 }
