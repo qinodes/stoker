@@ -1,4 +1,4 @@
-//! Extended Task 003 command surface.
+//! Scheduled jobs and flow command surface.
 //!
 //! The original `Cli` type is kept stable for existing library consumers. The
 //! binary uses this parser only when a new flow/schedule command or option is
@@ -13,6 +13,8 @@ use crate::{StokerPaths, Store};
 mod extended_args;
 #[path = "extended_commands.rs"]
 mod extended_commands;
+#[path = "extended_flow.rs"]
+mod extended_flow;
 #[path = "extended_output.rs"]
 mod extended_output;
 #[path = "extended_parsing.rs"]

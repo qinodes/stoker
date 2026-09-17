@@ -388,6 +388,151 @@ stoker queue unlock
 
 使用 `stoker policy show` 或 `stoker policy get <KEY>` 查看 policy 數值。容量用盡或 log 寫入失敗時仍會持續讀取子程序輸出，舊分段可能被丟棄，CLI 會提示 log 已截斷。可用空間低於 reserve 時，scheduler 不會啟動下一個 queued Job；`stoker status` 會顯示警告。
 
+## Flow 與排程 Job
+
+Flow 可以把多個 task 組成一次執行，並宣告成功或失敗相依關係：
+
+### 正式 Flow 命令接口
+
+以下是目前提供給使用者的完整 Flow command tree。`FLOW_ID` 與 `TASK_ID` 是 positional argument；用來選擇執行紀錄的 `RUN_ID`、task 與 attempt 則固定使用 option。
+
+~~~text
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --at <RFC3339>
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --daily <HH:mm> [--schedule-timezone <ZONE>]
+stoker flow commit <FLOW_ID>
+stoker flow list [--user <USER>]
+stoker flow show <FLOW_ID> [--run <RUN_ID> [--task <TASK_ID>]]
+stoker flow runs <FLOW_ID>
+stoker flow occurrences <FLOW_ID>
+
+stoker flow run <FLOW_ID> [--replace-next] [--request-id <UUID>]
+stoker flow logs <FLOW_ID> --run <RUN_ID> --task <TASK_ID> [--attempt <N>] [--follow]
+stoker flow cancel <FLOW_ID> --run <RUN_ID> [--task <TASK_ID>]
+
+stoker flow task add <FLOW_ID> <TASK_ID> --name <NAME> --cmd <COMMAND>
+    [--after <TASK_ID>]... [--after-failure <TASK_ID>]...
+    [--match all|any] [--retries <N>] [--revision <N>]
+
+stoker flow task update <FLOW_ID> <TASK_ID>
+    [--cmd <COMMAND>] [--cwd <DIR>] [--retries <N>]
+    [--after <TASK_ID>]... [--after-failure <TASK_ID>]...
+    [--match all|any] [--clear-dependencies] [--revision <N>]
+
+stoker flow task remove <FLOW_ID> <TASK_ID>
+    [--scope future|current|both] [--run <RUN_ID>] [--revision <N>]
+
+stoker flow schedule set <FLOW_ID> --at <RFC3339> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --daily <HH:mm> [--schedule-timezone <ZONE>] [--revision <N>]
+stoker flow schedule set <FLOW_ID> --schedule-timezone <ZONE> [--revision <N>]
+
+stoker flow edit begin <FLOW_ID>
+stoker flow edit apply <FLOW_ID> [--revision <N>]
+stoker flow edit discard <FLOW_ID> --revision <N>
+
+stoker flow disable <FLOW_ID>
+stoker flow enable <FLOW_ID>
+~~~
+
+重要參數規則：
+
+- `--after TASK_ID` 表示上游 task 成功後才符合條件；`--after-failure TASK_ID` 表示上游失敗後才符合條件。兩者都可重複指定。
+- `--match all|any` 控制多個 dependency 必須全部符合或任一符合。
+- `--retries N` 是失敗後可重試的次數；`0` 表示不重試。
+- `--revision N` 是 draft 的 compare-and-swap revision。revision 不符時不會套用修改。
+- `--attempt N` 從 `1` 開始。省略時，`flow logs` 會顯示該 task 的全部 attempts。
+- `--cmd` 接受一整段交給平台 shell 執行的 command string；含空白或 shell operator 時請加引號。
+- `flow edit discard` 只丟棄 draft，Flow 仍維持 frozen；必須再執行 `flow edit apply` 才會解除 freeze。
+- Flow 只存在於 `scheduled` mode。切換 mode 前後的 queue lock 不會由 Flow 命令自動解除。
+
+~~~bash
+# 建立 scheduled definition 前先切換 workspace mode
+stoker mode set scheduled
+stoker queue unlock
+
+# 建立 scheduled flow
+stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo
+
+# 從 task 應執行的資料夾加入 task
+stoker flow task add nightly prepare --name prepare --cmd "python prepare.py"
+stoker flow task add nightly train --name train --cmd "python train.py" --after prepare
+stoker flow commit nightly
+
+~~~
+
+### Flow CLI 完整參考
+
+下表使用 `nightly` 作為 `FLOW_ID`、`prepare`／`train` 作為 `TASK_ID`。`RUN_UUID`、`REQUEST_UUID` 與 `OCCURRENCE_UUID` 是 Stoker 輸出的 UUID，請換成實際值。
+
+| 用途 | 命令 | 功能與重要選項 | 成功輸出範例 |
+|---|---|---|---|
+| 查看模式 | `stoker mode show` | 顯示目前 workspace 的 `serial` 或 `scheduled` 模式。 | `scheduled` |
+| 切換模式 | `stoker mode set serial`<br>`stoker mode set scheduled` | 切換前會鎖住 queue；成功後仍保持 locked，確認完成後需執行 `stoker queue unlock`。 | `Mode set to scheduled; queue remains locked.` |
+| 建立 Flow | `stoker flow create nightly --user alice --name nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo` | Flow 只適用於 `scheduled` mode，必須選擇 `--at RFC3339` 或 `--daily HH:mm`；daily timezone 使用 IANA 名稱。serial 立即執行請使用 standalone `stoker add`。 | `Created flow nightly (DRAFT, draft revision 0).` |
+| 新增 task | `stoker flow task add nightly prepare --name prepare --cmd "python prepare.py"` | 從目前目錄新增 task。可加 `--retries N`、重複的 `--after TASK_ID`／`--after-failure TASK_ID`、`--match all\|any` 及 `--revision N`。 | `Added task to flow nightly (draft revision 0).` |
+| 提交 Flow | `stoker flow commit nightly` | 驗證完整 task graph 並提交 draft；提交後 scheduler 才能執行。 | `Committed flow nightly (2 task(s)).` |
+| 列出 Flow | `stoker flow list [--user alice]` | 每個 Flow 顯示一列對齊摘要，包含排程、狀態、active run 與下次觸發時間，不展開 tasks。 | `FLOW_ID  NAME  USER  SCHEDULE  STATUS  ACTIVE  NEXT` |
+| 查看定義 | `stoker flow show nightly` | 顯示 Flow 定義、狀態、排程、revision、task ID 與 dependency。 | `flow_id=nightly ... committed=true frozen=false enabled=true ...`<br>`task_id=train ... depends_on=prepare:succeeded` |
+| 手動執行 | `stoker flow run nightly [--replace-next] [--request-id REQUEST_UUID]` | 建立 manual run。`--replace-next` 會在本次執行開始後取代下一個排程 occurrence；重送相同 `--request-id` 會取得同一結果。 | `Created flow run RUN_UUID for nightly (request-id REQUEST_UUID).` |
+| 列出 runs | `stoker flow runs nightly` | 以對齊的欄位列出全部執行紀錄；`RUN_ID` 欄就是後續命令使用的 `RUN_UUID`。 | 見下方完整輸出。 |
+| 查看 run | `stoker flow show nightly --run RUN_UUID` | 顯示單次 run 的來源、整體狀態及每個 task 的狀態／attempt 數。 | `run_id=RUN_UUID flow_id=nightly source=MANUAL state=Succeeded`<br>`task_id=prepare state=Succeeded attempts=1` |
+| 列出 occurrences | `stoker flow occurrences nightly` | 以對齊的欄位列出自動排程 occurrence、UTC 到期時間、狀態及原因。 | 見下方完整輸出。 |
+| 查看 task run | `stoker flow show nightly --run RUN_UUID --task prepare` | 將指定 run 篩選為單一 task，顯示其狀態及 attempt 次數。 | `task_id=prepare state=Succeeded attempts=1` |
+| 查看 task log | `stoker flow logs nightly --run RUN_UUID --task prepare [--attempt N] [-f]` | 顯示 stdout/stderr；省略 `--attempt` 時顯示全部 attempts，`-f`／`--follow` 持續追蹤到 task 結束。 | `--- .../attempt-1/stdout.log ---`<br>`task output` |
+| 取消 Flow run | `stoker flow cancel nightly --run RUN_UUID` | 要求取消指定 run 及尚未完成的 tasks。 | `Cancelled flow run RUN_UUID (Cancelling).` |
+| 取消 task | `stoker flow cancel nightly --run RUN_UUID --task prepare` | 只取消指定 run 中的 task；執行中的 task 會先進入 cancelling。 | `Cancelled task prepare in run RUN_UUID (Cancelling).` |
+| 開始編輯 | `stoker flow edit begin nightly` | 凍結已提交 Flow，暫停新的 run、task 與 retry intake，並建立可安全修改的 future draft；執行中的程序會繼續。 | `Flow 'nightly' is frozen for editing.` |
+| 修改 task | `stoker flow task update nightly train [--cmd CMD] [--cwd DIR] [--retries N] [--after TASK] [--after-failure TASK] [--match all\|any] [--clear-dependencies] [--revision N]` | 修改 future draft；至少指定一個欄位，相依選項可重複。 | `Updated task train in flow nightly (draft revision 1).` |
+| 移除 task | `stoker flow task remove nightly train [--scope future\|current\|both] [--run RUN_UUID] [--revision N]` | 預設修改 `future`。`current`／`both` 用於指定的 active run，必須提供 `--run`；操作要求 Flow 已 freeze。 | `Draft revision 2 for flow nightly.` |
+| 修改排程 | `stoker flow schedule set nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow schedule set nightly --schedule-timezone UTC` | 修改 frozen Flow 的 future 排程。timezone-only 只適用於既有 daily 排程；可加 `--revision N`。 | `Updated flow nightly draft revision 2.` |
+| 放棄 draft | `stoker flow edit discard nightly --revision N` | 放棄尚未套用的 future 修改；Flow 仍保持 frozen。 | `Discarded draft for nightly (still frozen=true).` |
+| 套用編輯 | `stoker flow edit apply nightly [--revision N]` | 驗證並套用 future draft，增加 graph revision，然後解除 Flow freeze；不會解除全域 queue lock。 | `Applied edits to nightly (graph revision 2).` |
+| 停用自動觸發 | `stoker flow disable nightly` | 停止未來的 automatic trigger；合法的 manual run 仍可執行。 | `Disabled nightly.` |
+| 啟用自動觸發 | `stoker flow enable nightly` | 恢復未來的 automatic trigger。 | `Enabled nightly.` |
+| 查詢冪等請求 | `stoker request show REQUEST_UUID` | 以 manual run 的 request ID 查詢對應 Flow、run UUID 與結果。 | `request_id=REQUEST_UUID flow_id=nightly run_id=RUN_UUID result=CREATED` |
+| 復原 reconcile | `stoker recovery reconcile RUN_UUID --confirm-stopped` | 僅在 run 因重啟進入 `Recovering`，且已人工確認程序停止後使用。全部 recovery 解決後才能 unlock queue。 | `Reconciled recovery for RUN_UUID; queue may be unlocked after all recoveries are resolved.` |
+
+`flow runs` 的欄位會依實際內容計算寬度並對齊：
+
+```text
+RUN_ID                                FLOW_ID  STATE     SOURCE
+------------------------------------  -------  --------  ------
+2238b174-1480-48c0-b1b7-e8ce36bca1b7  nightly  Starting  MANUAL
+```
+
+`flow occurrences` 也使用相同的對齊格式；`DUE_AT_UTC` 固定顯示 UTC：
+
+```text
+OCCURRENCE_ID                         FLOW_ID  STATE    DUE_AT_UTC                 REASON
+------------------------------------  -------  -------  -------------------------  ------
+6560cda6-92a3-4429-955a-16aa3a1c3618  nightly  Pending  2099-01-01T00:00:00+00:00
+```
+
+Flow 命令一律以 `stoker flow` 開頭；頂層 scheduled-job 命令只接受 standalone job UUID。完整參數可用 `stoker flow --help`、`stoker flow task --help` 及各子命令的 `--help` 查看。
+
+`Succeeded` 表示整個 run 成功；`Starting`／`Running` 表示尚未結束；`Failed`／`FailedToStart` 表示失敗；`Cancelled` 表示已取消。執行 `stoker flow run` 後，可依序用 `flow runs` 取得 `RUN_UUID`、`flow show --run` 查看整體狀態，再用 `flow logs` 檢查輸出。
+
+One-time schedule 使用包含秒數與明確 UTC offset 的 RFC 3339，例如
+2026-09-15T23:30:00+09:00。Daily schedule 使用 HH:mm 與 IANA timezone。
+錯過的 daily occurrence 不會補跑；DST 不存在的時間會跳過，重複的時間採用
+較早的 instant。
+
+要修改已 commit 的 flow，先開始 edit，再修改 future draft，最後套用；可使用
+draft revision 做 compare-and-swap：
+
+~~~bash
+stoker flow edit begin nightly
+stoker flow task update nightly train --retries 2 --revision 0
+stoker flow edit apply nightly --revision 1
+~~~
+
+若重啟後 run 留在 RECOVERING，請先確認 process 已停止，再 reconcile，最後
+解除 queue lock：
+
+~~~bash
+stoker recovery reconcile <RUN_ID> --confirm-stopped
+stoker queue unlock
+~~~
+
 ## SQLite 檢查與復原
 
 ```bash

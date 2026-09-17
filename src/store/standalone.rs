@@ -1,4 +1,4 @@
-//! Standalone job scheduling metadata owned by the Task 003 store.
+//! Standalone job scheduling metadata stored through the flow runtime.
 
 use chrono::{NaiveTime, Utc};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};

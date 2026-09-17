@@ -38,7 +38,7 @@ impl Store {
             != matches!(schedule, ScheduleSpec::Once { .. })
         {
             return Err(StoreError::InvalidData(
-                "Task 003 does not support switching between once and daily schedules".into(),
+                "switching between once and daily schedules is not supported".into(),
             ));
         }
         if matches!(current.schedule, Some(ScheduleSpec::Once { .. }))
@@ -55,7 +55,7 @@ impl Store {
         }
         if current.draft_revision > 0 && expected_draft_revision.is_none() {
             return Err(StoreError::InvalidData(
-                "--expected-draft-revision is required when a draft exists".into(),
+                "a draft revision is required when a draft exists".into(),
             ));
         }
         let expected = expected_draft_revision.unwrap_or(current.draft_revision);

@@ -264,7 +264,7 @@ pub(super) fn reserve_next_occurrence(
     let row: Option<String> = transaction.query_row("SELECT occurrence_id FROM occurrences WHERE flow_id = ?1 AND schedule_generation = ?2 AND state = 'PENDING' AND ((kind = 'daily' AND due_at > ?3) OR (kind = 'once' AND due_at > ?4)) ORDER BY due_at LIMIT 1", params![definition.flow_id, definition.schedule_generation, now.to_rfc3339(), (now - chrono::Duration::hours(24)).to_rfc3339()], |row| row.get(0)).optional()?;
     let Some(value) = row else {
         return Err(StoreError::InvalidData(
-            "no future occurrence is available for --skip-next".into(),
+            "no future occurrence is available to replace".into(),
         ));
     };
     transaction.execute(

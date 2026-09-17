@@ -1,10 +1,12 @@
 //! Input validation and schedule parsing for the extended CLI.
 
-use anyhow::{Context, Result};
+use std::collections::BTreeSet;
+
+use anyhow::Result;
 
 use crate::StokerPaths;
 use crate::domain::flow::{
-    Dependency, DependencyMode, ScheduleSpec, parse_daily, parse_once, resolve_schedule_timezone,
+    Dependency, DependencyStatus, ScheduleSpec, parse_daily, parse_once, resolve_schedule_timezone,
 };
 
 pub(super) fn parse_schedule(
@@ -29,54 +31,28 @@ pub(super) fn parse_schedule(
     }
 }
 
-pub(super) fn parse_dependencies(
-    single_id: Option<String>,
-    single_status: Option<String>,
-    multiple: Vec<String>,
-    mode: String,
+pub(super) fn parse_named_dependencies(
+    after: Vec<String>,
+    after_failure: Vec<String>,
 ) -> Result<Vec<Dependency>> {
-    if single_id.is_some() != single_status.is_some() {
-        anyhow::bail!("--depend-on and --depend-status must be provided together");
-    }
-    if single_id.is_some() && !multiple.is_empty() {
-        anyhow::bail!("single dependency flags cannot be mixed with --dependency");
-    }
     let mut result = Vec::new();
-    if let (Some(id), Some(status)) = (single_id, single_status) {
-        result.push(Dependency {
-            upstream_task_id: id,
-            status: status
-                .parse()
-                .map_err(|error: String| anyhow::anyhow!(error))?,
-        });
-    }
-    result.extend(parse_dependency_values(multiple)?);
-    let _ = parse_depend_mode(&mode)?;
-    Ok(result)
-}
-pub(super) fn parse_dependency_values(values: Vec<String>) -> Result<Vec<Dependency>> {
-    let mut result = Vec::new();
-    for value in values {
-        let (id, status) = value
-            .split_once(':')
-            .context("--dependency must use TASK_ID:succeeded|failed")?;
-        if result
-            .iter()
-            .any(|edge: &Dependency| edge.upstream_task_id == id)
-        {
+    let mut seen = BTreeSet::new();
+    for (id, status) in after
+        .into_iter()
+        .map(|id| (id, DependencyStatus::Succeeded))
+        .chain(
+            after_failure
+                .into_iter()
+                .map(|id| (id, DependencyStatus::Failed)),
+        )
+    {
+        if !seen.insert(id.clone()) {
             anyhow::bail!("duplicate dependency {id:?}");
         }
         result.push(Dependency {
-            upstream_task_id: id.to_owned(),
-            status: status
-                .parse()
-                .map_err(|error: String| anyhow::anyhow!(error))?,
+            upstream_task_id: id,
+            status,
         });
     }
     Ok(result)
-}
-pub(super) fn parse_depend_mode(value: &str) -> Result<DependencyMode> {
-    value
-        .parse()
-        .map_err(|error: String| anyhow::anyhow!(error))
 }

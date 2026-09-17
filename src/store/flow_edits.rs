@@ -88,7 +88,7 @@ impl Store {
         if current.committed {
             if current.draft_revision > 0 && expected_draft_revision.is_none() {
                 return Err(StoreError::InvalidData(
-                    "--expected-draft-revision is required when a draft exists".into(),
+                    "a draft revision is required when a draft exists".into(),
                 ));
             }
             if let Some(expected) = expected_draft_revision
@@ -200,7 +200,7 @@ impl Store {
         }
         if current.draft_revision > 0 && expected_draft_revision.is_none() {
             return Err(StoreError::InvalidData(
-                "--expected-draft-revision is required when a draft exists".into(),
+                "a draft revision is required when a draft exists".into(),
             ));
         }
         if let Some(expected) = expected_draft_revision

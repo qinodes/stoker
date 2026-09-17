@@ -1,4 +1,4 @@
-//! SQLite persistence for Task 003 flow definitions and execution history.
+//! SQLite persistence for flow definitions and execution history.
 
 use std::collections::BTreeSet;
 
@@ -238,9 +238,7 @@ impl Store {
             return Ok(result);
         };
         let expected = expected_draft_revision.ok_or_else(|| {
-            StoreError::InvalidData(
-                "--expected-draft-revision is required when a draft exists".into(),
-            )
+            StoreError::InvalidData("a draft revision is required when a draft exists".into())
         })?;
         if expected != current.draft_revision {
             return Err(StoreError::InvalidData(format!(
@@ -351,7 +349,7 @@ impl Store {
         let draft = if edit_future {
             if current.draft_revision > 0 && expected_draft_revision.is_none() {
                 return Err(StoreError::InvalidData(
-                    "--expected-draft-revision is required when a draft exists".into(),
+                    "a draft revision is required when a draft exists".into(),
                 ));
             }
             let expected = expected_draft_revision.unwrap_or(current.draft_revision);
