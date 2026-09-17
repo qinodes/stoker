@@ -142,7 +142,6 @@ fn mode(store: &Store, command: ModeCommand) -> Result<()> {
     match command {
         ModeCommand::Show => println!("{}", store.current_mode()?),
         ModeCommand::Set { mode } => {
-            store.lock_queue()?;
             store.set_mode(mode)?;
             println!("Mode set to {mode}; queue remains locked.");
         }

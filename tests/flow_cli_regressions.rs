@@ -1,7 +1,10 @@
 use assert_cmd::Command;
 use chrono::{Duration, NaiveTime, Utc};
 use predicates::prelude::*;
-use stoker::domain::flow::{DependencyMode, ExecutionMode, ScheduleSpec};
+use stoker::domain::flow::{
+    Dependency, DependencyMode, DependencyStatus, ExecutionMode, FlowRunState, ScheduleSpec,
+    TaskRunState,
+};
 use stoker::store::{FlowAttemptResult, FlowTaskInput};
 use stoker::{NewJob, Store};
 
@@ -72,6 +75,10 @@ fn extended_help_is_successful_and_top_level_mentions_the_extended_surface() {
 fn flow_task_submission_keeps_a_shell_compatible_working_directory() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path().join("home");
+    cli(&home, directory.path())
+        .args(["queue", "lock"])
+        .assert()
+        .success();
     cli(&home, directory.path())
         .args(["mode", "set", "scheduled"])
         .assert()
@@ -227,6 +234,34 @@ fn timezone_only_schedule_edit_and_scheduled_queue_edit_contracts_are_reachable(
         ])
         .assert()
         .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "daily",
+            "--daily",
+            "22:58",
+            "--schedule-timezone",
+            "Asia/Tokyo",
+            "--revision",
+            "1",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "daily",
+            "--daily",
+            "22:57",
+            "--revision",
+            "2",
+        ])
+        .assert()
+        .success();
     store.lock_queue().unwrap();
     store.set_mode(ExecutionMode::Scheduled).unwrap();
     cli(&home, directory.path())
@@ -303,6 +338,10 @@ fn public_flows_require_scheduled_mode_and_list_has_no_mode_option() {
         .stderr(predicate::str::contains(
             "flow create is only available in scheduled mode",
         ));
+    cli(&home, directory.path())
+        .args(["queue", "lock"])
+        .assert()
+        .success();
     cli(&home, directory.path())
         .args(["mode", "set", "scheduled"])
         .assert()
@@ -397,6 +436,10 @@ fn refreshed_flow_commands_use_positional_ids_and_named_dependency_flags() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path().join("home");
 
+    cli(&home, directory.path())
+        .args(["queue", "lock"])
+        .assert()
+        .success();
     cli(&home, directory.path())
         .args(["mode", "set", "scheduled"])
         .assert()
@@ -601,6 +644,21 @@ fn flow_selectors_filter_show_logs_and_cancel_without_task_subcommands() {
             &run.run_id.to_string(),
             "--task",
             "root",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "No attempts are available for task root.",
+        ));
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "logs",
+            "selectors",
+            "--run",
+            &run.run_id.to_string(),
+            "--task",
+            "root",
             "--attempt",
             "0",
         ])
@@ -738,6 +796,497 @@ fn flow_list_is_a_flow_only_summary_and_empty_lists_are_explicit() {
     assert!(output.lines().next().unwrap().contains("NEXT"));
     assert!(!output.contains("task_id="));
     assert_eq!(output.lines().count(), 3);
+}
+
+#[test]
+fn every_flow_edit_command_has_success_and_validation_coverage() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    store
+        .create_flow(
+            "edit-matrix".into(),
+            "Edit matrix".into(),
+            "alice".into(),
+            ScheduleSpec::Once {
+                at: Utc::now() + Duration::hours(2),
+            },
+        )
+        .unwrap();
+    add_task(&store, directory.path(), "edit-matrix", "root");
+    store
+        .add_flow_task(FlowTaskInput {
+            flow_id: "edit-matrix".into(),
+            task_id: "child".into(),
+            name: "child".into(),
+            cwd: directory.path().to_string_lossy().into_owned(),
+            command: "echo child".into(),
+            retry: 0,
+            dependencies: vec![Dependency {
+                upstream_task_id: "root".into(),
+                status: DependencyStatus::Succeeded,
+            }],
+            depend_mode: DependencyMode::All,
+        })
+        .unwrap();
+    add_task(&store, directory.path(), "edit-matrix", "removable");
+    store.commit_flow("edit-matrix").unwrap();
+
+    cli(&home, directory.path())
+        .args(["flow", "show", "edit-matrix"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("flow_id=edit-matrix"))
+        .stdout(predicate::str::contains("task_id=child"));
+    cli(&home, directory.path())
+        .args(["flow", "list", "--user", "alice"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("edit-matrix"));
+    cli(&home, directory.path())
+        .args(["flow", "list", "--user", "nobody"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("edit-matrix").not());
+
+    cli(&home, directory.path())
+        .args(["flow", "edit", "begin", "edit-matrix"])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["flow", "task", "update", "edit-matrix", "child"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires at least one field"));
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "task",
+            "update",
+            "edit-matrix",
+            "child",
+            "--cwd",
+            "missing-directory",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--cwd must name an existing directory",
+        ));
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "task",
+            "update",
+            "edit-matrix",
+            "child",
+            "--cmd",
+            "echo discarded",
+            "--cwd",
+            directory.path().to_str().unwrap(),
+            "--retries",
+            "2",
+            "--clear-dependencies",
+            "--match",
+            "any",
+            "--revision",
+            "0",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["flow", "edit", "discard", "edit-matrix", "--revision", "0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("revision conflict"));
+    cli(&home, directory.path())
+        .args(["flow", "edit", "discard", "edit-matrix", "--revision", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("still frozen=true"));
+    let discarded = store.get_flow("edit-matrix").unwrap();
+    let child = discarded
+        .tasks
+        .iter()
+        .find(|task| task.task_id == "child")
+        .unwrap();
+    assert_eq!(child.command, "echo child");
+    assert_eq!(child.dependencies.len(), 1);
+
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "task",
+            "update",
+            "edit-matrix",
+            "child",
+            "--cmd",
+            "echo applied",
+            "--cwd",
+            directory.path().to_str().unwrap(),
+            "--retries",
+            "3",
+            "--after-failure",
+            "root",
+            "--match",
+            "any",
+            "--revision",
+            "1",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "task",
+            "remove",
+            "edit-matrix",
+            "removable",
+            "--revision",
+            "2",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "task",
+            "remove",
+            "edit-matrix",
+            "child",
+            "--scope",
+            "invalid",
+            "--revision",
+            "3",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "scope must be future, current, or both",
+        ));
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "task",
+            "remove",
+            "edit-matrix",
+            "child",
+            "--scope",
+            "current",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("require --run"));
+    cli(&home, directory.path())
+        .args(["flow", "schedule", "set", "edit-matrix"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "schedule set requires --at or --daily",
+        ));
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "edit-matrix",
+            "--schedule-timezone",
+            "UTC",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "can only modify an existing daily schedule",
+        ));
+    cli(&home, directory.path())
+        .args(["flow", "schedule", "set", "edit-matrix", "--daily", "04:05"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--schedule-timezone is required for a daily schedule",
+        ));
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "edit-matrix",
+            "--at",
+            "2099-02-03T04:05:06Z",
+            "--revision",
+            "3",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "edit-matrix",
+            "--at",
+            "2099-02-03T04:05:06Z",
+            "--daily",
+            "04:05",
+        ])
+        .assert()
+        .failure();
+    cli(&home, directory.path())
+        .args(["flow", "edit", "apply", "edit-matrix", "--revision", "4"])
+        .assert()
+        .success();
+
+    let applied = store.get_flow("edit-matrix").unwrap();
+    assert!(!applied.frozen);
+    assert_eq!(applied.tasks.len(), 2);
+    let child = applied
+        .tasks
+        .iter()
+        .find(|task| task.task_id == "child")
+        .unwrap();
+    assert_eq!(child.command, "echo applied");
+    assert_eq!(child.retry, 3);
+    assert_eq!(child.depend_mode, DependencyMode::Any);
+    assert_eq!(child.dependencies[0].status, DependencyStatus::Failed);
+
+    cli(&home, directory.path())
+        .args(["flow", "disable", "edit-matrix"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Disabled edit-matrix."));
+    assert!(!store.get_flow("edit-matrix").unwrap().enabled);
+    cli(&home, directory.path())
+        .args(["flow", "list", "--user", "alice"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("DISABLED"));
+    cli(&home, directory.path())
+        .args(["flow", "enable", "edit-matrix"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Enabled edit-matrix."));
+    assert!(store.get_flow("edit-matrix").unwrap().enabled);
+
+    cli(&home, directory.path())
+        .args(["flow", "edit", "begin", "edit-matrix"])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["flow", "list", "--user", "alice"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("FROZEN"));
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "edit-matrix",
+            "--daily",
+            "04:05",
+            "--schedule-timezone",
+            "UTC",
+            "--revision",
+            "4",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "switching between once and daily schedules is not supported",
+        ));
+    cli(&home, directory.path())
+        .args(["flow", "edit", "apply", "edit-matrix"])
+        .assert()
+        .success();
+    assert!(!store.get_flow("edit-matrix").unwrap().frozen);
+}
+
+#[test]
+fn flow_run_query_log_follow_and_whole_run_cancel_use_the_public_cli() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    runnable_flow(&store, directory.path(), "run-matrix");
+    let request_id = uuid::Uuid::new_v4();
+
+    for _ in 0..2 {
+        cli(&home, directory.path())
+            .args([
+                "flow",
+                "run",
+                "run-matrix",
+                "--request-id",
+                &request_id.to_string(),
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(request_id.to_string()));
+    }
+    let run = store.list_flow_runs("run-matrix").unwrap().remove(0);
+    assert_eq!(store.list_flow_runs("run-matrix").unwrap().len(), 1);
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "show",
+            "run-matrix",
+            "--run",
+            &run.run_id.to_string(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("run_id={}", run.run_id)))
+        .stdout(predicate::str::contains("task_id=root"));
+
+    let execution = store.claim_flow_task(Utc::now()).unwrap().unwrap();
+    store
+        .mark_flow_attempt_running(execution.attempt_id)
+        .unwrap();
+    store
+        .finish_flow_attempt(
+            execution.attempt_id,
+            FlowAttemptResult::Succeeded { exit_code: 0 },
+        )
+        .unwrap();
+    let log_dir = home
+        .join("runs")
+        .join("flows")
+        .join(run.run_id.to_string())
+        .join("root")
+        .join("attempt-1");
+    std::fs::create_dir_all(&log_dir).unwrap();
+    std::fs::write(log_dir.join("stdout.log"), b"followed output\n").unwrap();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "logs",
+            "run-matrix",
+            "--run",
+            &run.run_id.to_string(),
+            "--task",
+            "root",
+            "--follow",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("followed output"));
+
+    let cancel_request = uuid::Uuid::new_v4();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "run",
+            "run-matrix",
+            "--request-id",
+            &cancel_request.to_string(),
+        ])
+        .assert()
+        .success();
+    let cancel_run = store
+        .list_flow_runs("run-matrix")
+        .unwrap()
+        .into_iter()
+        .find(|item| item.run_id != run.run_id)
+        .unwrap();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "cancel",
+            "run-matrix",
+            "--run",
+            &cancel_run.run_id.to_string(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Cancelled flow run"));
+    assert_eq!(
+        store.get_flow_run(cancel_run.run_id).unwrap().state,
+        FlowRunState::Cancelled
+    );
+}
+
+#[test]
+fn flow_task_remove_cli_covers_current_and_both_scopes() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(home.join("stoker.db")).unwrap();
+
+    for scope in ["current", "both"] {
+        let flow_id = format!("remove-{scope}");
+        store
+            .create_flow(
+                flow_id.clone(),
+                flow_id.clone(),
+                "tester".into(),
+                ScheduleSpec::Once {
+                    at: Utc::now() + Duration::hours(2),
+                },
+            )
+            .unwrap();
+        add_task(&store, directory.path(), &flow_id, "root");
+        store
+            .add_flow_task(FlowTaskInput {
+                flow_id: flow_id.clone(),
+                task_id: "child".into(),
+                name: "child".into(),
+                cwd: directory.path().to_string_lossy().into_owned(),
+                command: "echo child".into(),
+                retry: 0,
+                dependencies: vec![Dependency {
+                    upstream_task_id: "root".into(),
+                    status: DependencyStatus::Succeeded,
+                }],
+                depend_mode: DependencyMode::All,
+            })
+            .unwrap();
+        store.commit_flow(&flow_id).unwrap();
+        if store.current_mode().unwrap() != ExecutionMode::Scheduled {
+            store.lock_queue().unwrap();
+            store.set_mode(ExecutionMode::Scheduled).unwrap();
+            store.unlock_queue().unwrap();
+        }
+        let run = store
+            .create_flow_run(&flow_id, "MANUAL", false, None)
+            .unwrap();
+        cli(&home, directory.path())
+            .args(["flow", "edit", "begin", &flow_id])
+            .assert()
+            .success();
+        cli(&home, directory.path())
+            .args([
+                "flow",
+                "task",
+                "remove",
+                &flow_id,
+                "child",
+                "--scope",
+                scope,
+                "--run",
+                &run.run_id.to_string(),
+            ])
+            .assert()
+            .success();
+        assert_eq!(
+            store
+                .get_flow_run(run.run_id)
+                .unwrap()
+                .tasks
+                .iter()
+                .find(|task| task.task_id == "child")
+                .unwrap()
+                .state,
+            TaskRunState::Skipped
+        );
+        let contains_child = store
+            .get_flow(&flow_id)
+            .unwrap()
+            .tasks
+            .iter()
+            .any(|task| task.task_id == "child");
+        assert_eq!(contains_child, scope == "current");
+    }
 }
 
 fn assert_aligned_columns(output: &str, headers: &[&str], values: &[String]) {

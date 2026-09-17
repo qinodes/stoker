@@ -1,4 +1,5 @@
 use chrono::{DateTime, Duration, NaiveTime, Timelike, Utc};
+use std::sync::{Arc, Barrier};
 use stoker::domain::flow::{
     Dependency, DependencyMode, DependencyStatus, ExecutionMode, FlowRunState, OccurrenceState,
     ScheduleSpec, TaskRunState, parse_once,
@@ -546,5 +547,298 @@ fn task_run_transitions_to_running_with_its_attempt() {
     assert_eq!(
         store.get_flow_run(run.run_id).unwrap().tasks[0].state,
         TaskRunState::Running
+    );
+}
+
+#[test]
+fn concurrent_claimers_create_only_one_run_and_attempt_for_one_occurrence() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("stoker.db");
+    let setup = Store::open(&database).unwrap();
+    create_scheduled_flow(
+        &setup,
+        directory.path(),
+        "claim-race",
+        ScheduleSpec::Once {
+            at: Utc::now() - Duration::seconds(1),
+        },
+    );
+    use_scheduled_mode(&setup);
+    let first_store = Arc::new(Store::open(&database).unwrap());
+    let second_store = Arc::new(Store::open(&database).unwrap());
+    let barrier = Arc::new(Barrier::new(3));
+    let now = Utc::now();
+
+    let first_barrier = Arc::clone(&barrier);
+    let first = Arc::clone(&first_store);
+    let first_handle = std::thread::spawn(move || {
+        first_barrier.wait();
+        first.claim_flow_task(now)
+    });
+    let second_barrier = Arc::clone(&barrier);
+    let second = Arc::clone(&second_store);
+    let second_handle = std::thread::spawn(move || {
+        second_barrier.wait();
+        second.claim_flow_task(now)
+    });
+    barrier.wait();
+
+    let results = [first_handle.join().unwrap(), second_handle.join().unwrap()];
+    assert!(results.iter().all(Result::is_ok));
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| result.as_ref().unwrap().is_some())
+            .count(),
+        1
+    );
+    assert_eq!(setup.list_flow_runs("claim-race").unwrap().len(), 1);
+    assert_eq!(setup.list_occurrences("claim-race").unwrap().len(), 1);
+    assert_eq!(
+        setup
+            .get_flow_run(setup.list_flow_runs("claim-race").unwrap()[0].run_id)
+            .unwrap()
+            .tasks[0]
+            .attempt_count,
+        1
+    );
+}
+
+#[test]
+fn concurrent_manual_requests_with_one_request_id_return_one_durable_run() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("stoker.db");
+    let setup = Store::open(&database).unwrap();
+    create_runnable_flow(&setup, directory.path(), "request-race");
+    let first_store = Arc::new(Store::open(&database).unwrap());
+    let second_store = Arc::new(Store::open(&database).unwrap());
+    let barrier = Arc::new(Barrier::new(3));
+    let request_id = Uuid::new_v4();
+
+    let first_barrier = Arc::clone(&barrier);
+    let first = Arc::clone(&first_store);
+    let first_handle = std::thread::spawn(move || {
+        first_barrier.wait();
+        first.create_flow_run("request-race", "MANUAL", false, Some(request_id))
+    });
+    let second_barrier = Arc::clone(&barrier);
+    let second = Arc::clone(&second_store);
+    let second_handle = std::thread::spawn(move || {
+        second_barrier.wait();
+        second.create_flow_run("request-race", "MANUAL", false, Some(request_id))
+    });
+    barrier.wait();
+
+    let first = first_handle.join().unwrap().unwrap();
+    let second = second_handle.join().unwrap().unwrap();
+    assert_eq!(first.run_id, second.run_id);
+    assert_eq!(setup.list_flow_runs("request-race").unwrap().len(), 1);
+    assert_eq!(
+        setup.manual_request(request_id).unwrap().run_id,
+        Some(first.run_id)
+    );
+}
+
+#[test]
+fn concurrent_freeze_and_claim_never_lose_an_authorized_execution() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("stoker.db");
+    let setup = Store::open(&database).unwrap();
+    create_runnable_flow(&setup, directory.path(), "freeze-race");
+    let run = setup
+        .create_flow_run("freeze-race", "MANUAL", false, None)
+        .unwrap();
+    let freeze_store = Arc::new(Store::open(&database).unwrap());
+    let claim_store = Arc::new(Store::open(&database).unwrap());
+    let barrier = Arc::new(Barrier::new(3));
+
+    let freeze_barrier = Arc::clone(&barrier);
+    let freeze = Arc::clone(&freeze_store);
+    let freeze_handle = std::thread::spawn(move || {
+        freeze_barrier.wait();
+        freeze.freeze_flow("freeze-race")
+    });
+    let claim_barrier = Arc::clone(&barrier);
+    let claim = Arc::clone(&claim_store);
+    let claim_handle = std::thread::spawn(move || {
+        claim_barrier.wait();
+        claim.claim_flow_task(Utc::now())
+    });
+    barrier.wait();
+
+    freeze_handle.join().unwrap().unwrap();
+    let claimed = claim_handle.join().unwrap().unwrap();
+    assert!(setup.get_flow("freeze-race").unwrap().frozen);
+    let task = &setup.get_flow_run(run.run_id).unwrap().tasks[0];
+    match claimed {
+        Some(execution) => {
+            assert_eq!(execution.run_id, run.run_id);
+            assert_eq!(task.state, TaskRunState::Starting);
+            assert_eq!(task.attempt_count, 1);
+        }
+        None => {
+            assert_eq!(task.state, TaskRunState::Ready);
+            assert_eq!(task.attempt_count, 0);
+        }
+    }
+}
+
+#[test]
+fn concurrent_apply_and_claim_publish_the_whole_draft_before_intake() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("stoker.db");
+    let setup = Store::open(&database).unwrap();
+    create_runnable_flow(&setup, directory.path(), "apply-race");
+    let run = setup
+        .create_flow_run("apply-race", "MANUAL", false, None)
+        .unwrap();
+    setup.freeze_flow("apply-race").unwrap();
+    setup
+        .set_flow_task_draft(
+            "apply-race",
+            "root",
+            Some("echo applied"),
+            None,
+            Some(2),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let apply_store = Arc::new(Store::open(&database).unwrap());
+    let claim_store = Arc::new(Store::open(&database).unwrap());
+    let barrier = Arc::new(Barrier::new(3));
+
+    let apply_barrier = Arc::clone(&barrier);
+    let apply = Arc::clone(&apply_store);
+    let apply_handle = std::thread::spawn(move || {
+        apply_barrier.wait();
+        apply.unfreeze_flow("apply-race", Some(1))
+    });
+    let claim_barrier = Arc::clone(&barrier);
+    let claim = Arc::clone(&claim_store);
+    let claim_handle = std::thread::spawn(move || {
+        claim_barrier.wait();
+        claim.claim_flow_task(Utc::now())
+    });
+    barrier.wait();
+
+    apply_handle.join().unwrap().unwrap();
+    let raced_claim = claim_handle.join().unwrap().unwrap();
+    let applied = setup.get_flow("apply-race").unwrap();
+    assert!(!applied.frozen);
+    assert_eq!(applied.tasks[0].command, "echo applied");
+    assert_eq!(applied.tasks[0].retry, 2);
+    let execution = match raced_claim {
+        Some(execution) => execution,
+        None => setup.claim_flow_task(Utc::now()).unwrap().unwrap(),
+    };
+    assert_eq!(execution.run_id, run.run_id);
+    assert_eq!(
+        setup.get_flow_run(run.run_id).unwrap().tasks[0].attempt_count,
+        1
+    );
+}
+
+#[test]
+fn concurrent_cancel_and_finish_leave_one_valid_terminal_flow_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("stoker.db");
+    let setup = Store::open(&database).unwrap();
+    create_runnable_flow(&setup, directory.path(), "cancel-finish-race");
+    let run = setup
+        .create_flow_run("cancel-finish-race", "MANUAL", false, None)
+        .unwrap();
+    let execution = setup.claim_flow_task(Utc::now()).unwrap().unwrap();
+    setup
+        .mark_flow_attempt_running(execution.attempt_id)
+        .unwrap();
+    let cancel_store = Arc::new(Store::open(&database).unwrap());
+    let finish_store = Arc::new(Store::open(&database).unwrap());
+    let barrier = Arc::new(Barrier::new(3));
+
+    let cancel_barrier = Arc::clone(&barrier);
+    let cancel = Arc::clone(&cancel_store);
+    let cancel_handle = std::thread::spawn(move || {
+        cancel_barrier.wait();
+        cancel.cancel_flow_task("cancel-finish-race", "root", run.run_id)
+    });
+    let finish_barrier = Arc::clone(&barrier);
+    let finish = Arc::clone(&finish_store);
+    let finish_handle = std::thread::spawn(move || {
+        finish_barrier.wait();
+        finish.finish_flow_attempt(
+            execution.attempt_id,
+            FlowAttemptResult::Succeeded { exit_code: 0 },
+        )
+    });
+    barrier.wait();
+
+    let cancel_result = cancel_handle.join().unwrap();
+    let finish_result = finish_handle.join().unwrap();
+    assert!(finish_result.is_ok());
+    assert!(
+        cancel_result.is_ok()
+            || cancel_result
+                .unwrap_err()
+                .to_string()
+                .contains("already terminal")
+    );
+    let final_run = setup.get_flow_run(run.run_id).unwrap();
+    assert!(matches!(
+        final_run.state,
+        FlowRunState::Succeeded | FlowRunState::Cancelled
+    ));
+    assert!(final_run.state.is_terminal());
+    assert!(final_run.tasks[0].state.is_terminal());
+}
+
+#[test]
+fn concurrent_manual_and_automatic_start_never_overlap_one_flow() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("stoker.db");
+    let setup = Store::open(&database).unwrap();
+    create_scheduled_flow(
+        &setup,
+        directory.path(),
+        "manual-auto-race",
+        ScheduleSpec::Once {
+            at: Utc::now() - Duration::seconds(1),
+        },
+    );
+    use_scheduled_mode(&setup);
+    let manual_store = Arc::new(Store::open(&database).unwrap());
+    let automatic_store = Arc::new(Store::open(&database).unwrap());
+    let barrier = Arc::new(Barrier::new(3));
+
+    let manual_barrier = Arc::clone(&barrier);
+    let manual = Arc::clone(&manual_store);
+    let manual_handle = std::thread::spawn(move || {
+        manual_barrier.wait();
+        manual.create_flow_run("manual-auto-race", "MANUAL", false, Some(Uuid::new_v4()))
+    });
+    let automatic_barrier = Arc::clone(&barrier);
+    let automatic = Arc::clone(&automatic_store);
+    let automatic_handle = std::thread::spawn(move || {
+        automatic_barrier.wait();
+        automatic.claim_flow_task(Utc::now())
+    });
+    barrier.wait();
+
+    let manual_result = manual_handle.join().unwrap();
+    let automatic_result = automatic_handle.join().unwrap();
+    assert!(automatic_result.is_ok());
+    assert!(
+        manual_result.is_ok()
+            || manual_result
+                .unwrap_err()
+                .to_string()
+                .contains("already has an active run")
+    );
+    let runs = setup.list_flow_runs("manual-auto-race").unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(
+        runs.iter().filter(|run| !run.state.is_terminal()).count(),
+        1
     );
 }
