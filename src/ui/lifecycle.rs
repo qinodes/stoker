@@ -12,7 +12,7 @@ use crate::Store;
 use crate::config::StokerPaths;
 use crate::ipc::ServiceClient;
 use crate::output;
-use crate::process::configure_detached;
+use crate::process::spawn_detached;
 
 use super::dto::UiMetadata;
 use super::router::build_router;
@@ -53,8 +53,7 @@ pub fn start(paths: StokerPaths, host: IpAddr, port: u16, open: bool) -> anyhow:
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::from(log))
         .stderr(std::process::Stdio::from(log_err));
-    configure_detached(&mut command);
-    let child = command.spawn().context("start Stoker UI server")?;
+    let child = spawn_detached(&mut command).context("start Stoker UI server")?;
 
     let mut gateway = SystemUiStartupGateway {
         paths,

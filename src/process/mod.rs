@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
-use std::process::{Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus};
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
@@ -12,6 +12,8 @@ use tokio::task::JoinHandle;
 mod unix;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_detached;
 
 /// The immutable inputs needed to start one managed process.
 #[derive(Debug, Clone)]
@@ -162,6 +164,22 @@ pub(crate) fn configure_detached(command: &mut Command) {
                     .map_err(std::io::Error::from)
             });
         }
+    }
+}
+
+/// Spawn a configured long-running helper without leaking the launcher's
+/// redirected standard-stream handles into the detached child.
+pub(crate) fn spawn_detached(command: &mut Command) -> io::Result<Child> {
+    configure_detached(command);
+
+    #[cfg(windows)]
+    {
+        windows_detached::spawn(command)
+    }
+
+    #[cfg(not(windows))]
+    {
+        command.spawn()
     }
 }
 

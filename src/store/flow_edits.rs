@@ -24,7 +24,10 @@ impl Store {
     pub fn add_flow_task(&self, input: FlowTaskInput) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = load_flow_current(&transaction, &input.flow_id)?;
+        // A frozen definition may already have task or schedule changes in its
+        // future draft. Add the new task to that draft instead of rebuilding
+        // from the committed graph and silently discarding earlier edits.
+        let current = load_flow(&transaction, &input.flow_id)?;
         if current.committed && !current.frozen {
             return Err(StoreError::InvalidData(
                 "committed flow must be frozen before editing".into(),
@@ -69,7 +72,10 @@ impl Store {
     ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let current = load_flow_current(&transaction, &input.flow_id)?;
+        // Keep every edit already present in draft_json. load_flow_current
+        // intentionally returns the committed graph for apply operations, so
+        // using it here would overwrite earlier draft changes.
+        let current = load_flow(&transaction, &input.flow_id)?;
         if current.committed && !current.frozen {
             return Err(StoreError::InvalidData(
                 "committed flow must be frozen before editing".into(),

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 
-use crate::process::configure_detached;
+use crate::process::spawn_detached;
 use crate::service::Service;
 use crate::{ServiceClient, StokerPaths, is_service_unavailable};
 
@@ -124,8 +124,7 @@ pub(crate) fn start(paths: &StokerPaths) -> anyhow::Result<()> {
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(log_err));
-    configure_detached(&mut command);
-    let child = command.spawn().context("start scheduler service")?;
+    let child = spawn_detached(&mut command).context("start scheduler service")?;
 
     let mut gateway = SystemStartupGateway {
         paths: paths.clone(),

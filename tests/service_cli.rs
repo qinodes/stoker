@@ -2,9 +2,13 @@ mod support;
 
 use predicates::prelude::*;
 use rusqlite::Connection;
+#[cfg(windows)]
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use stoker::{JobState, NewJob, ServiceClient, ServiceStatus, StokerPaths, Store};
 use support::{TempStokerHome, stoker_with_home};
@@ -49,6 +53,18 @@ fn service_paths(home: &TempStokerHome) -> StokerPaths {
 
 struct ServiceCleanup {
     home: PathBuf,
+}
+
+#[cfg(windows)]
+fn read_stream<R>(mut stream: R, sender: mpsc::Sender<std::io::Result<Vec<u8>>>)
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stream.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = sender.send(result);
+    });
 }
 
 impl Drop for ServiceCleanup {
@@ -136,6 +152,52 @@ fn start_detaches_and_status_reports_running_service() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Scheduler stopped."));
+}
+
+#[cfg(windows)]
+#[test]
+fn detached_start_closes_redirected_launcher_pipes() {
+    let home = TempStokerHome::new();
+    let _cleanup = ServiceCleanup {
+        home: home.path().to_path_buf(),
+    };
+    let mut launcher = Command::new(assert_cmd::cargo::cargo_bin("stoker"))
+        .arg("start")
+        .env("STOKER_HOME", home.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert!(launcher.wait().unwrap().success());
+
+    let stdout = launcher.stdout.take().unwrap();
+    let stderr = launcher.stderr.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    read_stream(stdout, tx.clone());
+    read_stream(stderr, tx.clone());
+    drop(tx);
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut outputs = Vec::new();
+    for _ in 0..2 {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        outputs.push(
+            rx.recv_timeout(remaining)
+                .expect("detached scheduler kept a redirected launcher pipe open")
+                .unwrap(),
+        );
+    }
+    assert!(
+        outputs
+            .iter()
+            .any(|bytes| { String::from_utf8_lossy(bytes).contains("Scheduler started.") })
+    );
+
+    stoker_with_home(&home)
+        .args(["status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Scheduler: running"));
 }
 
 #[test]

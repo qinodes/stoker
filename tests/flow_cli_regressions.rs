@@ -607,6 +607,88 @@ fn edit_namespace_preserves_freeze_draft_and_revision_semantics() {
 }
 
 #[test]
+fn adding_a_task_preserves_earlier_frozen_draft_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    runnable_flow(&store, directory.path(), "draft-merge");
+
+    cli(&home, directory.path())
+        .args(["flow", "edit", "begin", "draft-merge"])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "task",
+            "update",
+            "draft-merge",
+            "root",
+            "--retries",
+            "5",
+            "--revision",
+            "0",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "schedule",
+            "set",
+            "draft-merge",
+            "--at",
+            "2099-01-01T00:00:00Z",
+            "--revision",
+            "1",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args([
+            "flow",
+            "task",
+            "add",
+            "draft-merge",
+            "extra",
+            "--name",
+            "extra",
+            "--cmd",
+            "echo extra",
+            "--revision",
+            "2",
+        ])
+        .assert()
+        .success();
+    cli(&home, directory.path())
+        .args(["flow", "edit", "apply", "draft-merge", "--revision", "3"])
+        .assert()
+        .success();
+
+    let flow = store.get_flow("draft-merge").unwrap();
+    assert!(!flow.frozen);
+    assert_eq!(flow.tasks.len(), 2);
+    assert_eq!(
+        flow.tasks
+            .iter()
+            .find(|task| task.task_id == "root")
+            .unwrap()
+            .retry,
+        5
+    );
+    assert!(flow.tasks.iter().any(|task| task.task_id == "extra"));
+    assert_eq!(
+        flow.schedule,
+        Some(ScheduleSpec::Once {
+            at: chrono::DateTime::parse_from_rfc3339("2099-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+        })
+    );
+}
+
+#[test]
 fn flow_selectors_filter_show_logs_and_cancel_without_task_subcommands() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path().join("home");

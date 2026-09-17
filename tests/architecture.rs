@@ -411,8 +411,8 @@ fn long_running_start_commands_use_the_shared_detachment_policy() {
     let ui = fs::read_to_string(source_root.join("ui/lifecycle.rs")).unwrap();
     let process = fs::read_to_string(source_root.join("process/mod.rs")).unwrap();
 
-    assert!(scheduler.contains("configure_detached(&mut command)"));
-    assert!(ui.contains("configure_detached(&mut command)"));
+    assert!(scheduler.contains("spawn_detached(&mut command)"));
+    assert!(ui.contains("spawn_detached(&mut command)"));
     assert!(
         process.contains("command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)")
     );
