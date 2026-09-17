@@ -389,6 +389,150 @@ stoker queue unlock
 
 `stoker policy show` または `stoker policy get <KEY>` でポリシーの値を確認できます。容量超過やログ書き込みエラーが発生しても子プロセスの出力は読み続けます。古い分割ログが破棄された場合、CLI はログが切り詰められたことを表示します。空き容量が reserve を下回ると、scheduler は次の queued Job を開始せず、`stoker status` に警告を表示します。
 
+## Flow と scheduled Job
+
+Flow は複数の task を 1 回の実行にまとめ、上流 task の成功または失敗を依存条件として宣言できます。
+
+### 正式な Flow コマンドインターフェース
+
+以下は現在ユーザー向けに提供している完全な Flow コマンドツリーです。`FLOW_ID` と `TASK_ID` は位置引数です。実行記録を選択する `RUN_ID`、task、attempt は常に option で指定します。
+
+~~~text
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --at <RFC3339>
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --daily <HH:mm> [--schedule-timezone <ZONE>]
+stoker flow commit <FLOW_ID>
+stoker flow list [--user <USER>]
+stoker flow show <FLOW_ID> [--run <RUN_ID> [--task <TASK_ID>]]
+stoker flow runs <FLOW_ID>
+stoker flow occurrences <FLOW_ID>
+
+stoker flow run <FLOW_ID> [--replace-next] [--request-id <UUID>]
+stoker flow logs <FLOW_ID> --run <RUN_ID> --task <TASK_ID> [--attempt <N>] [--follow]
+stoker flow cancel <FLOW_ID> --run <RUN_ID> [--task <TASK_ID>]
+
+stoker flow task add <FLOW_ID> <TASK_ID> --name <NAME> --cmd <COMMAND>
+    [--after <TASK_ID>]... [--after-failure <TASK_ID>]...
+    [--match all|any] [--retries <N>] [--revision <N>]
+
+stoker flow task update <FLOW_ID> <TASK_ID>
+    [--cmd <COMMAND>] [--cwd <DIR>] [--retries <N>]
+    [--after <TASK_ID>]... [--after-failure <TASK_ID>]...
+    [--match all|any] [--clear-dependencies] [--revision <N>]
+
+stoker flow task remove <FLOW_ID> <TASK_ID>
+    [--scope future|current|both] [--run <RUN_ID>] [--revision <N>]
+
+stoker flow schedule set <FLOW_ID> --at <RFC3339> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --daily <HH:mm> [--schedule-timezone <ZONE>] [--revision <N>]
+stoker flow schedule set <FLOW_ID> --schedule-timezone <ZONE> [--revision <N>]
+
+stoker flow edit begin <FLOW_ID>
+stoker flow edit apply <FLOW_ID> [--revision <N>]
+stoker flow edit discard <FLOW_ID> --revision <N>
+
+stoker flow disable <FLOW_ID>
+stoker flow enable <FLOW_ID>
+~~~
+
+重要な option の規則：
+
+- `--after TASK_ID` は上流 task の成功を条件にし、`--after-failure TASK_ID` は上流 task の失敗を条件にします。どちらも複数回指定できます。
+- `--match all|any` は、複数の dependency のすべてを満たす必要があるか、いずれか 1 つでよいかを指定します。
+- `--retries N` は失敗後に許可する retry 回数です。`0` は retry しません。
+- `--revision N` は draft の compare-and-swap revision です。revision が一致しない場合、変更は適用されません。
+- `--attempt N` は `1` から始まります。省略すると、`flow logs` はその task のすべての attempt を表示します。
+- `--cmd` はプラットフォームの shell に渡す 1 つの command string を受け取ります。空白や shell operator を含む場合は引用符で囲んでください。
+- `flow edit discard` は draft だけを破棄し、Flow は frozen のままです。freeze を解除するには、その後に `flow edit apply` を実行してください。
+- Flow は `scheduled` mode にのみ存在します。mode を切り替える前に queue を手動で lock してください。`mode set` は自動的に lock または unlock せず、成功後も queue は locked のままです。
+
+~~~bash
+# scheduled definition を作成する前に workspace mode を変更
+stoker queue lock
+stoker mode set scheduled
+stoker queue unlock
+
+# scheduled flow を作成
+stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo
+
+# task を実行するディレクトリから task を追加
+stoker flow task add nightly prepare --name prepare --cmd "python prepare.py"
+stoker flow task add nightly train --name train --cmd "python train.py" --after prepare
+stoker flow commit nightly
+
+~~~
+
+### Flow CLI 完全リファレンス
+
+次の表では `nightly` を `FLOW_ID`、`prepare`／`train` を `TASK_ID` として使用します。`RUN_UUID`、`REQUEST_UUID`、`OCCURRENCE_UUID` は Stoker が出力する UUID です。実際の値に置き換えてください。
+
+| 用途 | コマンド | 動作と重要な option | 成功時の出力例 |
+|---|---|---|---|
+| mode を表示 | `stoker mode show` | 現在の workspace が `serial` または `scheduled` mode のどちらかを表示します。 | `scheduled` |
+| mode を切り替え | `stoker queue lock`<br>`stoker mode set serial` または `stoker mode set scheduled`<br>`stoker queue unlock` | 先に queue を手動で lock する必要があります。execution が開始中、実行中、キャンセル中、クリーンアップ中、または recovery 中の場合は切り替えを拒否します。`mode set` は自動的に lock／unlock しません。成功後も queue は locked のため、確認してから解除してください。 | `Mode set to scheduled; queue remains locked.` |
+| Flow を作成 | `stoker flow create nightly --user alice --name nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo` | Flow は `scheduled` mode でのみ使用できます。`--at RFC3339` または `--daily HH:mm` のどちらかを指定してください。daily timezone には IANA 名を使用します。`--schedule-timezone` を省略すると、設定ファイルの timezone、次にシステムのローカル timezone を使用します。システム timezone を判定できない場合は明示的な指定が必要です。serial ですぐに実行する場合は standalone の `stoker add` を使用してください。 | `Created flow nightly (DRAFT, draft revision 0).` |
+| task を追加 | `stoker flow task add nightly prepare --name prepare --cmd "python prepare.py"` | 現在のディレクトリを作業ディレクトリとする task を追加します。`--retries N`、複数の `--after TASK_ID`／`--after-failure TASK_ID`、`--match all\|any`、`--revision N` を指定できます。 | `Added task to flow nightly (draft revision 0).` |
+| Flow を commit | `stoker flow commit nightly` | 完全な task graph を検証して draft を commit します。scheduler が実行できるのは commit 後です。 | `Committed flow nightly (2 task(s)).` |
+| Flow を一覧表示 | `stoker flow list [--user alice]` | Flow ごとに schedule、status、active run、次回の trigger 時刻を含む 1 行の整列済み概要を表示します。task は展開しません。 | `FLOW_ID  NAME  USER  SCHEDULE  STATUS  ACTIVE  NEXT` |
+| definition を表示 | `stoker flow show nightly` | Flow definition、status、schedule、revision、task ID、dependency を JSON-like 形式で表示します。 | `"flow_id": "nightly"`<br>`"committed": true`<br>`"task_id": "train"` |
+| 手動実行 | `stoker flow run nightly [--replace-next] [--request-id REQUEST_UUID]` | manual run を作成します。`--replace-next` は、この実行の開始後に次の scheduled occurrence を置き換えます。同じ `--request-id` を再送すると同じ結果を取得します。 | `Created flow run RUN_UUID for nightly (request-id REQUEST_UUID).` |
+| run を一覧表示 | `stoker flow runs nightly` | すべての実行記録を整列した列で表示します。`RUN_ID` 列が後続コマンドで使用する `RUN_UUID` です。 | 完全な出力は下記を参照してください。 |
+| run を表示 | `stoker flow show nightly --run RUN_UUID` | 1 回の run の source、全体の state、各 task の state と attempt 数を JSON-like 形式で表示します。 | `"run_id": "RUN_UUID"`<br>`"source": "MANUAL"`<br>`"state": "SUCCEEDED"` |
+| occurrence を一覧表示 | `stoker flow occurrences nightly` | 自動 schedule の occurrence、UTC の due time、state、reason を整列した列で表示します。 | 完全な出力は下記を参照してください。 |
+| task run を表示 | `stoker flow show nightly --run RUN_UUID --task prepare` | 指定した run の JSON-like 出力を 1 つの task に絞り込み、state と attempt 数を表示します。 | `"task_id": "prepare"`<br>`"state": "SUCCEEDED"`<br>`"attempts": 1` |
+| task log を表示 | `stoker flow logs nightly --run RUN_UUID --task prepare [--attempt N] [-f]` | stdout/stderr を表示します。`--attempt` を省略するとすべての attempt を表示し、`-f`／`--follow` は task が終了するまで出力を追跡します。 | `--- .../attempt-1/stdout.log ---`<br>`task output` |
+| Flow run をキャンセル | `stoker flow cancel nightly --run RUN_UUID` | 指定した run と未完了 task のキャンセル要求を記録します。括弧内はコマンド完了時に読み戻した run state です。プロセスのクリーンアップは非同期のため、まだ `Running`、すでに `Cancelling`、または `Cancelled` の場合があります。 | `Cancelled flow run RUN_UUID (STATE).` |
+| task をキャンセル | `stoker flow cancel nightly --run RUN_UUID --task prepare` | 指定した run の task だけをキャンセルします。括弧内は同様にコマンド完了時に読み戻した run state で、実行中のプロセスはバックグラウンドで停止およびクリーンアップされます。 | `Cancelled task prepare in run RUN_UUID (STATE).` |
+| 編集を開始 | `stoker flow edit begin nightly` | commit 済み Flow を freeze し、新しい run、task、retry の intake を一時停止します。future draft は最初の future-scope 変更時に作成されます。実行中のプロセスは継続します。 | `Flow 'nightly' is frozen for editing.` |
+| task を更新 | `stoker flow task update nightly train [--cmd CMD] [--cwd DIR] [--retries N] [--after TASK] [--after-failure TASK] [--match all\|any] [--clear-dependencies] [--revision N]` | future draft を更新します。少なくとも 1 つの項目が必要で、dependency option は複数回指定できます。 | `Updated task train in flow nightly (draft revision 1).` |
+| task を削除 | `stoker flow task remove nightly train [--scope future\|current\|both] [--run RUN_UUID] [--revision N]` | 既定の scope は `future` です。`current`／`both` は指定した active run に適用され、`--run` が必要です。Flow は frozen でなければなりません。 | `Draft revision 2 for flow nightly.` |
+| schedule を変更 | `stoker flow schedule set nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow schedule set nightly --schedule-timezone UTC` | frozen Flow の future schedule を変更し、`--revision N` を指定できます。既存の once Flow は別の future once 時刻にのみ変更でき、daily Flow は daily 時刻または timezone のみ変更できます。once と daily は相互に変更できません。timezone だけの変更は daily Flow にのみ使用できます。non-pending occurrence がある terminal once Flow は再度 schedule できないため、新しい Flow を作成してください。 | `Updated flow nightly draft revision 2.` |
+| draft を破棄 | `stoker flow edit discard nightly --revision N` | 未適用の future 変更を破棄します。Flow は frozen のままです。 | `Discarded draft for nightly (still frozen=true).` |
+| 編集を適用 | `stoker flow edit apply nightly [--revision N]` | future draft がある場合は、検証して適用し、graph revision を増やして Flow の freeze を解除します。current-scope の操作だけを行い future draft がない場合は、`--revision` を省略して直接 freeze を解除します。このコマンドはグローバル queue lock を解除しません。 | `Applied edits to nightly (graph revision 2).` |
+| 自動 trigger を無効化 | `stoker flow disable nightly` | 今後の automatic trigger を停止します。有効な manual run は引き続き実行できます。 | `Disabled nightly.` |
+| 自動 trigger を有効化 | `stoker flow enable nightly` | 今後の automatic trigger を再開します。 | `Enabled nightly.` |
+| 冪等 request を照会 | `stoker request show REQUEST_UUID` | manual run の request ID から、対応する Flow、run UUID、result を照会します。 | `request_id=REQUEST_UUID flow_id=nightly run_id=RUN_UUID result=CREATED` |
+| recovery を reconcile | `stoker recovery reconcile RUN_UUID --confirm-stopped` | 再起動によって run が `Recovering` になり、そのプロセスが停止したことを手動で確認済みの場合にのみ使用します。すべての recovery を解決してから queue を unlock してください。 | `Reconciled recovery for RUN_UUID; queue may be unlocked after all recoveries are resolved.` |
+
+`flow runs` は実際の内容から列幅を計算して整列します。
+
+```text
+RUN_ID                                FLOW_ID  STATE     SOURCE
+------------------------------------  -------  --------  ------
+2238b174-1480-48c0-b1b7-e8ce36bca1b7  nightly  Starting  MANUAL
+```
+
+`flow occurrences` も同じ整列形式を使用し、`DUE_AT_UTC` は常に UTC で表示します。
+
+```text
+OCCURRENCE_ID                         FLOW_ID  STATE    DUE_AT_UTC                 REASON
+------------------------------------  -------  -------  -------------------------  ------
+6560cda6-92a3-4429-955a-16aa3a1c3618  nightly  Pending  2099-01-01T00:00:00+00:00
+```
+
+Flow コマンドは常に `stoker flow` で始まります。トップレベルの scheduled-job コマンドは standalone Job の UUID だけを受け取ります。完全な引数は `stoker flow --help`、`stoker flow task --help`、各サブコマンドの `--help` で確認できます。
+
+One-time schedule は秒と明示的な UTC offset を含む RFC 3339 を使用します。例：
+`2026-09-15T23:30:00+09:00`。Daily schedule は `HH:mm` と IANA timezone を使用します。
+実行時刻を過ぎた daily occurrence は再実行しません。DST に存在しない時刻はスキップし、
+重複する時刻では早い方の instant を使用します。
+
+commit 済み Flow を変更するには、編集を開始して future draft を変更し、最後に適用します。
+draft revision を compare-and-swap に使用できます。
+
+~~~bash
+stoker flow edit begin nightly
+stoker flow task update nightly train --retries 2 --revision 0
+stoker flow edit apply nightly --revision 1
+~~~
+
+再起動後に run が `RECOVERING` のままの場合は、process が停止したことを確認してから
+reconcile を実行し、最後に queue lock を解除します。
+
+~~~bash
+stoker recovery reconcile <RUN_ID> --confirm-stopped
+stoker queue unlock
+~~~
+
 ## SQLite の検査と復元
 
 ```bash

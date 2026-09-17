@@ -396,6 +396,150 @@ stoker queue unlock
 
 Use `stoker policy show` or `stoker policy get <KEY>` to inspect the effective policy values. A limit reached or a log write failure does not stop reading the child process output; older log segments may be discarded and the CLI reports that the log is truncated. Low free space blocks the next queued job and is reported by `stoker status`.
 
+## Flows and scheduled jobs
+
+A flow groups multiple tasks into one run and can declare dependencies on upstream success or failure:
+
+### Official Flow command interface
+
+The following is the complete user-facing Flow command tree. `FLOW_ID` and `TASK_ID` are positional arguments; `RUN_ID`, task, and attempt selectors for execution records are always options.
+
+~~~text
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --at <RFC3339>
+stoker flow create <FLOW_ID> --user <USER> --name <NAME> --daily <HH:mm> [--schedule-timezone <ZONE>]
+stoker flow commit <FLOW_ID>
+stoker flow list [--user <USER>]
+stoker flow show <FLOW_ID> [--run <RUN_ID> [--task <TASK_ID>]]
+stoker flow runs <FLOW_ID>
+stoker flow occurrences <FLOW_ID>
+
+stoker flow run <FLOW_ID> [--replace-next] [--request-id <UUID>]
+stoker flow logs <FLOW_ID> --run <RUN_ID> --task <TASK_ID> [--attempt <N>] [--follow]
+stoker flow cancel <FLOW_ID> --run <RUN_ID> [--task <TASK_ID>]
+
+stoker flow task add <FLOW_ID> <TASK_ID> --name <NAME> --cmd <COMMAND>
+    [--after <TASK_ID>]... [--after-failure <TASK_ID>]...
+    [--match all|any] [--retries <N>] [--revision <N>]
+
+stoker flow task update <FLOW_ID> <TASK_ID>
+    [--cmd <COMMAND>] [--cwd <DIR>] [--retries <N>]
+    [--after <TASK_ID>]... [--after-failure <TASK_ID>]...
+    [--match all|any] [--clear-dependencies] [--revision <N>]
+
+stoker flow task remove <FLOW_ID> <TASK_ID>
+    [--scope future|current|both] [--run <RUN_ID>] [--revision <N>]
+
+stoker flow schedule set <FLOW_ID> --at <RFC3339> [--revision <N>]
+stoker flow schedule set <FLOW_ID> --daily <HH:mm> [--schedule-timezone <ZONE>] [--revision <N>]
+stoker flow schedule set <FLOW_ID> --schedule-timezone <ZONE> [--revision <N>]
+
+stoker flow edit begin <FLOW_ID>
+stoker flow edit apply <FLOW_ID> [--revision <N>]
+stoker flow edit discard <FLOW_ID> --revision <N>
+
+stoker flow disable <FLOW_ID>
+stoker flow enable <FLOW_ID>
+~~~
+
+Important option rules:
+
+- `--after TASK_ID` makes an upstream task's success a prerequisite; `--after-failure TASK_ID` makes its failure a prerequisite. Both may be repeated.
+- `--match all|any` controls whether all dependencies or any dependency must match.
+- `--retries N` is the number of retries allowed after failure; `0` disables retries.
+- `--revision N` is the draft's compare-and-swap revision. A change is not applied if the revision does not match.
+- `--attempt N` starts at `1`. If omitted, `flow logs` shows all attempts for the task.
+- `--cmd` accepts one command string for the platform shell. Quote it when it contains spaces or shell operators.
+- `flow edit discard` discards only the draft and leaves the flow frozen; run `flow edit apply` afterward to unfreeze it.
+- Flows exist only in `scheduled` mode. Lock the queue yourself before changing modes; `mode set` does not lock or unlock it automatically, and the queue remains locked after a successful change.
+
+~~~bash
+# Change the workspace mode before creating a scheduled definition
+stoker queue lock
+stoker mode set scheduled
+stoker queue unlock
+
+# Create a scheduled flow
+stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo
+
+# Add tasks from the directories where they should run
+stoker flow task add nightly prepare --name prepare --cmd "python prepare.py"
+stoker flow task add nightly train --name train --cmd "python train.py" --after prepare
+stoker flow commit nightly
+
+~~~
+
+### Complete Flow CLI reference
+
+The table uses `nightly` as the `FLOW_ID` and `prepare`/`train` as `TASK_ID` values. `RUN_UUID`, `REQUEST_UUID`, and `OCCURRENCE_UUID` are UUIDs printed by Stoker; replace them with the actual values.
+
+| Purpose | Command | Behavior and important options | Example successful output |
+|---|---|---|---|
+| Show mode | `stoker mode show` | Shows whether the workspace is in `serial` or `scheduled` mode. | `scheduled` |
+| Change mode | `stoker queue lock`<br>`stoker mode set serial` or `stoker mode set scheduled`<br>`stoker queue unlock` | You must lock the queue first. The change is rejected while an execution is starting, running, cancelling, being cleaned up, or recovering. `mode set` does not lock or unlock automatically; after success, verify the change and then unlock the queue. | `Mode set to scheduled; queue remains locked.` |
+| Create a flow | `stoker flow create nightly --user alice --name nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow create nightly --user alice --name nightly --daily 23:30 --schedule-timezone Asia/Tokyo` | Flows are available only in `scheduled` mode. Choose either `--at RFC3339` or `--daily HH:mm`; daily timezones use IANA names. If `--schedule-timezone` is omitted, Stoker uses the configured timezone and then the system timezone; if the system timezone cannot be determined, specify one explicitly. For immediate serial execution, use standalone `stoker add`. | `Created flow nightly (DRAFT, draft revision 0).` |
+| Add a task | `stoker flow task add nightly prepare --name prepare --cmd "python prepare.py"` | Adds a task whose working directory is the current directory. Supports `--retries N`, repeated `--after TASK_ID`/`--after-failure TASK_ID`, `--match all\|any`, and `--revision N`. | `Added task to flow nightly (draft revision 0).` |
+| Commit a flow | `stoker flow commit nightly` | Validates the complete task graph and commits the draft. The scheduler can run it only after this step. | `Committed flow nightly (2 task(s)).` |
+| List flows | `stoker flow list [--user alice]` | Shows one aligned summary row per flow, including its schedule, status, active run, and next trigger time, without expanding tasks. | `FLOW_ID  NAME  USER  SCHEDULE  STATUS  ACTIVE  NEXT` |
+| Show a definition | `stoker flow show nightly` | Shows the flow definition, status, schedule, revision, task IDs, and dependencies in JSON-like form. | `"flow_id": "nightly"`<br>`"committed": true`<br>`"task_id": "train"` |
+| Run manually | `stoker flow run nightly [--replace-next] [--request-id REQUEST_UUID]` | Creates a manual run. `--replace-next` replaces the next scheduled occurrence after this run starts; repeating the same `--request-id` returns the same result. | `Created flow run RUN_UUID for nightly (request-id REQUEST_UUID).` |
+| List runs | `stoker flow runs nightly` | Lists all execution records in aligned columns. The `RUN_ID` column contains the `RUN_UUID` used by later commands. | See the complete output below. |
+| Show a run | `stoker flow show nightly --run RUN_UUID` | Shows the run source, overall state, and each task's state and attempt count in JSON-like form. | `"run_id": "RUN_UUID"`<br>`"source": "MANUAL"`<br>`"state": "SUCCEEDED"` |
+| List occurrences | `stoker flow occurrences nightly` | Lists automatic schedule occurrences, UTC due times, states, and reasons in aligned columns. | See the complete output below. |
+| Show a task run | `stoker flow show nightly --run RUN_UUID --task prepare` | Filters the run's JSON-like output to one task and shows its state and attempt count. | `"task_id": "prepare"`<br>`"state": "SUCCEEDED"`<br>`"attempts": 1` |
+| Show task logs | `stoker flow logs nightly --run RUN_UUID --task prepare [--attempt N] [-f]` | Shows stdout/stderr. Without `--attempt`, it shows every attempt; `-f`/`--follow` follows output until the task ends. | `--- .../attempt-1/stdout.log ---`<br>`task output` |
+| Cancel a flow run | `stoker flow cancel nightly --run RUN_UUID` | Records a cancellation request for the run and its unfinished tasks. The state in parentheses is read back when the command finishes. Process cleanup is asynchronous, so it may still be `Running`, may be `Cancelling`, or may already be `Cancelled`. | `Cancelled flow run RUN_UUID (STATE).` |
+| Cancel a task | `stoker flow cancel nightly --run RUN_UUID --task prepare` | Cancels only the specified task in the run. The state in parentheses is likewise read back when the command finishes; running processes are stopped and cleaned up in the background. | `Cancelled task prepare in run RUN_UUID (STATE).` |
+| Begin editing | `stoker flow edit begin nightly` | Freezes a committed flow and pauses intake of new runs, tasks, and retries. The future draft is created by the first future-scope change; already running processes continue. | `Flow 'nightly' is frozen for editing.` |
+| Update a task | `stoker flow task update nightly train [--cmd CMD] [--cwd DIR] [--retries N] [--after TASK] [--after-failure TASK] [--match all\|any] [--clear-dependencies] [--revision N]` | Updates the future draft. At least one field is required, and dependency options may be repeated. | `Updated task train in flow nightly (draft revision 1).` |
+| Remove a task | `stoker flow task remove nightly train [--scope future\|current\|both] [--run RUN_UUID] [--revision N]` | The default scope is `future`. `current` and `both` apply to the specified active run and require `--run`; the flow must be frozen. | `Draft revision 2 for flow nightly.` |
+| Change the schedule | `stoker flow schedule set nightly --at 2026-09-20T10:00:00+09:00`<br>`stoker flow schedule set nightly --daily 23:30 --schedule-timezone Asia/Tokyo`<br>`stoker flow schedule set nightly --schedule-timezone UTC` | Updates the frozen flow's future schedule and supports `--revision N`. An existing once flow can only move to another future once time, while a daily flow can only change its daily time or timezone; the two schedule types cannot be exchanged. Timezone-only changes apply only to daily flows. A terminal once flow with a non-pending occurrence cannot be scheduled again; create a new flow instead. | `Updated flow nightly draft revision 2.` |
+| Discard a draft | `stoker flow edit discard nightly --revision N` | Discards unapplied future changes; the flow remains frozen. | `Discarded draft for nightly (still frozen=true).` |
+| Apply edits | `stoker flow edit apply nightly [--revision N]` | If a future draft exists, validates and applies it, increments the graph revision, and unfreezes the flow. If only current-scope changes were made and no future draft exists, omit `--revision` to unfreeze directly. This command does not unlock the global queue. | `Applied edits to nightly (graph revision 2).` |
+| Disable automatic triggers | `stoker flow disable nightly` | Stops future automatic triggers; valid manual runs are still allowed. | `Disabled nightly.` |
+| Enable automatic triggers | `stoker flow enable nightly` | Resumes future automatic triggers. | `Enabled nightly.` |
+| Look up an idempotent request | `stoker request show REQUEST_UUID` | Uses a manual run's request ID to look up its flow, run UUID, and result. | `request_id=REQUEST_UUID flow_id=nightly run_id=RUN_UUID result=CREATED` |
+| Reconcile recovery | `stoker recovery reconcile RUN_UUID --confirm-stopped` | Use only when a restart leaves a run in `Recovering` and you have confirmed manually that its process has stopped. Resolve every recovery before unlocking the queue. | `Reconciled recovery for RUN_UUID; queue may be unlocked after all recoveries are resolved.` |
+
+`flow runs` calculates column widths from the actual contents and aligns them:
+
+```text
+RUN_ID                                FLOW_ID  STATE     SOURCE
+------------------------------------  -------  --------  ------
+2238b174-1480-48c0-b1b7-e8ce36bca1b7  nightly  Starting  MANUAL
+```
+
+`flow occurrences` uses the same aligned format; `DUE_AT_UTC` is always shown in UTC:
+
+```text
+OCCURRENCE_ID                         FLOW_ID  STATE    DUE_AT_UTC                 REASON
+------------------------------------  -------  -------  -------------------------  ------
+6560cda6-92a3-4429-955a-16aa3a1c3618  nightly  Pending  2099-01-01T00:00:00+00:00
+```
+
+Flow commands always begin with `stoker flow`; top-level scheduled-job commands accept only standalone job UUIDs. Use `stoker flow --help`, `stoker flow task --help`, and each subcommand's `--help` for complete parameters.
+
+One-time schedules use RFC 3339 with seconds and an explicit UTC offset, for example
+`2026-09-15T23:30:00+09:00`. Daily schedules use `HH:mm` and an IANA timezone.
+Missed daily occurrences are not replayed. A nonexistent DST time is skipped, and an
+ambiguous repeated time uses the earlier instant.
+
+To modify a committed flow, begin editing, change the future draft, and then apply it.
+You can use the draft revision for compare-and-swap:
+
+~~~bash
+stoker flow edit begin nightly
+stoker flow task update nightly train --retries 2 --revision 0
+stoker flow edit apply nightly --revision 1
+~~~
+
+If a restart leaves a run in `RECOVERING`, first confirm that the process has stopped,
+then reconcile it and unlock the queue:
+
+~~~bash
+stoker recovery reconcile <RUN_ID> --confirm-stopped
+stoker queue unlock
+~~~
+
 ## Database checks and recovery
 
 Use the lightweight check during normal operations and the full check when investigating corruption:
