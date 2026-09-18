@@ -84,7 +84,7 @@ stoker logs -f <JOB_ID>
 
 commit 後，Job 會一次執行一個。`--user` 是用來顯示與篩選的 owner 標籤，不是作業系統帳號或驗證機制。
 
-queue 編輯、取消、log、policy、時區、備份與所有 serial 指令，請看 [serial 詳細操作指南](docs/serial.zh-TW.md)。
+queue 編輯、取消與所有 serial 指令，請看 [serial 詳細操作指南](docs/serial.zh-TW.md)。
 
 ## 2. scheduled mode
 
@@ -128,4 +128,4 @@ stoker flow commit frequent_a001
 stoker flow list
 ```
 
-一次性／週期性排程、standalone scheduled Job、重試、Flow 編輯、查看 run、取消與 recovery，請看 [Flow 詳細操作指南](docs/flow.zh-TW.md)。
+一次性／週期性排程、standalone scheduled Job、重試、Flow 編輯、查看 run、取消與 recovery，請看 [scheduled 詳細操作指南](docs/scheduled.zh-TW.md)。

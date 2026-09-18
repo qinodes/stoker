@@ -128,4 +128,4 @@ stoker flow commit frequent_a001
 stoker flow list
 ```
 
-one-time / periodic schedule、standalone scheduled Job、retry、Flow 編集、run の確認、cancel、recovery は [繁體中文の Flow ガイド](docs/flow.zh-TW.md) を参照してください。
+one-time / periodic schedule、standalone scheduled Job、retry、Flow 編集、run の確認、cancel、recovery は [繁體中文の scheduled ガイド](docs/scheduled.zh-TW.md) を参照してください。

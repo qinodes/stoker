@@ -128,4 +128,4 @@ stoker flow commit frequent_a001
 stoker flow list
 ```
 
-For one-time and periodic schedules, standalone scheduled jobs, retries, Flow editing, run inspection, cancellation, and recovery, read the [Traditional Chinese Flow guide](docs/flow.zh-TW.md).
+For one-time and periodic schedules, standalone scheduled jobs, retries, Flow editing, run inspection, cancellation, and recovery, read the [Traditional Chinese scheduled guide](docs/scheduled.zh-TW.md).
