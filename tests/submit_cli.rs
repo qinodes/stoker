@@ -27,11 +27,11 @@ fn finish_job(store: &Store, name: &str, user: &str, exit_code: Option<i32>) -> 
 }
 
 #[test]
-fn add_records_absolute_cwd_as_draft() {
+fn create_records_absolute_cwd_as_draft() {
     let repo = TestRepo::new();
     let output = stoker_in(&repo.join("experiments/llama"))
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -68,11 +68,57 @@ fn add_records_absolute_cwd_as_draft() {
 }
 
 #[test]
-fn add_and_set_description_persist_optional_text() {
+fn add_is_rejected_after_create_replaces_it() {
+    let repo = TestRepo::new();
+    stoker_in(repo.path())
+        .args([
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "legacy",
+            "--cmd",
+            "echo legacy",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand 'add'"));
+
+    stoker_in(repo.path())
+        .args(["queue", "lock"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["mode", "set", "scheduled"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args(["queue", "unlock"])
+        .assert()
+        .success();
+    stoker_in(repo.path())
+        .args([
+            "add",
+            "--user",
+            "alice",
+            "--name",
+            "legacy-scheduled",
+            "--cmd",
+            "echo legacy",
+            "--every",
+            "1h",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand 'add'"));
+}
+
+#[test]
+fn create_and_set_description_persist_optional_text() {
     let repo = TestRepo::new();
     let output = stoker_in(repo.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -116,7 +162,7 @@ fn add_and_set_description_persist_optional_text() {
     let long_description = "d".repeat(stoker::MAX_JOB_DESCRIPTION_LENGTH + 1);
     stoker_in(repo.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -147,33 +193,35 @@ fn binary_reports_initialization_errors_through_main_exit_path() {
 }
 
 #[test]
-fn add_rejects_unquoted_multiple_command_arguments() {
+fn create_rejects_unquoted_multiple_command_arguments() {
     let repo = TestRepo::new();
     repo.write("tracked.txt", "changed\n");
     stoker_in(repo.path())
         .args([
-            "add", "--user", "alice", "--name", "lr", "--cmd", "echo", "ok",
+            "create", "--user", "alice", "--name", "lr", "--cmd", "echo", "ok",
         ])
         .assert()
         .failure();
 }
 
 #[test]
-fn add_accepts_a_non_git_directory_and_shell_command() {
+fn create_accepts_a_non_git_directory_and_shell_command() {
     let repo = TestRepo::new();
     repo.write("tracked.txt", "changed\n");
     stoker_in(repo.path())
-        .args(["add", "--user", "alice", "--name", "lr", "--cmd", "echo ok"])
+        .args([
+            "create", "--user", "alice", "--name", "lr", "--cmd", "echo ok",
+        ])
         .assert()
         .success();
 }
 
 #[test]
-fn add_parses_shell_command_for_show_but_preserves_raw_command() {
+fn create_parses_shell_command_for_show_but_preserves_raw_command() {
     let repo = TestRepo::new();
     let output = stoker_in(repo.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -224,7 +272,7 @@ fn timezone_config_and_cli_override_are_reflected_in_display_output() {
 
     let output = stoker_in(repo.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -440,7 +488,7 @@ fn runtime_policy_and_database_operations_are_available() {
 
     let marker = stoker_in(repo.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -478,27 +526,29 @@ fn runtime_policy_and_database_operations_are_available() {
 }
 
 #[test]
-fn add_rejects_empty_user_and_name() {
+fn create_rejects_empty_user_and_name() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
-        .args(["add", "--user", "", "--name", "job", "--cmd", "echo ok"])
+        .args(["create", "--user", "", "--name", "job", "--cmd", "echo ok"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--user must not be empty"));
     stoker_in(repo.path())
-        .args(["add", "--user", "alice", "--name", "", "--cmd", "echo ok"])
+        .args([
+            "create", "--user", "alice", "--name", "", "--cmd", "echo ok",
+        ])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--name must not be empty"));
 }
 
 #[test]
-fn add_rejects_job_names_and_users_longer_than_the_supported_limits() {
+fn create_rejects_job_names_and_users_longer_than_the_supported_limits() {
     let repo = TestRepo::new();
     let long_name = "x".repeat(stoker::domain::MAX_JOB_NAME_LENGTH + 1);
     stoker_in(repo.path())
         .args([
-            "add", "--user", "alice", "--name", &long_name, "--cmd", "echo ok",
+            "create", "--user", "alice", "--name", &long_name, "--cmd", "echo ok",
         ])
         .assert()
         .failure()
@@ -509,7 +559,7 @@ fn add_rejects_job_names_and_users_longer_than_the_supported_limits() {
     let long_user = "u".repeat(stoker::MAX_JOB_USER_LENGTH + 1);
     stoker_in(repo.path())
         .args([
-            "add", "--user", &long_user, "--name", "job", "--cmd", "echo ok",
+            "create", "--user", &long_user, "--name", "job", "--cmd", "echo ok",
         ])
         .assert()
         .failure()
@@ -543,10 +593,10 @@ fn logs_explain_when_queued_or_finished_jobs_have_no_run_directory() {
 }
 
 #[test]
-fn add_requires_user() {
+fn create_requires_user() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
-        .args(["add", "--name", "lr", "--cmd", "echo ok"])
+        .args(["create", "--name", "lr", "--cmd", "echo ok"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--user"));
@@ -569,7 +619,7 @@ fn jobs_user_filter_excludes_other_owners() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -581,7 +631,7 @@ fn jobs_user_filter_excludes_other_owners() {
         .success();
     stoker_in(repo.path())
         .args([
-            "add", "--user", "bob", "--name", "bob-job", "--cmd", "echo bob",
+            "create", "--user", "bob", "--name", "bob-job", "--cmd", "echo bob",
         ])
         .assert()
         .success();
@@ -720,7 +770,7 @@ fn jobs_prints_header_before_rows() {
     let repo = TestRepo::new();
     stoker_in(repo.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -745,7 +795,7 @@ fn jobs_state_filter_shows_queue_order() {
     for (name, command) in [("queued-job", "queued"), ("draft-job", "draft")] {
         stoker_in(repo.path())
             .args([
-                "add",
+                "create",
                 "--user",
                 "alice",
                 "--name",
@@ -792,7 +842,7 @@ fn show_displays_the_working_directory_and_command() {
     let repo = TestRepo::new();
     stoker_in(&repo.join("experiments/llama"))
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -828,7 +878,7 @@ fn logs_for_a_draft_job_explain_how_to_make_logs_available() {
     let repo = TestRepo::new();
     let output = stoker_in(repo.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -859,7 +909,7 @@ fn jobs_alias_lists_submitted_job_ids() {
     let repo = TestRepo::new();
     let output = stoker_in(repo.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -873,7 +923,7 @@ fn jobs_alias_lists_submitted_job_ids() {
     let job_id = String::from_utf8_lossy(&output.stdout)
         .split_whitespace()
         .find(|value| uuid::Uuid::parse_str(value).is_ok())
-        .expect("add output contains a job ID")
+        .expect("create output contains a job ID")
         .to_owned();
 
     stoker_in(repo.path())

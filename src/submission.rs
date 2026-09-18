@@ -43,7 +43,7 @@ pub fn resolve_working_directory(path: PathBuf) -> anyhow::Result<PathBuf> {
         .map_err(|message| anyhow::anyhow!("working directory {}: {message}", path.display()))
 }
 
-/// Parse the shell-like command syntax accepted by `stoker add --cmd`.
+/// Parse the shell-like command syntax accepted by `stoker create --cmd`.
 pub fn parse_command_line(input: &str) -> anyhow::Result<Vec<String>> {
     jobs::parse_command_line(input).map_err(cli_submission_error)
 }

@@ -11,7 +11,7 @@ use crate::{ServiceClient, StokerPaths, Store};
 use super::args::{Cli, CliCommand, DbCommand, QueueCommand, UiCommand};
 use super::commands::configuration::config;
 use super::commands::db::{DatabaseOperation, database};
-use super::commands::jobs::{add, cancel, clean, commit, jobs, set_description, show};
+use super::commands::jobs::{cancel, clean, commit, create, jobs, set_description, show};
 use super::commands::logs::logs;
 use super::commands::policy::policy;
 use super::commands::queue::{lock_queue, queue_edit, unlock_queue};
@@ -45,7 +45,7 @@ pub(crate) fn run_command_with_paths(
     paths: &StokerPaths,
 ) -> anyhow::Result<()> {
     match command {
-        CliCommand::Add(args) => add(paths, args),
+        CliCommand::Add(args) => create(paths, args),
         CliCommand::SetDescription(args) => set_description(paths, args),
         CliCommand::Show { id } => show(paths, id, timezone),
         CliCommand::Jobs { user, state } => jobs(paths, user.as_deref(), state, timezone),

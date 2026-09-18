@@ -36,7 +36,7 @@ fn public_cli_schema_matches_the_cli_command_contract() {
     assert_eq!(
         declared_subcommands(&command),
         [
-            "add",
+            "create",
             "set-description",
             "show",
             "jobs",
@@ -76,7 +76,7 @@ fn public_cli_schema_matches_the_cli_command_contract() {
     }
 
     assert_eq!(
-        declared_arguments(named_subcommand(&command, "add")),
+        declared_arguments(named_subcommand(&command, "create")),
         ["user", "name", "description", "command"]
     );
     assert_eq!(

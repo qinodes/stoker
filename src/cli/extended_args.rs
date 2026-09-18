@@ -21,7 +21,7 @@ pub(super) struct ExtendedCli {
 #[derive(Debug, Subcommand)]
 pub(super) enum ExtendedCommand {
     #[command(about = "Create a DRAFT standalone job")]
-    Add(AddExtendedArgs),
+    Create(CreateExtendedArgs),
     #[command(about = "List standalone jobs")]
     Jobs(ExtendedJobsArgs),
     Run(RunArgs),
@@ -109,8 +109,8 @@ pub(super) enum FlowCommand {
     #[command(about = "Begin, apply, or discard a safe flow edit")]
     #[command(subcommand)]
     Edit(FlowEditCommand),
-    #[command(about = "List actual runs for a flow")]
-    Runs(FlowDefinitionIdArgs),
+    #[command(about = "List run history for a flow")]
+    History(FlowDefinitionIdArgs),
     #[command(about = "List scheduled occurrences for a flow")]
     Occurrences(FlowDefinitionIdArgs),
     #[command(about = "Disable future automatic triggers")]

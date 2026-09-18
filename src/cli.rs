@@ -651,7 +651,7 @@ mod update_tests {
         let mut command = Cli::command();
         let help = command.render_help().to_string();
         for description in [
-            "add",
+            "create",
             "Create a DRAFT job",
             "set-description",
             "Set or clear a job's description",
@@ -1339,7 +1339,7 @@ mod cli_runtime_tests {
         run_command(CliCommand::Add(AddArgs {
             user: "alice".into(),
             name: "local-flow".into(),
-            description: Some("Created from add".into()),
+            description: Some("Created from create".into()),
             command: "echo hello".into(),
         }))
         .unwrap();
@@ -1363,7 +1363,7 @@ mod cli_runtime_tests {
         );
         let store = Store::open(&paths.database).unwrap();
         let draft = store.list_jobs(None).unwrap().into_iter().next().unwrap();
-        assert_eq!(draft.description.as_deref(), Some("Created from add"));
+        assert_eq!(draft.description.as_deref(), Some("Created from create"));
         run_command(CliCommand::SetDescription(SetDescriptionArgs {
             id: draft.id,
             description: Some("Created through the CLI".into()),

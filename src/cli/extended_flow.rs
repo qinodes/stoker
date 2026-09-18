@@ -21,7 +21,7 @@ pub(super) fn run(paths: &StokerPaths, store: &Store, command: FlowCommand) -> R
             let mode = store.current_mode()?;
             if mode != ExecutionMode::Scheduled {
                 anyhow::bail!(
-                    "flow create is only available in scheduled mode; use stoker add for serial jobs"
+                    "flow create is only available in scheduled mode; use stoker create for serial jobs"
                 );
             }
             let schedule = parse_schedule(
@@ -77,7 +77,7 @@ pub(super) fn run(paths: &StokerPaths, store: &Store, command: FlowCommand) -> R
         FlowCommand::Task(command) => task(store, command)?,
         FlowCommand::Schedule(command) => schedule(store, command)?,
         FlowCommand::Edit(command) => edit(store, command)?,
-        FlowCommand::Runs(args) => print_runs(store, &args.flow_id)?,
+        FlowCommand::History(args) => print_runs(store, &args.flow_id)?,
         FlowCommand::Occurrences(args) => print_occurrences(store, &args.flow_id)?,
         FlowCommand::Disable(args) => set_enabled(store, &args.flow_id, false)?,
         FlowCommand::Enable(args) => set_enabled(store, &args.flow_id, true)?,

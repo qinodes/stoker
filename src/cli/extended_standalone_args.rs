@@ -4,7 +4,7 @@ use clap::{Args, Subcommand};
 use uuid::Uuid;
 
 #[derive(Debug, Args)]
-pub(super) struct AddExtendedArgs {
+pub(super) struct CreateExtendedArgs {
     #[arg(long)]
     pub(super) user: String,
     #[arg(long)]

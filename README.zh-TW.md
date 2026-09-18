@@ -51,12 +51,12 @@ cargo install stoker-engine
 
 ## 1. serial mode
 
-**serial mode** 適合每個 Job 只執行一次、依次順序處理的情境。請在 command 應該執行的資料夾內使用 `stoker add`。
+**serial mode** 適合每個 Job 只執行一次、依次順序處理的情境。請在 command 應該執行的資料夾內使用 `stoker create`。
 
 基本格式：
 
 ```text
-stoker add --user <USER> --name <NAME> --cmd "<COMMAND>"
+stoker create --user <USER> --name <NAME> --cmd "<COMMAND>"
 stoker show <JOB_ID>
 stoker commit <JOB_ID>
 ```
@@ -71,7 +71,7 @@ stoker queue unlock
 stoker start
 
 # 建立 DRAFT Job；command 之後會從目前資料夾執行。
-stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
+stoker create --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
 # <JOB_ID> 是上一個指令輸出的 Job UUID；確認後加入 queue。
 stoker show <JOB_ID>

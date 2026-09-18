@@ -69,7 +69,7 @@ fn is_extended(args: &[String]) -> bool {
         .iter()
         .any(|argument| matches!(argument.as_str(), "-h" | "--help"));
     command.is_some_and(|command| names.contains(&command))
-        || asks_for_help && matches!(command, Some("add" | "jobs"))
+        || asks_for_help && matches!(command, Some("create" | "jobs"))
         || args.iter().any(|arg| {
             [
                 "--once-at",

@@ -176,6 +176,7 @@ pub(super) fn print_flow(flow: &crate::domain::FlowDefinition) {
             json!({
                 "task_id": task.task_id,
                 "name": task.name,
+                "cwd": task.cwd,
                 "retry": task.retry,
                 "depend_mode": task.depend_mode.to_string(),
                 "depends_on": task

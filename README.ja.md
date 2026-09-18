@@ -51,12 +51,12 @@ cargo install stoker-engine
 
 ## 1. serial mode
 
-**serial mode** は、各 Job を queue の順番で 1 回だけ実行する用途です。`stoker add` は command を実行したいディレクトリで実行してください。
+**serial mode** は、各 Job を queue の順番で 1 回だけ実行する用途です。`stoker create` は command を実行したいディレクトリで実行してください。
 
 基本形式:
 
 ```text
-stoker add --user <USER> --name <NAME> --cmd "<COMMAND>"
+stoker create --user <USER> --name <NAME> --cmd "<COMMAND>"
 stoker show <JOB_ID>
 stoker commit <JOB_ID>
 ```
@@ -71,7 +71,7 @@ stoker queue unlock
 stoker start
 
 # DRAFT Job を作成します。command は後で現在のディレクトリから実行されます。
-stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
+stoker create --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
 # <JOB_ID> は前のコマンドに表示された Job UUID です。確認して queue に追加します。
 stoker show <JOB_ID>

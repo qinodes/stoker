@@ -15,7 +15,7 @@ use super::extended_parsing::*;
 
 pub(super) fn dispatch(paths: &StokerPaths, store: &Store, command: ExtendedCommand) -> Result<()> {
     match command {
-        ExtendedCommand::Add(args) => add(paths, store, args),
+        ExtendedCommand::Create(args) => create(paths, store, args),
         ExtendedCommand::Jobs(args) => jobs(store, args),
         ExtendedCommand::Run(args) => run_standalone(store, args),
         ExtendedCommand::Mode { command } => mode(store, command),
@@ -47,7 +47,7 @@ pub(super) fn dispatch(paths: &StokerPaths, store: &Store, command: ExtendedComm
     }
 }
 
-fn add(paths: &StokerPaths, store: &Store, args: AddExtendedArgs) -> Result<()> {
+fn create(paths: &StokerPaths, store: &Store, args: CreateExtendedArgs) -> Result<()> {
     if args.schedule_timezone.is_some() && args.daily.is_none() {
         anyhow::bail!("--schedule-timezone is only valid with --daily");
     }

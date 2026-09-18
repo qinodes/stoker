@@ -8,7 +8,7 @@
 在 command 應執行的資料夾建立 DRAFT Job。`--cmd` 後的完整 command 必須用引號包住。
 
 ```bash
-stoker add --user <USER> --name <NAME> --cmd "<COMMAND>"
+stoker create --user <USER> --name <NAME> --cmd "<COMMAND>"
 stoker show <JOB_ID>
 
 # 依輸入順序提交指定的 DRAFT Job。
@@ -47,7 +47,7 @@ stoker stop
 
 `stoker stop` 若有 active Job 會詢問是否強制取消；使用 `--yes` 可略過確認。`QUEUED` Job 會保留到下次 scheduler 啟動。
 
-重新排序前必須鎖定 queue；完成後再明確解除鎖定。鎖定期間不能 commit，但仍可 add 或 cancel。
+重新排序前必須鎖定 queue；完成後再明確解除鎖定。鎖定期間不能 commit，但仍可 create 或 cancel。
 
 ```bash
 stoker queue lock

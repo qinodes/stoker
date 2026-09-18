@@ -51,12 +51,12 @@ For manual installation and version-specific downloads, see [GitHub Releases](ht
 
 ## 1. serial mode
 
-Use **serial mode** when each Job should run once, in queue order. Run `stoker add` from the directory where the command should execute.
+Use **serial mode** when each Job should run once, in queue order. Run `stoker create` from the directory where the command should execute.
 
 Basic syntax:
 
 ```text
-stoker add --user <USER> --name <NAME> --cmd "<COMMAND>"
+stoker create --user <USER> --name <NAME> --cmd "<COMMAND>"
 stoker show <JOB_ID>
 stoker commit <JOB_ID>
 ```
@@ -71,7 +71,7 @@ stoker queue unlock
 stoker start
 
 # Create a DRAFT Job. The command will run later from the current directory.
-stoker add --user alice --name exp-a --cmd "python train.py --lr 0.0001"
+stoker create --user alice --name exp-a --cmd "python train.py --lr 0.0001"
 
 # <JOB_ID> is the Job UUID printed by the previous command. Review it, then add it to the queue.
 stoker show <JOB_ID>

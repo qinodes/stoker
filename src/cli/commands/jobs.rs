@@ -78,7 +78,7 @@ pub(crate) fn cancel(paths: &StokerPaths, id: Uuid, yes: bool) -> anyhow::Result
     Ok(())
 }
 
-pub(crate) fn add(paths: &StokerPaths, args: AddArgs) -> anyhow::Result<()> {
+pub(crate) fn create(paths: &StokerPaths, args: AddArgs) -> anyhow::Result<()> {
     if args.user.trim().is_empty() {
         anyhow::bail!("--user must not be empty");
     }

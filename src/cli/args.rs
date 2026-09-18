@@ -29,7 +29,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum CliCommand {
-    #[command(about = "Create a DRAFT job")]
+    #[command(name = "create", about = "Create a DRAFT job")]
     Add(AddArgs),
     #[command(about = "Set or clear a job's description")]
     SetDescription(SetDescriptionArgs),

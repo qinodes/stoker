@@ -97,7 +97,7 @@ fn extended_help_is_successful_and_top_level_mentions_the_extended_surface() {
         .stdout(predicate::str::contains("--first-at <RFC3339>"))
         .stdout(predicate::str::contains("--schedule-timezone <IANA_ZONE>"));
     cli(&home, directory.path())
-        .args(["add", "--help"])
+        .args(["create", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("--once-at <RFC3339>"))
@@ -341,7 +341,7 @@ fn scheduled_standalone_every_schedule_activates_on_commit() {
         .success();
     cli(&home, directory.path())
         .args([
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -399,7 +399,7 @@ fn standalone_schedule_cli_covers_normal_invalid_and_edit_paths() {
     ] {
         cli(&home, directory.path())
             .args([
-                "add",
+                "create",
                 "--user",
                 "alice",
                 "--name",
@@ -432,7 +432,7 @@ fn standalone_schedule_cli_covers_normal_invalid_and_edit_paths() {
         ),
     ] {
         let mut command = vec![
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -610,7 +610,7 @@ fn obsolete_at_and_schedule_selector_conflicts_fail_on_every_public_entry_point(
             "flow", "create", "obsolete", "--user", "alice", "--name", "obsolete", "--at", future,
         ],
         vec![
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -646,7 +646,7 @@ fn obsolete_at_and_schedule_selector_conflicts_fail_on_every_public_entry_point(
             "1m",
         ],
         vec![
-            "add",
+            "create",
             "--user",
             "alice",
             "--name",
@@ -699,7 +699,7 @@ fn concurrent_cli_callers_keep_periodic_commit_replacement_and_edit_atomic() {
 
     cli(&home, directory.path())
         .args([
-            "add",
+            "create",
             "--user",
             "tester",
             "--name",
@@ -1217,7 +1217,7 @@ fn public_flows_require_scheduled_mode_and_list_has_no_mode_option() {
 }
 
 #[test]
-fn run_and_occurrence_lists_have_aligned_headers() {
+fn flow_history_and_occurrence_lists_have_aligned_headers() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -1225,7 +1225,7 @@ fn run_and_occurrence_lists_have_aligned_headers() {
     runnable_flow(&store, directory.path(), "headers");
 
     let empty_runs = cli(&home, directory.path())
-        .args(["flow", "runs", "headers"])
+        .args(["flow", "history", "headers"])
         .output()
         .unwrap();
     assert!(empty_runs.status.success());
@@ -1239,7 +1239,7 @@ fn run_and_occurrence_lists_have_aligned_headers() {
     let occurrence = store.list_occurrences("headers").unwrap().remove(0);
 
     let runs = cli(&home, directory.path())
-        .args(["flow", "runs", "headers"])
+        .args(["flow", "history", "headers"])
         .output()
         .unwrap();
     assert!(runs.status.success());
@@ -1253,6 +1253,12 @@ fn run_and_occurrence_lists_have_aligned_headers() {
             "MANUAL".into(),
         ],
     );
+
+    cli(&home, directory.path())
+        .args(["flow", "runs", "headers"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand 'runs'"));
 
     let occurrences = cli(&home, directory.path())
         .args(["flow", "occurrences", "headers"])
@@ -1618,13 +1624,17 @@ fn flow_show_uses_nested_json_like_shapes_for_definition_run_and_task() {
             },
         )
         .unwrap();
-    add_task(&store, directory.path(), "json-shape", "root");
+    let root_cwd = directory.path().join("root-working-directory");
+    let child_cwd = directory.path().join("child-working-directory");
+    std::fs::create_dir_all(&root_cwd).unwrap();
+    std::fs::create_dir_all(&child_cwd).unwrap();
+    add_task(&store, &root_cwd, "json-shape", "root");
     store
         .add_flow_task(FlowTaskInput {
             flow_id: "json-shape".into(),
             task_id: "child".into(),
             name: "child".into(),
-            cwd: directory.path().to_string_lossy().into_owned(),
+            cwd: child_cwd.to_string_lossy().into_owned(),
             command: "echo child".into(),
             retry: 1,
             dependencies: vec![Dependency {
@@ -1644,6 +1654,14 @@ fn flow_show_uses_nested_json_like_shapes_for_definition_run_and_task() {
     assert_eq!(definition["flow_id"], "json-shape");
     assert_eq!(definition["schedule"]["type"], "once");
     assert_eq!(definition["tasks"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        definition["tasks"][0]["cwd"],
+        root_cwd.to_string_lossy().as_ref()
+    );
+    assert_eq!(
+        definition["tasks"][1]["cwd"],
+        child_cwd.to_string_lossy().as_ref()
+    );
     assert_eq!(
         definition["tasks"][1]["depends_on"][0]["status"],
         "succeeded"

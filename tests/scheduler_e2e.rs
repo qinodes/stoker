@@ -38,7 +38,7 @@ fn add_script_from(
     name: &str,
 ) -> Uuid {
     let output = stoker_with_home_and_dir(&home_for(repo), current_dir)
-        .args(["add", "--user", "test", "--name", name, "--cmd", script])
+        .args(["create", "--user", "test", "--name", name, "--cmd", script])
         .output()
         .unwrap();
     assert!(

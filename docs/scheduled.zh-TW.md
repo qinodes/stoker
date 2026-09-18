@@ -101,7 +101,7 @@ stoker flow create frequent --user alice --name frequent --every 15m --first-at 
 stoker flow list
 stoker flow list --user <USER>
 stoker flow show <FLOW_ID>
-stoker flow runs <FLOW_ID>
+stoker flow history <FLOW_ID>
 stoker flow occurrences <FLOW_ID>
 
 # flow run 會立即建立一次 manual run
@@ -124,13 +124,15 @@ stoker flow cancel <FLOW_ID> --run <RUN_ID>
 stoker flow cancel <FLOW_ID> --run <RUN_ID> --task <TASK_ID>
 ```
 
+`stoker flow show <FLOW_ID>` 的每個 task 都會顯示 `cwd`，即該 task 執行 command 的工作目錄。
+
 
 ### 範例
 
 ```bash
 # 查看 Flow、run 與 scheduled occurrence。
 stoker flow show nightly
-stoker flow runs nightly
+stoker flow history nightly
 stoker flow occurrences nightly
 
 # 立即建立 manual run。
@@ -201,10 +203,10 @@ disable 只停止未來 automatic trigger，不阻止合法的 manual run。
 
 ## Standalone scheduled Job
 
-在 `scheduled` mode，`stoker add` 也可建立單一 command 的 scheduled Job。建立後仍需 `commit` 才會啟用。
+在 `scheduled` mode，`stoker create` 也可建立單一 command 的 scheduled Job。建立後仍需 `commit` 才會啟用。
 
 ```bash
-stoker add --user alice --name frequent --cmd "python refresh.py" --every 15m --first-at 2099-01-01T10:00:00+09:00
+stoker create --user alice --name frequent --cmd "python refresh.py" --every 15m --first-at 2099-01-01T10:00:00+09:00
 stoker commit <JOB_ID>
 
 stoker runs <JOB_ID>
@@ -217,9 +219,9 @@ stoker cancel <JOB_ID> --run <RUN_ID>
 建立時的三種形式：
 
 ```text
-stoker add --user <USER> --name <NAME> --cmd <COMMAND> --once-at <RFC3339> [--retry <N>]
-stoker add --user <USER> --name <NAME> --cmd <COMMAND> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--retry <N>]
-stoker add --user <USER> --name <NAME> --cmd <COMMAND> --every <Nm|Nh> [--first-at <RFC3339>] [--retry <N>]
+stoker create --user <USER> --name <NAME> --cmd <COMMAND> --once-at <RFC3339> [--retry <N>]
+stoker create --user <USER> --name <NAME> --cmd <COMMAND> --daily <HH:mm> [--schedule-timezone <IANA_ZONE>] [--retry <N>]
+stoker create --user <USER> --name <NAME> --cmd <COMMAND> --every <Nm|Nh> [--first-at <RFC3339>] [--retry <N>]
 ```
 
 `--retry` 是 standalone Job 的重試次數（Flow task 使用 `--retries`）。若要修改已 commit 的 schedule，先 freeze、修改、再 unfreeze：
