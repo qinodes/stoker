@@ -16,6 +16,108 @@ stoker queue unlock
 
 有 execution 正在啟動、執行、取消、清理或 recovery 時，不能切換 mode。
 
+## 宣告式 JSON source mode
+
+source mode 則決定未來定義由 CLI 個別修改（`manual`）或 JSON 整批同步（`sync`）。既有 workspace 預設為 `manual`。
+
+### 安全工作流程
+
+```bash
+# 1. 從目前 workspace 取得帶有 base token 的檔案。
+stoker flow export --dir ./flow-definitions
+
+# 2. 編輯 JSON 後，先停止新的排程進入並切換成同步模式。
+stoker queue lock
+stoker flow source-mode sync
+
+# 3. 使用與正式 sync 相同的同步流程，但不寫入任何狀態。
+stoker flow sync <EXPORTED_JSON> --dry-run
+
+# 4. 套用 Flow 定義檔。
+stoker flow sync <EXPORTED_JSON>
+
+# 5. 檢查結果；sync 不會自行 unlock。
+stoker flow list
+stoker queue unlock
+```
+
+切換 source mode 與正式 sync 都要求 queue 已 locked，且沒有正在啟動、執行、取消或 recovery 的工作。
+
+切到 `sync` 前也必須先 commit 未完成的 Flow，並 apply 或 discard frozen draft。
+
+`sync` mode 會拒絕 `flow create/commit/task/schedule/edit/enable/disable`；
+
+查詢、run、cancel、log、export 與 snapshot 仍可使用。需要回到逐筆修改時，先保持 queue locked，再執行：
+
+```bash
+# 1. 切到手動模式
+stoker flow source-mode manual
+stoker queue unlock
+```
+
+### JSON v1 格式
+
+唯一支援的格式是 UTF-8 JSON。最安全的起點永遠是 `flow export`；。
+
+```json
+{
+  "schema_version": 1,
+  "base": {
+    "revision": 12,
+    "hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "flows": [
+    {
+      "id": "nightly",
+      "name": "Nightly publish",
+      "owner": "alice",
+      "enabled": true,
+      "schedule": {
+        "type": "daily",
+        "time": "23:30",
+        "timezone": "Asia/Tokyo"
+      },
+      "tasks": [
+        {
+          "id": "publish",
+          "name": "Publish",
+          "cwd": {
+            "default": ".",
+            "windows": "D:/work/site",
+            "linux": "/srv/site",
+            "macos": "/Users/alice/site"
+          },
+          "command": "python publish.py",
+          "retry": 1,
+          "depend_mode": "all",
+          "depends_on": []
+        }
+      ]
+    }
+  ]
+}
+```
+
+`flows` 的順序就是 Flow 排程順序，`tasks` 的順序就是 task sequence。schedule 的 `type` 可為 `once`（`at`）、`daily`（`time`、`timezone`）或 `periodic`（`every`、可選 `first_at`）。dependency 使用 `{ "task_id": "...", "status": "succeeded|failed" }`。
+
+`cwd` 可直接寫字串，也可用上例的 platform map。目前 OS 的值優先於 `default`；兩者都沒有時使用 definition file 所在目錄。相對路徑以 definition file 所在目錄解析。實際選中的目錄必須已存在；其他 OS 的 override 會保留到檔案中，但不會在本機檢查是否存在。
+
+Parser 會拒絕未知或重複欄位、缺少欄位、未支援的 schema、錯誤 schedule、重複 ID、遺失 dependency、矛盾 edge 與 cycle，不會忽略拼字錯誤。
+
+### Revision、衝突與 no-op
+
+`base.revision` 與 `base.hash` 代表編輯起點。若別人在 export 後已改變 workspace，sync 會回報 stale conflict；重新 export、重新套用你的編輯，再跑 dry-run。兩個使用者從同一個 base 同時同步不同內容時，只會有一個成功。若 desired state 已與目前狀態相同，即使 base 已舊也會安全地回報 no-op，不增加 revision 或重複 snapshot。
+
+### Snapshot 與 source archive
+
+```bash
+stoker flow snapshot
+```
+
+`snapshot` 在兩種 source mode 都可使用。檔案保存在 `<STOKER_HOME>/flows/snapshots/`，名稱包含 UTC 時間、revision 與 hash。正式 sync 會先建立覆蓋前 snapshot，並把輸入保存到 `<STOKER_HOME>/flows/sources/`；等價內容以 SHA-256 去重。完成的 artifact 設為唯讀，讀取時驗證 hash。若 artifact 無法寫入，DB desired state 不會被套用。
+
+Sync 是 exact desired state：JSON 中缺少的 user Flow 會從未來排程移除；既有 run、attempt、log 與執行時保存的 definition snapshot 不會因此被改寫。新增或變更 schedule 時，舊的 pending/reserved occurrence 會被 supersede。
+
 ## 建立與執行 Flow
 
 Flow 將多個 task 組成一個 run。建立與啟用 Flow 分成三步：先建立包含 schedule 的 draft，再新增 task，最後 commit Flow。
