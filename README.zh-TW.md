@@ -128,4 +128,20 @@ stoker flow commit frequent_a001
 stoker flow list
 ```
 
+### 宣告式 Flow 定義
+
+若要把整組 Flow 定義放入版本控制或 code review，可使用 JSON source mode：
+
+```bash
+stoker flow export --dir ./flow-definitions
+# 編輯剛匯出的 JSON。
+stoker queue lock
+stoker flow source-mode sync
+stoker flow sync <EXPORTED_JSON> --dry-run
+stoker flow sync <EXPORTED_JSON>
+# 確認結果後才恢復排程。
+stoker queue unlock
+```
+
+
 一次性／週期性排程、standalone scheduled Job、重試、Flow 編輯、查看 run、取消與 recovery，請看 [scheduled 詳細操作指南](docs/scheduled.zh-TW.md)。

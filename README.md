@@ -13,9 +13,9 @@
 
 English | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md)
 
-**stoker is a lightweight, cross-platform task scheduling CLI written in Rust.** It provides two operating modes: serial mode and scheduled mode.
+**stoker is a lightweight, low-resource task scheduling CLI written in Rust.** It provides two operating modes: serial mode and scheduled mode.
 
-Serial mode is suited to **GPU-, CPU-, or memory-intensive** jobs that should run one at a time.
+Serial mode is suited to **long-running, GPU-, CPU-, or memory-intensive** jobs and runs them one at a time.
 
 Scheduled mode is suited to **recurring**, lightweight multi-step tasks with dependencies and can run multiple tasks in one Flow.
 
@@ -84,7 +84,7 @@ stoker logs -f <JOB_ID>
 
 After commit, Jobs run one at a time. `--user` is an owner label used for display and filtering; it is not an operating-system account or authentication mechanism.
 
-For queue editing, cancellation, logs, policies, timezones, backups, and all serial commands, read the [Traditional Chinese serial guide](docs/serial.zh-TW.md).
+For queue editing, cancellation, and all serial commands, read the [Traditional Chinese serial guide](docs/serial.zh-TW.md).
 
 ## 2. scheduled mode
 
@@ -126,6 +126,21 @@ stoker flow task add frequent_a001 publish --name publish --cmd "python publish_
 # Validate and activate the Flow.
 stoker flow commit frequent_a001
 stoker flow list
+```
+
+### Declarative Flow definitions
+
+Use JSON source mode when Flow definitions should be reviewed or versioned as one desired-state file:
+
+```bash
+stoker flow export --dir ./flow-definitions
+# Edit the exported JSON file.
+stoker queue lock
+stoker flow source-mode sync
+stoker flow sync <EXPORTED_JSON> --dry-run
+stoker flow sync <EXPORTED_JSON>
+# Review the result before resuming scheduling.
+stoker queue unlock
 ```
 
 For one-time and periodic schedules, standalone scheduled jobs, retries, Flow editing, run inspection, cancellation, and recovery, read the [Traditional Chinese scheduled guide](docs/scheduled.zh-TW.md).

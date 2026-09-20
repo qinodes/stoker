@@ -13,9 +13,9 @@
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | 日本語
 
-**stoker は Rust で作られた、軽量でクロスプラットフォーム対応のタスクスケジューリング CLI です。** serial mode と scheduled mode の 2 つの運用モードを提供します。
+**stoker は Rust で作られた、軽量でリソース使用量の少ないタスクスケジューリング CLI です。** serial mode と scheduled mode の 2 つの運用モードを提供します。
 
-serial mode は、**GPU、CPU、メモリを大量に使う** Job を 1 件ずつ実行する用途に向いています。
+serial mode は、**長時間にわたって実行する、GPU、CPU、メモリを大量に使う** Job を 1 件ずつ実行する用途に向いています。
 
 scheduled mode は、**定期的に実行する**軽量な複数 step の task や、依存関係のある task に向いており、1 つの Flow で複数 task を実行できます。
 
@@ -84,7 +84,7 @@ stoker logs -f <JOB_ID>
 
 commit 後、Job は 1 件ずつ実行されます。`--user` は表示と絞り込みに使う owner ラベルであり、OS アカウントや認証ではありません。
 
-queue の並べ替え、cancel、log、policy、timezone、backup、全コマンドは [繁體中文の serial ガイド](docs/serial.zh-TW.md) を参照してください。
+queue の編集、cancel、serial の全コマンドは [繁體中文の serial ガイド](docs/serial.zh-TW.md) を参照してください。
 
 ## 2. scheduled mode
 
@@ -126,6 +126,21 @@ stoker flow task add frequent_a001 publish --name publish --cmd "python publish_
 # 検証して Flow を有効化します。
 stoker flow commit frequent_a001
 stoker flow list
+```
+
+### 宣言的 Flow 定義
+
+Flow 定義一式を version control や code review の対象にする場合は、JSON source mode を使います。
+
+```bash
+stoker flow export --dir ./flow-definitions
+# export した JSON を編集します。
+stoker queue lock
+stoker flow source-mode sync
+stoker flow sync <EXPORTED_JSON> --dry-run
+stoker flow sync <EXPORTED_JSON>
+# 結果を確認してから scheduling を再開します。
+stoker queue unlock
 ```
 
 one-time / periodic schedule、standalone scheduled Job、retry、Flow 編集、run の確認、cancel、recovery は [繁體中文の scheduled ガイド](docs/scheduled.zh-TW.md) を参照してください。
