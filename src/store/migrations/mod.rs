@@ -8,12 +8,13 @@ mod v007_runtime_policy;
 mod v008_flows;
 mod v009_schedule_history;
 mod v010_periodic_schedules;
+mod v011_flow_sources;
 
 use rusqlite::{Connection, Transaction, TransactionBehavior};
 
 use super::error::StoreError;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 10;
+pub const CURRENT_SCHEMA_VERSION: u32 = 11;
 
 type Migration = fn(&Transaction<'_>) -> Result<(), StoreError>;
 
@@ -28,6 +29,7 @@ const MIGRATIONS: &[(u32, Migration)] = &[
     (8, v008_flows::apply),
     (9, v009_schedule_history::apply),
     (10, v010_periodic_schedules::apply),
+    (11, v011_flow_sources::apply),
 ];
 
 pub(super) fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
@@ -160,12 +162,27 @@ fn validate_latest_schema(connection: &Connection) -> Result<(), StoreError> {
         "max_concurrency",
         "dispatch_sequence",
         "recovery_fence",
+        "flow_source_mode",
+        "flow_definition_revision",
+        "flow_definition_hash",
+        "flow_last_sync_at",
+        "flow_last_source_hash",
     ] {
         if !settings_columns.iter().any(|column| column == required) {
             return Err(StoreError::InvalidData(format!(
                 "schema version {CURRENT_SCHEMA_VERSION} is missing settings.{required}"
             )));
         }
+    }
+    let audit_exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'flow_sync_audit')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !audit_exists {
+        return Err(StoreError::InvalidData(format!(
+            "schema version {CURRENT_SCHEMA_VERSION} is missing flow_sync_audit"
+        )));
     }
     for (table, required) in [
         ("flow_definitions", "flow_id"),

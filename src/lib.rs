@@ -3,6 +3,7 @@ pub mod application;
 pub mod cli;
 pub mod config;
 pub mod domain;
+pub mod flow_source;
 pub mod ipc;
 pub(crate) mod log_storage;
 pub mod output;

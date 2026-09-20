@@ -4,11 +4,16 @@ use std::path::Path;
 
 use rusqlite::{OptionalExtension, TransactionBehavior};
 
-use crate::domain::flow::{Dependency, DependencyMode, FlowDefinition, FlowRun, FlowTask};
+use crate::config::command_cwd;
+use crate::domain::flow::{
+    Dependency, DependencyMode, FlowDefinition, FlowRun, FlowTask, validate_definition,
+    validate_task_metadata,
+};
 
 use super::connection::Store;
 use super::error::StoreError;
 use super::flow_mapping::{insert_task, load_flow, load_flow_current, parse_uuid, save_draft};
+use super::flow_sources::require_manual_source;
 use super::flows::FlowTaskInput;
 use super::standalone::standalone_flow_id;
 
@@ -22,8 +27,10 @@ pub struct ManualRequestStatus {
 
 impl Store {
     pub fn add_flow_task(&self, input: FlowTaskInput) -> Result<FlowDefinition, StoreError> {
+        validate_task_metadata(&input.task_id, &input.name).map_err(StoreError::InvalidData)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(&input.flow_id))?;
         // A frozen definition may already have task or schedule changes in its
         // future draft. Add the new task to that draft instead of rebuilding
         // from the committed graph and silently discarding earlier edits.
@@ -70,8 +77,10 @@ impl Store {
         input: FlowTaskInput,
         expected_draft_revision: Option<i64>,
     ) -> Result<FlowDefinition, StoreError> {
+        validate_task_metadata(&input.task_id, &input.name).map_err(StoreError::InvalidData)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(&input.flow_id))?;
         // Keep every edit already present in draft_json. load_flow_current
         // intentionally returns the committed graph for apply operations, so
         // using it here would overwrite earlier draft changes.
@@ -119,7 +128,7 @@ impl Store {
         if current.committed {
             let mut draft = current.clone();
             draft.tasks.push(task);
-            crate::domain::flow::validate_definition(&draft).map_err(StoreError::InvalidData)?;
+            validate_definition(&draft).map_err(StoreError::InvalidData)?;
             save_draft(&transaction, &draft, current.draft_revision + 1)?;
         } else {
             insert_task(&transaction, &current.flow_id, &task)?;
@@ -198,6 +207,7 @@ impl Store {
     ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(flow_id))?;
         let current = load_flow_current(&transaction, flow_id)?;
         if !current.committed || !current.frozen {
             return Err(StoreError::InvalidData(
@@ -239,7 +249,7 @@ impl Store {
             task.command = command.to_owned();
         }
         if let Some(cwd) = cwd {
-            task.cwd = cwd.to_string_lossy().replace('\\', "/");
+            task.cwd = command_cwd(cwd);
         }
         if let Some(retry) = retry {
             task.retry = retry;
@@ -250,7 +260,7 @@ impl Store {
         if let Some(depend_mode) = depend_mode {
             task.depend_mode = depend_mode;
         }
-        crate::domain::flow::validate_definition(&draft).map_err(StoreError::InvalidData)?;
+        validate_definition(&draft).map_err(StoreError::InvalidData)?;
         save_draft(&transaction, &draft, current.draft_revision + 1)?;
         let result = load_flow(&transaction, flow_id)?;
         transaction.commit()?;

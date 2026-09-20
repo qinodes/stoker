@@ -15,12 +15,16 @@ mod extended_args;
 mod extended_commands;
 #[path = "extended_flow.rs"]
 mod extended_flow;
+#[path = "extended_flow_source.rs"]
+mod extended_flow_source;
 #[path = "extended_output.rs"]
 mod extended_output;
 #[path = "extended_parsing.rs"]
 mod extended_parsing;
 #[path = "extended_standalone_args.rs"]
 mod extended_standalone_args;
+#[path = "extended_table.rs"]
+mod extended_table;
 
 use extended_args::ExtendedCli;
 

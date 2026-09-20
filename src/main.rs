@@ -1,9 +1,10 @@
 fn main() {
     if let Err(error) = stoker::cli::run() {
+        let message = stoker::output::escape_control_characters(&format!("error: {error:#}"));
         eprintln!(
             "{}",
             stoker::output::paint(
-                format!("error: {error:#}"),
+                message,
                 crossterm::style::Color::Red,
                 stoker::output::stderr_color_enabled(),
             )

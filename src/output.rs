@@ -46,6 +46,20 @@ pub fn paint<T: Display>(value: T, color: Color, enabled: bool) -> String {
     }
 }
 
+/// Makes untrusted text safe to print without allowing it to control the
+/// terminal. Styling owned by Stoker is applied only after this escaping.
+pub fn escape_control_characters(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
 pub fn paint_bold<T: Display>(value: T, color: Color, enabled: bool) -> String {
     let value = value.to_string();
     if enabled {
@@ -94,8 +108,8 @@ fn state_color_name(value: &str) -> Color {
 #[cfg(test)]
 mod tests {
     use super::{
-        colors_enabled, paint, paint_bold, paint_state, paint_state_name, state_color,
-        stderr_color_enabled,
+        colors_enabled, escape_control_characters, paint, paint_bold, paint_state,
+        paint_state_name, state_color, stderr_color_enabled,
     };
     use crate::JobState;
     use crossterm::style::Color;
@@ -113,6 +127,14 @@ mod tests {
         assert_eq!(paint("ok", Color::Green, false), "ok");
         assert_eq!(paint_bold("title", Color::Cyan, false), "title");
         assert_eq!(paint_state(JobState::Failed, false), "FAILED");
+    }
+
+    #[test]
+    fn untrusted_controls_are_rendered_as_visible_escapes() {
+        assert_eq!(
+            escape_control_characters("nul\0 tab\t esc\u{1b} del\u{7f} c1\u{85}"),
+            r"nul\u{0} tab\t esc\u{1b} del\u{7f} c1\u{85}"
+        );
     }
 
     #[test]

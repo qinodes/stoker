@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 use std::ffi::{OsStr, OsString};
@@ -41,6 +41,14 @@ impl StokerPaths {
         self.root.join(SNAPSHOT_DIR_NAME)
     }
 
+    pub fn flow_sources_dir(&self) -> PathBuf {
+        self.root.join("flows").join("sources")
+    }
+
+    pub fn flow_snapshots_dir(&self) -> PathBuf {
+        self.root.join("flows").join("snapshots")
+    }
+
     pub fn ipc_endpoint(&self) -> String {
         #[cfg(unix)]
         {
@@ -79,6 +87,23 @@ pub(crate) fn normalize_path(path: PathBuf) -> PathBuf {
         }
     }
     path
+}
+
+pub(crate) fn command_cwd(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        let text = text
+            .strip_prefix(r"\\?\UNC\")
+            .map(|rest| format!(r"\\{rest}"))
+            .or_else(|| text.strip_prefix(r"\\?\").map(str::to_owned))
+            .unwrap_or_else(|| text.into_owned());
+        text.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        text.into_owned()
+    }
 }
 
 #[cfg(windows)]
@@ -136,7 +161,7 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::Path;
 
-    use super::{normalize_path, windows_home_from_vars};
+    use super::{command_cwd, normalize_path, windows_home_from_vars};
 
     #[test]
     fn combines_windows_drive_and_home_path() {
@@ -169,6 +194,26 @@ mod tests {
         assert_eq!(
             normalize_path(Path::new(r"\\?\C:\work\job").into()),
             Path::new(r"C:\work\job")
+        );
+        assert_eq!(command_cwd(Path::new(r"C:\work\job")), "C:/work/job");
+        assert_eq!(
+            command_cwd(Path::new(r"\\?\UNC\server\share\job")),
+            "//server/share/job"
+        );
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod unix_tests {
+    use std::path::Path;
+
+    use super::command_cwd;
+
+    #[test]
+    fn command_cwd_preserves_backslashes_that_are_valid_unix_filename_characters() {
+        assert_eq!(
+            command_cwd(Path::new(r"/tmp/back\slash")),
+            r"/tmp/back\slash"
         );
     }
 }

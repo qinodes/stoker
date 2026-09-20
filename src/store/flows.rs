@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::domain::flow::{
     Dependency, DependencyMode, ExecutionMode, FlowDefinition, FlowTask, OccurrenceState,
-    ScheduleSpec, TaskRunState, aggregate_flow_state, validate_definition,
+    ScheduleSpec, TaskRunState, aggregate_flow_state, validate_definition, validate_flow_metadata,
 };
 
 use super::connection::Store;
@@ -16,6 +16,7 @@ use super::error::StoreError;
 use super::flow_mapping::*;
 use super::flow_runtime_mapping::*;
 use super::flow_schedule_mapping::*;
+use super::flow_sources::{advance_definition_state, require_manual_source};
 use super::standalone::sync_standalone_job_from_flow;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,9 +79,11 @@ impl Store {
         schedule: ScheduleSpec,
     ) -> Result<FlowDefinition, StoreError> {
         let mode = ExecutionMode::Scheduled;
+        validate_flow_metadata(&flow_id, &name, &owner).map_err(StoreError::InvalidData)?;
         validate_schedule(mode, Some(&schedule))?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(&flow_id))?;
         let exists: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM flow_definitions WHERE flow_id = ?1)",
             [&flow_id],
@@ -106,6 +109,7 @@ impl Store {
     pub fn commit_flow(&self, flow_id: &str) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(flow_id))?;
         require_queue_unlocked(&transaction)?;
         let mut definition = load_flow_current(&transaction, flow_id)?;
         if definition.committed {
@@ -135,6 +139,7 @@ impl Store {
             )?;
         }
         let result = load_flow(&transaction, flow_id)?;
+        advance_definition_state(&transaction)?;
         transaction.commit()?;
         Ok(result)
     }
@@ -156,6 +161,7 @@ impl Store {
     pub fn freeze_flow(&self, flow_id: &str) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(flow_id))?;
         let definition = load_flow_current(&transaction, flow_id)?;
         if !definition.committed {
             return Err(StoreError::InvalidData(
@@ -174,6 +180,8 @@ impl Store {
     pub fn disable_flow(&self, flow_id: &str, enabled: bool) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(flow_id))?;
+        let previous_enabled = load_flow_base(&transaction, flow_id)?.enabled;
         transaction.execute(
             "UPDATE flow_definitions SET enabled = ?2 WHERE flow_id = ?1",
             params![flow_id, i64::from(enabled)],
@@ -185,6 +193,9 @@ impl Store {
             sync_standalone_job_from_flow(&transaction, &definition, false)?;
         }
         let result = load_flow(&transaction, flow_id)?;
+        if previous_enabled != enabled && !flow_id.starts_with("standalone/") {
+            advance_definition_state(&transaction)?;
+        }
         transaction.commit()?;
         Ok(result)
     }
@@ -196,6 +207,7 @@ impl Store {
     ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(flow_id))?;
         let current = load_flow_base(&transaction, flow_id)?;
         if !current.frozen {
             return Err(StoreError::InvalidData("flow is not frozen".into()));
@@ -222,6 +234,7 @@ impl Store {
     ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(flow_id))?;
         let current = load_flow_base(&transaction, flow_id)?;
         if !current.frozen {
             return Err(StoreError::InvalidData("flow is not frozen".into()));
@@ -326,6 +339,9 @@ impl Store {
             schedule_changed,
         )?;
         let result = load_flow(&transaction, flow_id)?;
+        if !flow_id.starts_with("standalone/") {
+            advance_definition_state(&transaction)?;
+        }
         transaction.commit()?;
         Ok(result)
     }
@@ -350,6 +366,7 @@ impl Store {
         }
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(flow_id))?;
         let current = load_flow_base(&transaction, flow_id)?;
         if !current.committed || !current.frozen {
             return Err(StoreError::InvalidData(

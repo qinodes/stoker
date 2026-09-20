@@ -9,6 +9,7 @@ use super::connection::Store;
 use super::error::StoreError;
 use super::flow_mapping::{load_flow, load_flow_base, save_draft};
 use super::flow_runtime_mapping::expire_occurrences;
+use super::flow_sources::require_manual_source;
 
 impl Store {
     pub fn set_flow_schedule_draft(
@@ -19,6 +20,7 @@ impl Store {
     ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_manual_source(&transaction, Some(flow_id))?;
         expire_occurrences(&transaction, Utc::now())?;
         let current = load_flow_base(&transaction, flow_id)?;
         if !current.frozen {

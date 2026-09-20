@@ -9,6 +9,7 @@ use crate::domain::flow::{OccurrenceState, ScheduleSpec};
 use crate::{StokerPaths, Store, output};
 
 use super::extended_args::LogsArgs;
+use super::extended_table::print_aligned_table;
 
 pub(super) fn show_definition(store: &Store, id: Uuid, run_id: Option<Uuid>) -> Result<()> {
     let flow_id = format!("standalone/{id}");
@@ -451,34 +452,6 @@ pub(super) fn print_occurrences(store: &Store, flow_id: &str) -> Result<()> {
         rows,
     );
     Ok(())
-}
-
-fn print_aligned_table<const N: usize>(headers: [&str; N], rows: Vec<[String; N]>) {
-    let mut widths = std::array::from_fn(|index| headers[index].chars().count());
-    for row in &rows {
-        for (index, cell) in row.iter().enumerate() {
-            widths[index] = widths[index].max(cell.chars().count());
-        }
-    }
-
-    let header = headers.map(str::to_owned);
-    let separator = widths.map(|width| "-".repeat(width));
-    print_table_row(&header, &widths);
-    print_table_row(&separator, &widths);
-    for row in &rows {
-        print_table_row(row, &widths);
-    }
-}
-
-fn print_table_row<const N: usize>(cells: &[String; N], widths: &[usize; N]) {
-    let mut line = String::new();
-    for (index, cell) in cells.iter().enumerate() {
-        line.push_str(cell);
-        if index + 1 < N {
-            line.push_str(&" ".repeat(widths[index] - cell.chars().count() + 2));
-        }
-    }
-    println!("{line}");
 }
 
 #[cfg(test)]

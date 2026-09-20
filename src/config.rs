@@ -18,7 +18,7 @@ pub use model::{
     StokerConfig, TimezoneSource,
 };
 pub use paths::StokerPaths;
-pub(crate) use paths::normalize_path;
+pub(crate) use paths::{command_cwd, normalize_path};
 pub use timezone::{resolve_timezone, system_timezone_name};
 
 #[cfg(test)]

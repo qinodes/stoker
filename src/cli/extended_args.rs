@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use uuid::Uuid;
 
+use crate::store::FlowSourceMode;
+
 use crate::domain::flow::{DependencyMode, ExecutionMode};
 
 pub(super) use super::extended_standalone_args::*;
@@ -117,6 +119,31 @@ pub(super) enum FlowCommand {
     Disable(FlowDefinitionIdArgs),
     #[command(about = "Enable future automatic triggers")]
     Enable(FlowDefinitionIdArgs),
+    #[command(about = "Export committed flow definitions as versioned JSON")]
+    Export(FlowExportArgs),
+    #[command(about = "Select manual or declarative sync ownership of Flow definitions")]
+    SourceMode {
+        #[arg(value_name = "manual|sync")]
+        mode: FlowSourceMode,
+    },
+    #[command(about = "Create an immutable snapshot of committed Flow definitions")]
+    Snapshot,
+    #[command(about = "Atomically reconcile Flow definitions from JSON")]
+    Sync(FlowSyncArgs),
+}
+
+#[derive(Debug, Args)]
+pub(super) struct FlowExportArgs {
+    #[arg(long, value_name = "OUTPUT_DIRECTORY")]
+    pub(super) dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub(super) struct FlowSyncArgs {
+    #[arg(value_name = "DEFINITION_FILE")]
+    pub(super) file: PathBuf,
+    #[arg(long, help = "Validate and show the diff without writing")]
+    pub(super) dry_run: bool,
 }
 
 #[derive(Debug, Args)]

@@ -60,7 +60,17 @@ pub(super) fn has_active_work(connection: &Connection) -> Result<bool, StoreErro
         |row| row.get(0),
     )?;
     let runs: i64 = connection.query_row("SELECT COUNT(*) FROM flow_runs WHERE state IN ('STARTING','RUNNING','CANCELLING','RECOVERING')", [], |row| row.get(0))?;
-    Ok(jobs != 0 || runs != 0 || fence_with(connection)?)
+    let tasks: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM task_runs WHERE state IN ('STARTING','RUNNING','CANCELLING')",
+        [],
+        |row| row.get(0),
+    )?;
+    let attempts: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM attempts WHERE state IN ('STARTING','RUNNING')",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(jobs != 0 || runs != 0 || tasks != 0 || attempts != 0 || fence_with(connection)?)
 }
 
 pub(super) fn parse_uuid(value: &str) -> Result<Uuid, StoreError> {

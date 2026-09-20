@@ -1,17 +1,18 @@
 //! Handlers for the public `stoker flow` command tree.
 
-use std::path::Path;
-
 use anyhow::{Context, Result};
+use crossterm::style::Color;
 use uuid::Uuid;
 
+use crate::config::command_cwd;
 use crate::domain::flow::{
     ExecutionMode, ScheduleSpec, parse_daily, parse_every, parse_first_at, parse_once,
 };
 use crate::store::FlowTaskInput;
-use crate::{StokerPaths, Store};
+use crate::{StokerPaths, Store, output};
 
 use super::extended_args::*;
+use super::extended_flow_source;
 use super::extended_output::*;
 use super::extended_parsing::*;
 
@@ -81,6 +82,23 @@ pub(super) fn run(paths: &StokerPaths, store: &Store, command: FlowCommand) -> R
         FlowCommand::Occurrences(args) => print_occurrences(store, &args.flow_id)?,
         FlowCommand::Disable(args) => set_enabled(store, &args.flow_id, false)?,
         FlowCommand::Enable(args) => set_enabled(store, &args.flow_id, true)?,
+        FlowCommand::Export(args) => extended_flow_source::export(store, args)?,
+        FlowCommand::SourceMode { mode } => {
+            let state = store.set_flow_source_mode(mode)?;
+            let colors = output::stdout_color_enabled();
+            println!(
+                "Flow source mode is {} (revision {}, {}).",
+                output::paint_bold(state.mode, Color::Green, colors),
+                output::paint(state.revision, Color::Cyan, colors),
+                output::paint(state.hash, Color::Cyan, colors)
+            );
+            println!(
+                "{}",
+                output::paint("Queue remains locked.", Color::Yellow, colors)
+            );
+        }
+        FlowCommand::Snapshot => extended_flow_source::snapshot(paths, store)?,
+        FlowCommand::Sync(args) => extended_flow_source::sync(paths, store, args)?,
     }
     Ok(())
 }
@@ -107,7 +125,7 @@ fn task(store: &Store, command: FlowTaskCommand) -> Result<()> {
                     flow_id: args.flow_id,
                     task_id: args.task_id,
                     name: args.name,
-                    cwd: portable_command_cwd(&std::env::current_dir()?),
+                    cwd: command_cwd(&std::env::current_dir()?),
                     command: args.command,
                     retry: args.retries,
                     dependencies: parse_named_dependencies(args.after, args.after_failure)?,
@@ -298,17 +316,4 @@ pub(super) fn set_enabled(store: &Store, flow_id: &str, enabled: bool) -> Result
         flow.flow_id
     );
     Ok(())
-}
-
-fn portable_command_cwd(path: &Path) -> String {
-    let text = path.to_string_lossy();
-    #[cfg(windows)]
-    let text = text
-        .strip_prefix(r"\\?\UNC\")
-        .map(|rest| format!(r"\\{rest}"))
-        .or_else(|| text.strip_prefix(r"\\?\").map(str::to_owned))
-        .unwrap_or_else(|| text.into_owned());
-    #[cfg(not(windows))]
-    let text = text.into_owned();
-    text.replace('\\', "/")
 }
