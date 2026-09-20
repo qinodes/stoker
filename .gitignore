@@ -1,5 +1,6 @@
 # Rust build artifacts
 /target/
+/\.worktrees/
 /node_modules/
 /playwright-report/
 /test-results/
