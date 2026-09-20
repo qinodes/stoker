@@ -49,6 +49,8 @@ cargo install stoker-engine
 
 手動インストールや特定バージョンは [GitHub Releases](https://github.com/qinodes/stoker/releases) を参照してください。
 
+共通設定、Web UI、timezone、log、policy、backup、更新、アンインストールについては、[共通設定とメンテナンスガイド](docs/common.ja.md) を参照してください。
+
 ## 1. serial mode
 
 **serial mode** は、各 Job を queue の順番で 1 回だけ実行する用途です。`stoker create` は command を実行したいディレクトリで実行してください。
@@ -84,7 +86,7 @@ stoker logs -f <JOB_ID>
 
 commit 後、Job は 1 件ずつ実行されます。`--user` は表示と絞り込みに使う owner ラベルであり、OS アカウントや認証ではありません。
 
-queue の編集、cancel、serial の全コマンドは [繁體中文の serial ガイド](docs/serial.zh-TW.md) を参照してください。
+queue の編集、cancel、serial の全コマンドは [serial mode ガイド](docs/serial.ja.md) を参照してください。
 
 ## 2. scheduled mode
 
@@ -143,4 +145,4 @@ stoker flow sync <EXPORTED_JSON>
 stoker queue unlock
 ```
 
-one-time / periodic schedule、standalone scheduled Job、retry、Flow 編集、run の確認、cancel、recovery は [繁體中文の scheduled ガイド](docs/scheduled.zh-TW.md) を参照してください。
+one-time / periodic schedule、standalone scheduled Job、retry、Flow 編集、run の確認、cancel、recovery は [scheduled mode ガイド](docs/scheduled.ja.md) を参照してください。

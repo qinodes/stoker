@@ -49,6 +49,8 @@ cargo install stoker-engine
 
 For manual installation and version-specific downloads, see [GitHub Releases](https://github.com/qinodes/stoker/releases).
 
+For shared settings, the Web UI, timezones, logs, policies, backups, updates, and uninstallation, read the [common settings and maintenance guide](docs/common.md).
+
 ## 1. serial mode
 
 Use **serial mode** when each Job should run once, in queue order. Run `stoker create` from the directory where the command should execute.
@@ -84,7 +86,7 @@ stoker logs -f <JOB_ID>
 
 After commit, Jobs run one at a time. `--user` is an owner label used for display and filtering; it is not an operating-system account or authentication mechanism.
 
-For queue editing, cancellation, and all serial commands, read the [Traditional Chinese serial guide](docs/serial.zh-TW.md).
+For queue editing, cancellation, and all serial commands, read the [serial mode guide](docs/serial.md).
 
 ## 2. scheduled mode
 
@@ -143,4 +145,4 @@ stoker flow sync <EXPORTED_JSON>
 stoker queue unlock
 ```
 
-For one-time and periodic schedules, standalone scheduled jobs, retries, Flow editing, run inspection, cancellation, and recovery, read the [Traditional Chinese scheduled guide](docs/scheduled.zh-TW.md).
+For one-time and periodic schedules, standalone scheduled jobs, retries, Flow editing, run inspection, cancellation, and recovery, read the [scheduled mode guide](docs/scheduled.md).

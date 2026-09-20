@@ -49,6 +49,8 @@ cargo install stoker-engine
 
 手動安裝與指定版本請看 [GitHub Releases](https://github.com/qinodes/stoker/releases)。
 
+共用設定、Web UI、時區、log、policy、備份、更新與解除安裝，請看 [共用設定與維護指南](docs/common.zh-TW.md)。
+
 ## 1. serial mode
 
 **serial mode** 適合每個 Job 只執行一次、依次順序處理的情境。請在 command 應該執行的資料夾內使用 `stoker create`。
