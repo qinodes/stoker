@@ -389,11 +389,12 @@ test("policy page explains the queue gate and supports reset", async ({ page }) 
   await mockBackend(page);
   await page.goto("/#policy");
   await expect(page.getByRole("heading", { name: "Execution policy" })).toBeVisible();
-  await expect(page.getByText("Lock the queue before changing policy.")).toBeVisible();
+  await expect(page.locator('[data-action="workspace-queue-lock"]')).toHaveText("Lock queue");
   await expect(page.locator('[data-policy-set="log-max-bytes-per-job"]')).toBeDisabled();
 
-  await page.locator("[data-policy-lock]").click();
-  await expect(page.getByText("Policy changes are available")).toBeVisible();
+  await page.locator('[data-action="workspace-queue-lock"]').click();
+  await expect(page.locator('[data-action="workspace-queue-lock"]')).toHaveText("Unlock queue");
+  await expect(page.locator('[data-policy-set="log-max-bytes-per-job"]')).toBeEnabled();
   const runtime = page.locator("#policy-max_runtime_ms");
   await runtime.fill("0");
   await expect(page.getByText("Enter a positive whole number.")).toBeVisible();
@@ -454,7 +455,7 @@ test.describe("localized Web UI", () => {
     await trigger.click();
     await chinese.press("Tab");
     await expect(menu).not.toBeVisible();
-    await expect(page.locator('[data-action="refresh"]')).toBeFocused();
+    await expect(page.locator(".panel-link").first()).toBeFocused();
     await trigger.click();
     await trigger.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
@@ -548,8 +549,10 @@ test.describe("localized Web UI", () => {
 
       await page.locator('[data-route="policy"]').click();
       await expect(page.getByRole("heading", { name: translate(locale, "policy.title"), level: 1 })).toBeVisible();
-      await expect(page.locator(".policy-gate-copy p")).toHaveText("Lock the queue before changing policy.");
-      await page.locator("[data-policy-lock]").click();
+      await expect(page.locator('[data-action="workspace-queue-lock"]')).toHaveText(translate(locale, "queue.lock"));
+      await page.locator('[data-action="workspace-queue-lock"]').click();
+      await expect(page.locator('[data-action="workspace-queue-lock"]')).toHaveText(translate(locale, "queue.unlock"));
+      await expect(page.locator("#policy-max_runtime_ms")).toBeEnabled();
       await page.locator("#policy-max_runtime_ms").fill("0");
       await expect(page.getByText(translate(locale, "policy.invalidPositive"))).toBeVisible();
       await page.locator("#policy-max_runtime_ms").fill("12345");

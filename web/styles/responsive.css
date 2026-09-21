@@ -117,9 +117,8 @@
 }
 
 @media (max-width: 640px) {
-  .workspace-lock-state { display: none; }
-  .source-queue-toolbar, .source-mode-toolbar, .source-import-toolbar { align-items: flex-start; flex-direction: column; }
-  .source-queue-actions, .source-mode-toolbar .page-actions, .source-import-actions { width: 100%; justify-content: flex-start; }
+  .source-mode-toolbar, .source-import-toolbar { grid-template-columns: 1fr; align-items: flex-start; }
+  .source-mode-switch, .source-import-actions { justify-self: start; justify-content: flex-start; }
   .new-flow-form-grid { grid-template-columns: 1fr; }
 }
 

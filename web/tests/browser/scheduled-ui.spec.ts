@@ -9,33 +9,57 @@ test("scheduled navigation excludes serial pages", async ({ page }) => {
   await expect(page.locator('[data-route="queue"]')).toHaveCount(0);
 });
 
-test("workspace queue lock is operable from scheduled Sources", async ({ page }) => {
+test("workspace queue lock is operable from the shared topbar", async ({ page }) => {
   await mockBackend(page, { workspaceMode: "scheduled" });
   await page.goto("/");
 
-  await page.locator('[data-route="sources"]').click();
-  const control = page.locator('[data-source-queue-lock]');
+  const control = page.locator('[data-action="workspace-queue-lock"]');
   await expect(control).toHaveText("Lock queue");
+  await expect(control).toHaveClass(/unlocked/);
+  await expect(control.locator(".status-dot")).toBeVisible();
+  await expect(page.locator(".workspace-lock-state")).toHaveCount(0);
+  await expect(page.locator(".topbar-actions > *").last()).toHaveClass(/language-control/);
+  await expect(page.getByRole("button", { name: /refresh/i })).toHaveCount(0);
   await control.click();
   await expect(control).toHaveText("Unlock queue");
+  await expect(control).toHaveClass(/locked/);
   await expect(page.locator('[data-queue-lock-state="locked"]')).toBeVisible();
   await control.click();
   await page.locator("#confirm-accept").click();
   await expect(control).toHaveText("Lock queue");
 });
 
-test("Sources owns the scheduled queue lock control and custom source file picker", async ({ page }) => {
+test("Sources keeps the shared queue lock and custom source file picker", async ({ page }) => {
   await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "showSaveFilePicker", {
+      configurable: true,
+      value: async () => ({ createWritable: async () => ({ write: async () => {}, close: async () => {} }) }),
+    });
+  });
   await page.goto("/");
 
-  await expect(page.locator('[data-action="workspace-queue-lock"]')).toHaveCount(0);
+  await expect(page.locator('[data-action="workspace-queue-lock"]')).toBeVisible();
   await page.locator('[data-route="sources"]').click();
-  const queue = page.locator('[data-source-queue]');
-  await expect(queue).toBeVisible();
-  await queue.getByRole("button", { name: "Lock queue" }).click();
-  await expect(queue).toContainText("Queue locked");
+  await expect(page.locator('[data-source-queue]')).toHaveCount(0);
+  await expect(page.locator(".source-mode-actions")).toHaveCount(0);
+  await expect(page.locator(".source-import-panel")).toBeVisible();
+  await expect(page.locator(".source-import-panel").getByRole("button", { name: "Export" })).toBeVisible();
+  await expect(page.locator(".source-import-panel").getByRole("button", { name: "Snapshot" })).toBeVisible();
   await expect(page.locator('[data-source-file-picker]')).toBeVisible();
   await expect(page.locator('[data-source-file-input]')).toHaveCSS("display", "none");
+  await expect(page.locator(".source-mode-switch-arrow")).toHaveText("↔");
+  await expect(page.getByRole("button", { name: "Dry run" })).toBeDisabled();
+  await page.getByRole("button", { name: "Export" }).click();
+  await expect(page.locator("#toast-region")).toContainText("A second source copy was saved.");
+  await expect(page.getByText("Document loaded; previous preview cleared.", { exact: true })).toHaveCount(0);
+});
+
+test("policy omits the redundant change protection row", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.goto("/");
+  await page.locator('[data-route="policy"]').click();
+  await expect(page.getByText("Change protection", { exact: true })).toHaveCount(0);
 });
 
 test("a scheduled draft Flow can be deleted after confirmation", async ({ page }) => {
@@ -172,12 +196,20 @@ test("sync mode disables Flow edits, previews removal, and syncs only after conf
   await expect(page.getByRole("button", { name: "Add task", exact: true })).toHaveCount(0);
   await page.locator('[data-route="sources"]').click();
   await page.locator('input[type="file"]').setInputFiles({ name: "source.json", mimeType: "application/json", buffer: Buffer.from('{"version":1,"flows":[]}') });
-  await page.getByRole("button", { name: "Dry run" }).click();
+  const dryRun = page.getByRole("button", { name: "Dry run" });
+  await expect(dryRun).toBeEnabled();
+  await expect(dryRun).toHaveClass(/source-action-ready/);
+  await dryRun.click();
+  await expect(dryRun).not.toHaveClass(/source-action-ready/);
   await expect(page.getByRole("heading", { name: "Sync preview" })).toBeVisible();
+  await expect(page.locator(".source-preview-panel")).toHaveCSS("margin-top", "18px");
   await expect(page.getByText("Removed").locator("..")) .toContainText("1");
   const syncRequest = page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === "/api/v1/scheduled/sources/sync");
   await page.getByRole("button", { name: "Confirm sync" }).click();
   await syncRequest;
+  await expect(page.getByRole("button", { name: "Dry run" })).toBeDisabled();
+  await expect(page.getByText("Document loaded; previous preview cleared.", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Sync preview" })).toHaveCount(0);
   await page.locator('[data-route="workloads"]').click();
   await expect(page.getByText("No Flows are available")).toBeVisible();
 });

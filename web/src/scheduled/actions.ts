@@ -24,6 +24,38 @@ interface ScheduledActionDependencies {
   requestConfirmation: (confirmation: ConfirmationRequest) => Promise<boolean>;
 }
 
+type SaveFileWriter = { write: (data: string) => Promise<void>; close: () => Promise<void> };
+type SaveFileHandle = { createWritable: () => Promise<SaveFileWriter> };
+type SaveFilePicker = (options: { suggestedName: string; types: Array<{ description: string; accept: Record<string, string[]> }> }) => Promise<SaveFileHandle>;
+type SaveFileWindow = Window & { showSaveFilePicker?: SaveFilePicker };
+
+async function saveSourceCopy(text: string, suggestedName: string): Promise<"saved" | "downloaded" | "cancelled"> {
+  const picker = (window as SaveFileWindow).showSaveFilePicker;
+  if (picker) {
+    try {
+      const handle = await picker({ suggestedName, types: [{ description: "JSON source", accept: { "application/json": [".json"] } }] });
+      const writable = await handle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      return "saved";
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
+      if (!(error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError"))) throw error;
+    }
+  }
+  const url = URL.createObjectURL(new Blob([text], { type: "application/json;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = suggestedName;
+  link.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  return "downloaded";
+}
+
+function snapshotName(path: string): string {
+  return path.split(/[\\/]/).pop() || "stoker-flow-snapshot.json";
+}
+
 /** Scheduled-only mutations and reads, kept apart from the serial workspace controller. */
 export function useScheduledActions({ api, stateRef, setState, showToast, loadData, enterModeTransition, requestConfirmation }: ScheduledActionDependencies) {
   const scheduled = useMemo(() => scheduledApi(api), [api]);
@@ -136,15 +168,19 @@ export function useScheduledActions({ api, stateRef, setState, showToast, loadDa
   const syncScheduledSource = useCallback(async () => {
     const { sourceDocument, syncPreview } = stateRef.current.scheduled;
     if (!sourceDocument || !syncPreview) return;
-    try { await scheduled.syncSource(sourceDocument.value, syncPreview.hash); setState((current) => current.mode === "scheduled" ? { ...current, scheduled: reduceScheduled(current.scheduled, { type: "syncPreviewLoaded", preview: null }) } : current); showToast(uiMessage("toast.scheduledSync")); await loadData(); }
+    try { await scheduled.syncSource(sourceDocument.value, syncPreview.hash); setState((current) => current.mode === "scheduled" ? { ...current, scheduled: reduceScheduled(current.scheduled, { type: "sourceImportCleared" }) } : current); showToast(uiMessage("toast.scheduledSync")); await loadData(); }
     catch (error) { setState((current) => current.mode === "scheduled" ? { ...current, scheduled: reduceScheduled(current.scheduled, { type: "syncPreviewLoaded", preview: null }) } : current); showToast(error instanceof Error ? error.message : String(error), true); }
   }, [loadData, scheduled, setState, showToast, stateRef]);
   const setScheduledSourceMode = useCallback(async (mode: "manual" | "sync") => { try { await scheduled.setSourceMode(mode); await loadData(); } catch (error) { showToast(error instanceof Error ? error.message : String(error), true); } }, [loadData, scheduled, showToast]);
-  const exportScheduledSource = useCallback(async () => {
-    try { const { document: value } = await scheduled.exportSource(); const text = JSON.stringify(value, null, 2); const document: ScheduledSourceDocument = { text, hash: await hashSourceText(text), value }; setState((current) => current.mode === "scheduled" ? { ...current, scheduled: reduceScheduled(current.scheduled, { type: "sourceDocumentLoaded", document }) } : current); }
-    catch (error) { showToast(error instanceof Error ? error.message : String(error), true); }
-  }, [hashSourceText, scheduled, setState, showToast]);
-  const snapshotScheduledSource = useCallback(async () => { try { await scheduled.snapshotSource(); showToast(uiMessage("toast.snapshot")); } catch (error) { showToast(error instanceof Error ? error.message : String(error), true); } }, [scheduled, showToast]);
+  const saveSourceSnapshot = useCallback(async () => {
+    const { document: value, path } = await scheduled.snapshotSource();
+    const text = `${JSON.stringify(value, null, 2)}\n`;
+    showToast(uiMessage("toast.sourceSnapshotSaved"));
+    const result = await saveSourceCopy(text, snapshotName(path));
+    showToast(uiMessage(result === "saved" ? "toast.sourceCopySaved" : result === "downloaded" ? "toast.sourceCopyDownloaded" : "toast.sourceCopyCancelled"));
+  }, [scheduled, showToast]);
+  const exportScheduledSource = useCallback(async () => { try { await saveSourceSnapshot(); } catch (error) { showToast(error instanceof Error ? error.message : String(error), true); } }, [saveSourceSnapshot, showToast]);
+  const snapshotScheduledSource = useCallback(async () => { try { await saveSourceSnapshot(); } catch (error) { showToast(error instanceof Error ? error.message : String(error), true); } }, [saveSourceSnapshot, showToast]);
   const saveScheduledConcurrency = useCallback(async (value: number) => {
     if (!Number.isSafeInteger(value) || value < 1) return false;
     try { await scheduled.setMaxConcurrency(value); showToast(uiMessage("toast.saved")); await loadData(); return true; }

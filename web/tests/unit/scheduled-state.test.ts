@@ -30,3 +30,17 @@ test("sync can only submit its previewed hash", () => {
   assert.equal(canConfirmSync(state, "sha256:abc"), true);
   assert.equal(canConfirmSync(state, "sha256:def"), false);
 });
+
+test("clearing a confirmed source import removes its document and preview", () => {
+  const loaded = reduceScheduled(createScheduledState(), {
+    type: "sourceDocumentLoaded",
+    document: { text: "{}", hash: "sha256:source", value: {} },
+  });
+  const reviewed = withSyncPreview(loaded, {
+    hash: "sha256:reviewed", changed: true,
+    diff: { added: 0, updated: 0, removed: 0, unchanged: 1 },
+  });
+  const cleared = reduceScheduled(reviewed, { type: "sourceImportCleared" });
+  assert.equal(cleared.sourceDocument, null);
+  assert.equal(cleared.syncPreview, null);
+});

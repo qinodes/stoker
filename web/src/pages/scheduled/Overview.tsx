@@ -4,11 +4,11 @@ import { useI18n } from "../../i18n/context";
 
 export function ScheduledOverview() {
   const { t } = useI18n();
-  const { state, actions } = useWorkspace();
+  const { state } = useWorkspace();
   const overview = state.scheduled.overview;
   const capacity = overview?.capacity;
   return <>
-    <PageHeading eyebrow={t("scheduled.overview.eyebrow")} title={t("scheduled.overview.title")} description={t("scheduled.overview.description")} actions={<button className="button secondary" type="button" onClick={() => void actions.loadData()}>{t("scheduled.refresh")}</button>} />
+    <PageHeading eyebrow={t("scheduled.overview.eyebrow")} title={t("scheduled.overview.title")} description={t("scheduled.overview.description")} />
     <div className="metrics-grid scheduled-metrics">
       <Metric label={t("scheduled.capacity")} value={`${capacity?.active_attempts || 0}/${capacity?.max_concurrency || 0}`} note={t("scheduled.activeAttempts")} accent="accent-cyan" />
       <Metric label={t("scheduled.activeRuns")} value={overview?.active_runs.length || 0} note={t("scheduled.now")} accent="accent-ember" />

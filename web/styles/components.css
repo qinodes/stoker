@@ -40,15 +40,26 @@
 
 .button:disabled { cursor: not-allowed; opacity: .46; transform: none; }
 
-.workspace-lock-state { color: var(--text-subtle); font-size: 10px; font-weight: 750; white-space: nowrap; }
-.workspace-lock-state.locked { color: var(--yellow); }
+.workspace-lock-control { border-radius: 99px; border-color: rgba(117, 214, 163, .32); background: rgba(117, 214, 163, .1); color: var(--green); }
+.workspace-lock-control:hover { border-color: rgba(117, 214, 163, .55); background: rgba(117, 214, 163, .16); color: var(--green); }
+.workspace-lock-control .status-dot { background: var(--green); box-shadow: 0 0 0 4px rgba(117, 214, 163, .1); }
+.workspace-lock-control.locked { border-color: rgba(243, 198, 107, .34); background: rgba(243, 198, 107, .12); color: var(--yellow); }
+.workspace-lock-control.locked:hover { border-color: rgba(243, 198, 107, .58); background: rgba(243, 198, 107, .18); color: var(--yellow); }
+.workspace-lock-control.locked .status-dot { background: var(--yellow); box-shadow: 0 0 0 4px rgba(243, 198, 107, .1); }
 
-.source-queue-panel, .source-mode-panel, .source-import-panel { margin-top: 18px; }
-.source-queue-toolbar, .source-mode-toolbar, .source-import-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 20px 22px; }
-.source-queue-toolbar h2, .source-mode-toolbar h2, .source-import-toolbar h2 { margin: 0 0 5px; color: var(--text); font-size: 15px; }
-.source-queue-toolbar p, .source-mode-toolbar p, .source-import-toolbar p { max-width: 680px; margin: 0; color: var(--text-subtle); font-size: 11px; line-height: 1.55; }
-.source-queue-actions { display: flex; align-items: center; gap: 10px; }
-.source-import-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+.source-mode-panel, .source-import-panel { margin-top: 18px; }
+.source-preview-panel { margin-top: 18px; }
+.source-mode-toolbar, .source-import-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 24px; padding: 22px 26px; }
+.source-mode-copy, .source-import-copy { min-width: 0; }
+.source-mode-toolbar h2, .source-import-toolbar h2 { margin: 4px 0 5px; color: var(--text); font-size: 16px; }
+.source-mode-toolbar p, .source-import-toolbar p { max-width: 680px; margin: 0; color: var(--text-subtle); font-size: 11px; line-height: 1.55; }
+.source-mode-switch { display: inline-flex; align-items: center; gap: 7px; justify-self: end; }
+.source-mode-option:disabled { border-color: rgba(120, 216, 220, .34); background: rgba(120, 216, 220, .1); color: var(--text); opacity: 1; }
+.source-mode-switch-arrow { color: var(--text-subtle); font-size: 18px; line-height: 1; }
+.source-import-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.source-tool-button { margin-left: 4px; }
+.button.source-action-ready { border-color: rgba(117, 214, 163, .45); background: rgba(117, 214, 163, .14); color: var(--green); box-shadow: 0 8px 18px rgba(117, 214, 163, .1); }
+.button.source-action-ready:hover { border-color: rgba(117, 214, 163, .7); background: rgba(117, 214, 163, .2); color: var(--green); }
 .source-import-panel .file-input { margin-bottom: 12px; }
 .source-import-panel .source-document { margin-bottom: 20px; }
 

@@ -9,6 +9,7 @@ export type ScheduledAction =
   | { type: "runsLoaded"; runs: ScheduledRun[] }
   | { type: "runLoaded"; run: ScheduledRun }
   | { type: "sourceDocumentLoaded"; document: ScheduledSourceDocument }
+  | { type: "sourceImportCleared" }
   | { type: "syncPreviewLoaded"; preview: ScheduledSyncPreview | null }
   | { type: "concurrencyUnsafe"; value: boolean };
 
@@ -26,6 +27,7 @@ export function reduceScheduled(state: ScheduledWorkspaceState, action: Schedule
     case "runsLoaded": return { ...state, runs: action.runs, selectedRun: state.selectedRun ? action.runs.find((run) => run.run_id === state.selectedRun?.run_id) || state.selectedRun : null };
     case "runLoaded": return { ...state, selectedRun: action.run, runs: replace(state.runs, action.run, "run_id") };
     case "sourceDocumentLoaded": return { ...state, sourceDocument: action.document, syncPreview: null };
+    case "sourceImportCleared": return { ...state, sourceDocument: null, syncPreview: null };
     case "syncPreviewLoaded": return { ...state, syncPreview: action.preview };
     case "concurrencyUnsafe": return { ...state, concurrencyUnsafe: action.value };
   }
