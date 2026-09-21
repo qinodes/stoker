@@ -18,6 +18,7 @@ pub(super) fn build_router(state: ApiState) -> Router {
     let api_routes = Router::new()
         .route("/status", get(status::status))
         .route("/workspace", get(workspace::workspace))
+        .route("/workspace/mode", post(workspace::set_mode))
         .route("/scheduled/overview", get(scheduled::overview::overview))
         .route("/scheduled/sources", get(scheduled::sources::state))
         .route("/scheduled/sources/export", get(scheduled::sources::export))
@@ -317,6 +318,31 @@ mod tests {
         )
         .await;
         assert_eq!(scheduled["mode"], "scheduled");
+    }
+
+    #[tokio::test]
+    async fn workspace_mode_change_requires_a_locked_queue() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = state_for(&test_paths(directory.path()));
+        let blocked = post_json(
+            build_router(state.clone()),
+            "/api/v1/workspace/mode",
+            serde_json::json!({"mode": "scheduled"}),
+        )
+        .await;
+        assert_eq!(blocked.status(), StatusCode::CONFLICT);
+        let blocked_body = json_response(blocked).await;
+        assert_eq!(blocked_body["code"], "conflict");
+
+        state.store.lock_queue().unwrap();
+        let changed = post_json(
+            build_router(state),
+            "/api/v1/workspace/mode",
+            serde_json::json!({"mode": "scheduled"}),
+        )
+        .await;
+        assert_eq!(changed.status(), StatusCode::OK);
+        assert_eq!(json_response(changed).await["mode"], "scheduled");
     }
 
     #[tokio::test]

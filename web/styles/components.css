@@ -47,6 +47,20 @@
 .workspace-lock-control.locked:hover { border-color: rgba(243, 198, 107, .58); background: rgba(243, 198, 107, .18); color: var(--yellow); }
 .workspace-lock-control.locked .status-dot { background: var(--yellow); box-shadow: 0 0 0 4px rgba(243, 198, 107, .1); }
 
+.workspace-mode-switch { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; width: 136px; min-height: 34px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-soft); }
+.workspace-mode-thumb { position: absolute; inset: 3px auto 3px 3px; width: calc(50% - 3px); border: 1px solid rgba(120, 216, 220, .4); border-radius: 9px; background: rgba(120, 216, 220, .12); box-shadow: 0 5px 14px rgba(0, 0, 0, .18); transition: transform .2s ease, border-color .2s ease, background .2s ease; }
+.workspace-mode-switch.scheduled .workspace-mode-thumb { transform: translateX(100%); border-color: rgba(244, 163, 79, .48); background: rgba(244, 163, 79, .14); }
+.workspace-mode-switch.pending { opacity: .72; }
+.workspace-mode-option { position: relative; z-index: 1; min-width: 0; min-height: 26px; padding: 0 7px; border: 0; border-radius: 999px; background: transparent; color: var(--text-subtle); cursor: pointer; font-size: 10px; font-weight: 750; line-height: 1; white-space: nowrap; }
+.workspace-mode-option[aria-checked="true"] { color: var(--text); }
+.workspace-mode-option:hover:not(:disabled) { color: var(--text); }
+.workspace-mode-option:disabled { cursor: not-allowed; }
+.sidebar-mode-control { margin: 0 4px 18px; }
+.sidebar-mode-control .workspace-mode-switch { width: 100%; min-height: 40px; padding: 4px; border-radius: 11px; background: rgba(18, 28, 42, .74); box-shadow: 0 8px 18px rgba(0, 0, 0, .12); }
+.sidebar-mode-control .workspace-mode-thumb { inset: 4px auto 4px 4px; width: calc(50% - 4px); border-radius: 8px; }
+.sidebar-mode-control .workspace-mode-option { min-height: 30px; font-size: 11px; }
+.topbar-mode-control { display: none; }
+
 .source-mode-panel, .source-import-panel { margin-top: 18px; }
 .source-preview-panel { margin-top: 18px; }
 .source-mode-toolbar, .source-import-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 24px; padding: 22px 26px; }

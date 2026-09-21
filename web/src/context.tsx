@@ -37,6 +37,7 @@ export interface WorkspaceActions {
   resolveConfirmation: (value: boolean) => void;
   cleanJobs: () => Promise<void>;
   queueLock: (locked: boolean) => Promise<void>;
+  setWorkspaceMode: (mode: WorkspaceMode) => Promise<void>;
   moveQueueJob: (id: string, targetOrder: number) => Promise<void>;
   commitJob: (id: string) => Promise<void>;
   cancelJob: (id: string) => Promise<void>;
@@ -225,7 +226,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const workspace = await api.workspace();
       if (!sequence.current.isCurrent(request)) return;
       const current = stateRef.current;
-      if (current.mode !== null && current.mode !== workspace.mode) {
+      const modeChanged = current.mode !== null && current.mode !== workspace.mode;
+      if (modeChanged && !acceptModeTransition) {
         enterModeTransition(workspace.mode);
         return;
       }
@@ -233,7 +235,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setState((value) => ({ ...value, workspace, modeTransition: { actualMode: workspace.mode, deferred: value.modeTransition?.deferred ?? false }, loading: false, error: null }));
         return;
       }
-      if (current.mode === null) {
+      if (current.mode === null || modeChanged) {
         setState((value) => ({
           ...value,
           mode: workspace.mode,
@@ -418,6 +420,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (!locked && !await requestConfirmation({ kicker: uiMessage("confirm.maintenance"), title: uiMessage("queue.unlock"), message: uiMessage("queue.unlockHelp"), acceptLabel: uiMessage("queue.unlock"), destructive: false })) return;
     await mutate(`/api/v1/queue/${locked ? "lock" : "unlock"}`, "POST");
   }, [mutate, requestConfirmation]);
+  const setWorkspaceMode = useCallback(async (mode: WorkspaceMode) => {
+    const current = stateRef.current;
+    if (!current.mode || current.modeTransition || current.mode === mode) return;
+    try {
+      const result = await api.send<{ mode: WorkspaceMode }>("/api/v1/workspace/mode", "POST", { mode });
+      if (result.mode !== mode) return;
+      await loadData(true);
+    } catch (error) {
+      const actualMode = modeFromApiError(error);
+      if (actualMode) { enterModeTransition(actualMode); return; }
+      showToast(error instanceof Error ? error.message : String(error), true);
+    }
+  }, [api, enterModeTransition, loadData, showToast]);
   const moveQueueJob = useCallback(async (id: string, targetOrder: number) => { await mutate(`/api/v1/queue/${id}/move`, "POST", { target_order: targetOrder }); }, [mutate]);
   const commitJob = useCallback(async (id: string) => { if (await requestConfirmation({ kicker: uiMessage("confirm.jobAction"), title: uiMessage("confirm.commitTitle"), message: uiMessage("confirm.transition"), acceptLabel: uiMessage("jobs.commit"), destructive: false })) { await mutate(`/api/v1/jobs/${id}/commit`, "POST"); setJobDetailOpen(false); } }, [mutate, requestConfirmation]);
   const cancelJob = useCallback(async (id: string) => { if (await requestConfirmation({ kicker: uiMessage("confirm.jobAction"), title: uiMessage("confirm.cancelTitle"), message: uiMessage("confirm.transition"), acceptLabel: uiMessage("jobs.cancel"), destructive: true })) { await mutate(`/api/v1/jobs/${id}/cancel`, "POST"); setJobDetailOpen(false); } }, [mutate, requestConfirmation]);
@@ -433,7 +448,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const acceptModeTransition = useCallback(() => loadData(true), [loadData]);
   const deferModeTransitionAction = useCallback(() => setState((current) => deferModeTransition(current)), []);
   const checkModeTransition = useCallback(() => loadData(false), [loadData]);
-  const actions = useMemo<WorkspaceActions>(() => ({ loadData, acceptModeTransition, deferModeTransition: deferModeTransitionAction, checkModeTransition, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy, ...scheduledActions }), [loadData, acceptModeTransition, deferModeTransitionAction, checkModeTransition, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy, scheduledActions]);
+  const actions = useMemo<WorkspaceActions>(() => ({ loadData, acceptModeTransition, deferModeTransition: deferModeTransitionAction, checkModeTransition, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, setWorkspaceMode, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy, ...scheduledActions }), [loadData, acceptModeTransition, deferModeTransitionAction, checkModeTransition, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, setWorkspaceMode, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy, scheduledActions]);
   return <WorkspaceContext.Provider value={{ state, actions, jobFormOpen, jobDetailOpen, detailEditing, confirmation, toasts }}>{children}</WorkspaceContext.Provider>;
 }
 

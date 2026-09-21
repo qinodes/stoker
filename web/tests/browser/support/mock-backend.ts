@@ -46,6 +46,13 @@ export async function mockBackend(page: Page, options: MockBackendOptions): Prom
     if (path === "/api/v1/workspace") return json(route, workspace(model));
     if (path === "/api/v1/queue/lock" && method === "POST") { model.queueLocked = true; return json(route, { jobs: [], locked: true }); }
     if (path === "/api/v1/queue/unlock" && method === "POST") { model.queueLocked = false; return json(route, { jobs: [], locked: false }); }
+    if (path === "/api/v1/workspace/mode" && method === "POST") {
+      const target = requestJson<{ mode: WorkspaceMode }>(request).mode;
+      if (!model.queueLocked) return typedError(route, 409, "conflict", "queue is unlocked; run 'stoker queue lock' first");
+      if (model.activeAttempts > 0) return typedError(route, 409, "conflict", "cannot change mode while an execution is active");
+      model.workspaceMode = target;
+      return json(route, { mode: target });
+    }
     if (path === "/api/v1/policy") return json(route, policy());
     if (path === "/api/v1/config" || path === "/api/v1/config/snapshots") return json(route, { config: { timezone: "UTC" }, effective_timezone: { name: "UTC", source: "config" }, timezones: ["UTC", "Asia/Tokyo"], config_path: "/config.json", snapshot_dir: "/snapshots", snapshots: [] });
     if (model.workspaceMode === "serial") return serial(route, path, method);

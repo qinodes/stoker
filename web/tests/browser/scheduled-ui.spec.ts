@@ -29,6 +29,23 @@ test("workspace queue lock is operable from the shared topbar", async ({ page })
   await expect(control).toHaveText("Lock queue");
 });
 
+test("workspace mode switch changes modes only after the queue is locked", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "serial" });
+  await page.goto("/");
+
+  const modeSwitch = page.locator(".sidebar-mode-control [data-workspace-mode-switch]");
+  await expect(modeSwitch).toHaveAttribute("data-workspace-mode", "serial");
+  await expect(modeSwitch.locator('[data-workspace-mode-option="serial"]')).toHaveAttribute("aria-checked", "true");
+  await modeSwitch.locator('[data-workspace-mode-option="scheduled"]').click();
+  await expect(page.locator("#toast-region")).toContainText("queue is unlocked; run 'stoker queue lock' first");
+  await page.locator('[data-action="workspace-queue-lock"]').click();
+  await expect(page.locator('[data-action="workspace-queue-lock"]')).toHaveClass(/locked/);
+  await modeSwitch.locator('[data-workspace-mode-option="scheduled"]').click();
+  await expect(page.locator('[data-route="workloads"]')).toBeVisible();
+  await expect(modeSwitch).toHaveAttribute("data-workspace-mode", "scheduled");
+  await expect(modeSwitch.locator('[data-workspace-mode-option="scheduled"]')).toHaveAttribute("aria-checked", "true");
+});
+
 test("Sources keeps the shared queue lock and custom source file picker", async ({ page }) => {
   await mockBackend(page, { workspaceMode: "scheduled" });
   await page.addInitScript(() => {
@@ -120,6 +137,8 @@ test("server mode change clears serial content until accepted", async ({ page })
   await expect(page.locator(".jobs-table")).toBeVisible();
   backend.workspaceMode = "scheduled";
   await expect(page.getByRole("heading", { name: /server mode changed/i })).toBeVisible();
+  await expect(page.locator(".sidebar-mode-control [data-workspace-mode-switch]")).toHaveAttribute("data-workspace-mode", "scheduled");
+  await expect(page.locator(".sidebar-mode-control [data-workspace-mode-switch]")).toHaveAttribute("aria-busy", "true");
   await expect(page.locator(".jobs-table")).toHaveCount(0);
   await page.getByRole("button", { name: "Later" }).click();
   await expect(page.getByRole("heading", { name: /server mode changed/i })).toBeVisible();

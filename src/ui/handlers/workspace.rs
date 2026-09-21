@@ -1,13 +1,28 @@
 use axum::Json;
 use axum::extract::State;
 use chrono::Utc;
+use serde::Deserialize;
+use std::str::FromStr;
 
 use crate::application;
 use crate::domain::flow::ExecutionMode;
+use crate::store::StoreError;
 
 use super::super::dto::{TimezoneResponse, WorkspaceResponse, WorkspaceSchedulerResponse};
 use super::super::error::ApiError;
 use super::super::state::ApiState;
+use super::json_body;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::ui) struct WorkspaceModeRequest {
+    mode: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub(in crate::ui) struct WorkspaceModeResponse {
+    mode: &'static str,
+}
 
 pub(in crate::ui) async fn workspace(
     State(state): State<ApiState>,
@@ -44,6 +59,23 @@ pub(in crate::ui) async fn workspace(
     }))
 }
 
+pub(in crate::ui) async fn set_mode(
+    State(state): State<ApiState>,
+    body: Result<Json<WorkspaceModeRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<WorkspaceModeResponse>, ApiError> {
+    let body = json_body(body)?;
+    let mode = ExecutionMode::from_str(&body.mode).map_err(ApiError::invalid_input)?;
+    state
+        .store
+        .set_mode(mode)
+        .map(|mode| {
+            Json(WorkspaceModeResponse {
+                mode: mode_name(mode),
+            })
+        })
+        .map_err(mode_change_error)
+}
+
 #[allow(dead_code)] // Used by scheduled-mode routes added after this workspace contract.
 pub(in crate::ui) fn require_workspace_mode(
     state: &ApiState,
@@ -61,5 +93,13 @@ fn mode_name(mode: ExecutionMode) -> &'static str {
     match mode {
         ExecutionMode::Serial => "serial",
         ExecutionMode::Scheduled => "scheduled",
+    }
+}
+
+fn mode_change_error(error: StoreError) -> ApiError {
+    match error {
+        StoreError::QueueUnlocked => ApiError::conflict(error.to_string()),
+        StoreError::InvalidData(message) => ApiError::conflict(message),
+        other => ApiError::internal(other),
     }
 }
