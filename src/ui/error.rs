@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::application::{self, ApplicationError, ApplicationErrorCode, Conflict};
+use crate::domain::flow::ExecutionMode;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -16,6 +17,8 @@ pub(super) enum ErrorCode {
     Forbidden,
     NotFound,
     Conflict,
+    #[allow(dead_code)] // Reserved for scheduled-mode routes added after this workspace contract.
+    ModeChanged,
     MethodNotAllowed,
     PayloadTooLarge,
     UnsupportedMediaType,
@@ -68,12 +71,26 @@ impl ApiError {
         Self::new(StatusCode::NOT_FOUND, ErrorCode::NotFound, message)
     }
 
+    pub(super) fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, ErrorCode::Conflict, message)
+    }
+
     pub(super) fn method_not_allowed() -> Self {
         Self::new(
             StatusCode::METHOD_NOT_ALLOWED,
             ErrorCode::MethodNotAllowed,
             "HTTP method is not allowed",
         )
+    }
+
+    #[allow(dead_code)] // Used by scheduled-mode routes added after this workspace contract.
+    pub(super) fn mode_changed(actual: ExecutionMode) -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            ErrorCode::ModeChanged,
+            format!("workspace mode changed to {actual}"),
+        )
+        .with_details(json!({"mode": actual.to_string()}))
     }
 
     pub(super) fn internal(error: impl std::fmt::Display) -> Self {

@@ -146,3 +146,10 @@ pub struct JobLogs {
     pub stderr: LogContent,
     pub message: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlowAttemptLogs {
+    pub stdout: LogContent,
+    pub stderr: LogContent,
+    pub message: Option<String>,
+}

@@ -77,8 +77,19 @@ export function Policy() {
     <section className={`panel policy-gate${policy.can_update ? " ready" : " blocked"}`} data-policy-gate>
       <div className="policy-gate-copy"><div className="section-kicker">{t("policy.protection")}</div><h2>{policy.can_update ? t("policy.available") : t("policy.paused")}</h2><p>{policy.can_update ? t("policy.readyDescription") : policy.blocked_reason}</p>{policy.active_jobs.length > 0 && <div className="policy-active-jobs"><strong>{t("policy.activeJobs")}</strong>{policy.active_jobs.map((job) => <span className="policy-active-job" key={job.id}><span>{job.name}</span><code>{stateLabel(job.state)}</code></span>)}</div>}</div><div className="policy-gate-action">{!policy.queue_locked && <button className="button primary" data-policy-lock type="button" onClick={() => void actions.queueLock(true)}>{t("queue.lock")}</button>}<span className="policy-lock-state">{policy.queue_locked ? t("policy.queueLocked") : t("policy.queueUnlocked")}</span></div>
     </section>
+    {state.mode === "scheduled" && <ScheduledConcurrency />}
     <div className="policy-layout"><PolicyCard title={t("policy.logCapacity")} description={t("policy.logDescription")} fields={LOG_FIELDS} policy={policy} draft={draft} canUpdate={policy.can_update} onDraft={(key, value) => setDraft((current) => ({ ...current, [key]: value }))} onSave={update} onReset={reset} /><PolicyCard title={t("policy.runtime")} description={t("policy.runtimeDescription")} fields={RUNTIME_FIELDS} policy={policy} draft={draft} canUpdate={policy.can_update} onDraft={(key, value) => setDraft((current) => ({ ...current, [key]: value }))} onSave={update} onReset={reset} /></div>
   </>;
+}
+
+function ScheduledConcurrency() {
+  const { t } = useI18n();
+  const { state, actions } = useWorkspace();
+  const [value, setValue] = useState("");
+  const current = state.scheduled.overview?.capacity.max_concurrency;
+  const unsafe = state.scheduled.concurrencyUnsafe || Boolean(state.workspace?.recovery_fence);
+  const valid = /^\d+$/.test(value) && Number(value) > 0;
+  return <section className={`panel policy-gate${unsafe ? " blocked" : " ready"}`}><div className="policy-gate-copy"><div className="section-kicker">{t("scheduled.policy.eyebrow")}</div><h2>{t("scheduled.policy.concurrency")}</h2><p>{unsafe ? t("scheduled.policy.unsafe") : t("scheduled.policy.concurrencyDescription", { current: current || 0 })}</p></div><form className="policy-gate-action" onSubmit={(event) => { event.preventDefault(); if (valid && !unsafe) void actions.saveScheduledConcurrency(Number(value)); }}><input className="text-input" aria-label={t("scheduled.policy.concurrency")} type="number" min="1" step="1" value={value} placeholder={String(current || 1)} disabled={unsafe} onChange={(event) => setValue(event.target.value)} /><button className="button primary" type="submit" disabled={!valid || unsafe}>{t("common.save")}</button></form></section>;
 }
 
 function PolicyCard({ title, description, fields, policy, draft, canUpdate, onDraft, onSave, onReset }: { title: string; description: string; fields: FieldDefinition[]; policy: PolicyResponse; draft: Record<string, string>; canUpdate: boolean; onDraft: (key: string, value: string) => void; onSave: (field: FieldDefinition) => Promise<void>; onReset: (field: FieldDefinition) => Promise<void> }) {

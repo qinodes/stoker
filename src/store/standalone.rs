@@ -5,8 +5,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 use uuid::Uuid;
 
 use crate::domain::flow::{
-    DependencyMode, ExecutionMode, FlowTask, OccurrenceState, SchedulePeriod, SchedulePeriodUnit,
-    ScheduleSpec, validate_definition,
+    DependencyMode, ExecutionMode, FlowRun, FlowTask, OccurrenceState, SchedulePeriod,
+    SchedulePeriodUnit, ScheduleSpec, validate_definition,
 };
 
 use super::connection::Store;
@@ -23,6 +23,14 @@ pub(super) fn standalone_flow_id(job_id: Uuid) -> String {
     format!("standalone/{job_id}")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualRequestStatus {
+    pub request_id: Uuid,
+    pub flow_id: String,
+    pub run_id: Option<Uuid>,
+    pub result: String,
+}
+
 fn standalone_definition_from(
     connection: &Connection,
     job_id: Uuid,
@@ -31,6 +39,58 @@ fn standalone_definition_from(
 }
 
 impl Store {
+    pub fn manual_request(&self, request_id: Uuid) -> Result<ManualRequestStatus, StoreError> {
+        let connection = self.lock()?;
+        connection
+            .query_row(
+                "SELECT flow_id, run_id, result FROM manual_requests WHERE request_id = ?1",
+                [request_id.to_string()],
+                |row| {
+                    Ok(ManualRequestStatus {
+                        request_id,
+                        flow_id: row.get(0)?,
+                        run_id: row
+                            .get::<_, Option<String>>(1)?
+                            .map(|value| {
+                                parse_uuid(&value).map_err(|error| {
+                                    super::flow_mapping::to_sql_error(error.to_string())
+                                })
+                            })
+                            .transpose()?,
+                        result: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(StoreError::InvalidData(format!(
+                "request {request_id} does not exist"
+            )))
+    }
+
+    /// Create a manual run against the standalone job's stable hidden flow.
+    /// The original job definition and its future schedule remain untouched.
+    pub fn create_standalone_run(
+        &self,
+        job_id: Uuid,
+        skip_next: bool,
+        request_id: Option<Uuid>,
+    ) -> Result<FlowRun, StoreError> {
+        let flow_id = standalone_flow_id(job_id);
+        let connection = self.lock()?;
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM flow_definitions WHERE flow_id = ?1 AND committed = 1)",
+            [&flow_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(StoreError::InvalidData(
+                "scheduled standalone job has no committed durable definition".into(),
+            ));
+        }
+        drop(connection);
+        self.create_flow_run(&flow_id, "MANUAL", skip_next, request_id)
+    }
+
     pub fn standalone_definition(&self, job_id: Uuid) -> Result<StandaloneDefinition, StoreError> {
         let connection = self.lock()?;
         standalone_definition_from(&connection, job_id)
@@ -46,6 +106,16 @@ impl Store {
         validate_schedule(mode, schedule.as_ref())?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current_mode: String =
+            transaction.query_row("SELECT mode FROM settings WHERE id = 1", [], |row| {
+                row.get(0)
+            })?;
+        let current_mode = parse_mode(&current_mode)?;
+        if current_mode != mode {
+            return Err(StoreError::ScheduledModeChanged {
+                actual: current_mode,
+            });
+        }
         let state: String = transaction.query_row(
             "SELECT state FROM jobs WHERE id = ?1",
             [job_id.to_string()],

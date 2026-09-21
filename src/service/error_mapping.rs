@@ -113,7 +113,11 @@ fn map_store_error(store: &StoreError, error: &anyhow::Error, operation: &'stati
         StoreError::Database(_)
         | StoreError::Serialization(_)
         | StoreError::Poisoned
-        | StoreError::InvalidData(_) => IpcError::new(IpcErrorCode::Internal, message),
+        | StoreError::InvalidData(_)
+        | StoreError::ScheduledModeChanged { .. }
+        | StoreError::DraftRevisionConflict { .. } => {
+            IpcError::new(IpcErrorCode::Internal, message)
+        }
     }
 }
 

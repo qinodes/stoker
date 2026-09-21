@@ -17,4 +17,4 @@ pub use model::{
     FLOW_SOURCE_SCHEMA_VERSION, FlowSourceBase, FlowSourceCwd, FlowSourceCwdMap,
     FlowSourceDependency, FlowSourceDocument, FlowSourceFlow, FlowSourceSchedule, FlowSourceTask,
 };
-pub use resolution::resolve_document;
+pub use resolution::{resolve_document, resolve_workspace_document};

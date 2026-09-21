@@ -1,3 +1,5 @@
+import type { WorkspaceResponse } from "./types.ts";
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
@@ -20,6 +22,7 @@ export interface ApiClient {
   request<T>(path: string, options?: RequestInit): Promise<T>;
   get<T>(path: string): Promise<T>;
   send<T>(path: string, method: string, body?: unknown): Promise<T>;
+  workspace(): Promise<WorkspaceResponse>;
 }
 
 export function createApiClient({
@@ -54,5 +57,6 @@ export function createApiClient({
       method,
       body: body === null ? undefined : JSON.stringify(body),
     }),
+    workspace: () => request<WorkspaceResponse>("/api/v1/workspace"),
   };
 }

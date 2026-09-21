@@ -1,4 +1,35 @@
-export type Route = "overview" | "jobs" | "queue" | "logs" | "configuration" | "policy";
+export type WorkspaceMode = "serial" | "scheduled";
+
+export type Route =
+  | "overview"
+  | "jobs"
+  | "queue"
+  | "workloads"
+  | "runs"
+  | "logs"
+  | "sources"
+  | "configuration"
+  | "policy"
+  | "mode-change";
+
+export interface WorkspaceResponse {
+  mode: WorkspaceMode;
+  queue_locked: boolean;
+  recovery_fence: boolean;
+  scheduler: {
+    running: boolean;
+    pid: number | null;
+    active_job: string | null;
+    queued_jobs: number;
+  };
+  timezone: TimezoneInfo;
+  generated_at: string;
+}
+
+export interface ModeTransition {
+  actualMode: WorkspaceMode;
+  deferred: boolean;
+}
 
 export type JobState =
   | "DRAFT"
@@ -126,6 +157,80 @@ export interface JobDetailResponse {
   display_timezone?: string;
 }
 
+export type ScheduledSchedule =
+  | { kind: "once"; at: string }
+  | { kind: "daily"; time: string; timezone: string }
+  | { kind: "periodic"; every: string; first_at?: string | null };
+
+export interface ScheduledDependency { task_id: string; state?: string }
+
+export interface ScheduledTask {
+  task_id: string;
+  name: string;
+  cwd: string;
+  command: string;
+  retry: number;
+  dependencies: ScheduledDependency[];
+  depend_mode: "all" | "any" | string;
+  sequence: number;
+}
+
+export interface ScheduledFlow {
+  flow_id: string;
+  name: string;
+  owner: string;
+  mode: string;
+  schedule: ScheduledSchedule | null;
+  tasks: ScheduledTask[];
+  committed: boolean;
+  frozen: boolean;
+  enabled: boolean;
+  graph_revision: number;
+  schedule_generation: number;
+  draft_revision: number;
+  queue_order?: number | null;
+}
+
+export interface ScheduledStandaloneJob {
+  job: Job;
+  definition: { mode: string; schedule: ScheduledSchedule | null; retry: number; enabled: boolean; generation: number };
+  flow_id: string;
+}
+
+export interface ScheduledOverviewResponse {
+  capacity: { max_concurrency: number; active_attempts: number };
+  active_runs: ScheduledRunSummary[];
+  next_occurrences: ScheduledOccurrence[];
+  recent_failures: ScheduledRunSummary[];
+}
+
+export interface ScheduledRunSummary { run_id: string; flow_id: string; state: string; started_at?: string | null; finished_at?: string | null }
+export interface ScheduledAttempt { attempt_id: string; number: number; state: string; exit_code?: number | null; failure_kind?: string | null; failure_detail?: string | null; started_at?: string | null; finished_at?: string | null }
+export interface ScheduledTaskRun { task_id: string; state: string; attempt_count: number; next_attempt_at?: string | null; cancel_requested: boolean; attempts: ScheduledAttempt[] }
+export interface ScheduledRun extends ScheduledRunSummary { generation: number; source: string; occurrence_id?: string | null; tasks: ScheduledTaskRun[] }
+export interface ScheduledOccurrence { occurrence_id: string; flow_id: string; generation: number; due_at: string; state?: string; reason?: string | null; local_date?: string | null }
+export interface ScheduledSourceState { mode: "manual" | "sync" | string; revision: number; hash: string }
+export interface ScheduledSyncPreview { hash: string; changed: boolean; revision?: number; diff: { added: number; updated: number; removed: number; unchanged: number } }
+export interface ScheduledSourceDocument { text: string; hash: string; value: unknown }
+export interface ScheduledLogsState { runId: string; taskId: string; attempt: number | null; stream: "stdout" | "stderr"; data: LogsResponse | null; error: string | null }
+
+export interface ScheduledWorkspaceState {
+  overview: ScheduledOverviewResponse | null;
+  flows: ScheduledFlow[];
+  jobs: ScheduledStandaloneJob[];
+  source: ScheduledSourceState | null;
+  selectedFlow: ScheduledFlow | null;
+  selectedJob: ScheduledStandaloneJob | null;
+  activeTab: "flows" | "jobs";
+  revisionConflict: boolean;
+  runs: ScheduledRun[];
+  selectedRun: ScheduledRun | null;
+  logs: ScheduledLogsState;
+  sourceDocument: ScheduledSourceDocument | null;
+  syncPreview: ScheduledSyncPreview | null;
+  concurrencyUnsafe: boolean;
+}
+
 export interface LogsResponse {
   stdout: string;
   stderr: string;
@@ -174,6 +279,9 @@ export interface LogsState {
 }
 
 export interface WorkspaceState {
+  mode: WorkspaceMode | null;
+  modeTransition: ModeTransition | null;
+  workspace: WorkspaceResponse | null;
   config: UiConfig | null;
   settings: SettingsResponse | null;
   policy: PolicyResponse | null;
@@ -199,6 +307,7 @@ export interface WorkspaceState {
   selectedJob: Job | null;
   selectedJobDetail: JobDetailResponse | null;
   configurationDraft: string | null;
+  scheduled: ScheduledWorkspaceState;
 }
 
 export interface PageInfo<T> {

@@ -16,6 +16,6 @@ pub use error::{
 };
 pub use model::{
     ApplicationConfig, CommitSelection, ConfigSnapshot, CreateJobInput, DescriptionUpdate,
-    JobFilter, JobLogs, LogContent, LogEvent, OutputStream, PreparedJobInput, QueueLockResult,
-    QueueMove, QueueSnapshot, QueueStatus, SchedulerStatus, SnapshotReason,
+    FlowAttemptLogs, JobFilter, JobLogs, LogContent, LogEvent, OutputStream, PreparedJobInput,
+    QueueLockResult, QueueMove, QueueSnapshot, QueueStatus, SchedulerStatus, SnapshotReason,
 };

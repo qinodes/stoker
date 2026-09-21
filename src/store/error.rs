@@ -2,6 +2,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::domain::JobState;
+use crate::domain::flow::ExecutionMode;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -41,4 +42,8 @@ pub enum StoreError {
     Poisoned,
     #[error("invalid value in jobs table: {0}")]
     InvalidData(String),
+    #[error("workspace mode changed to {actual}")]
+    ScheduledModeChanged { actual: ExecutionMode },
+    #[error("draft revision conflict: expected {expected}, current {current}")]
+    DraftRevisionConflict { expected: i64, current: i64 },
 }

@@ -3,6 +3,7 @@
   .content-grid { grid-template-columns: 1fr; }
   .page[data-view="jobs"] .page-heading, .page[data-view="queue"] .page-heading { flex-direction: column; align-items: stretch; gap: 14px; }
   .page[data-view="jobs"] .page-actions, .page[data-view="queue"] .page-actions { justify-content: flex-start; }
+  .scheduled-overview-grid { grid-template-columns: 1fr; }
 }
 
 @media (min-width: 761px) {
@@ -98,10 +99,28 @@
   .job-detail-actions { flex-wrap: wrap; }
   .job-action-spacer { display: none; }
   .job-form-grid { grid-template-columns: 1fr; gap: 0; }
+  .flow-meta { grid-template-columns: 1fr; }
+  .flow-meta > div { border-right: 0; border-bottom: 1px solid var(--border); }
+  .flow-meta > div:last-child { border-bottom: 0; }
+  .flow-notice { align-items: flex-start; flex-direction: column; margin-right: 16px; margin-left: 16px; }
+  .recovery-banner { align-items: flex-start; flex-direction: column; }
+  .source-document, .file-input { margin-right: 16px; margin-left: 16px; }
+  .flow-section, .flow-schedule-editor { margin-right: 16px; margin-left: 16px; padding-right: 0; padding-left: 0; }
+  .flow-meta { margin-right: 16px; margin-left: 16px; }
+  .task-editor-grid { grid-template-columns: 1fr; }
+  .workload-tabs { width: 100%; }
+  .workload-tab { flex: 1 1 0; }
   .job-field { margin-top: 14px; }
   .path-input-row, .fs-path-row { align-items: stretch; flex-direction: column; }
   .path-input-row .button, .fs-path-row .button { width: 100%; }
   .path-input-row .text-input, .fs-path-row .text-input { flex: 0 0 auto; }
+}
+
+@media (max-width: 640px) {
+  .workspace-lock-state { display: none; }
+  .source-queue-toolbar, .source-mode-toolbar, .source-import-toolbar { align-items: flex-start; flex-direction: column; }
+  .source-queue-actions, .source-mode-toolbar .page-actions, .source-import-actions { width: 100%; justify-content: flex-start; }
+  .new-flow-form-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 420px) {

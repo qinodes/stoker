@@ -13,7 +13,7 @@ export function LiveTime({ value, timezone }: { value?: string | Date | null; ti
 
 export function StateBadge({ value }: { value?: string | null }) {
   const { stateLabel } = useI18n();
-  return <span className={`state-badge ${classForState(value)}`}>{stateLabel(value)}</span>;
+  return <span className={`state-badge ${classForState(value)}`}><span className="state-badge-label">{stateLabel(value)}</span></span>;
 }
 
 export function PageHeading({ eyebrow, title, description, actions }: { eyebrow: string; title: string; description: string; actions?: ReactNode }) {
@@ -24,8 +24,8 @@ export function Metric({ label, value, note, accent = "" }: { label: string; val
   return <article className={`metric-card ${accent}`}><div className="metric-label">{label}</div><div className="metric-value">{value}</div><div className="metric-note">{note}</div></article>;
 }
 
-export function EmptyState({ icon, title, message, compact = false }: { icon?: ReactNode; title: string; message?: string; compact?: boolean }) {
-  return <div className={`empty-state${compact ? " compact" : ""}`}>{icon !== undefined && <div className="empty-icon">{icon}</div>}<strong>{title}</strong>{message && <p>{message}</p>}</div>;
+export function EmptyState({ icon, title, message, compact = false, actions }: { icon?: ReactNode; title: string; message?: string; compact?: boolean; actions?: ReactNode }) {
+  return <div className={`empty-state${compact ? " compact" : ""}`}>{icon !== undefined && <div className="empty-icon">{icon}</div>}<strong>{title}</strong>{message && <p>{message}</p>}{actions && <div className="page-actions">{actions}</div>}</div>;
 }
 
 export function JobRow({ job, timezone, onOpen }: { job: Job; timezone?: string | null; onOpen: (id: string) => void }) {

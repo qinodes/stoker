@@ -8,7 +8,7 @@
   "scripts": {
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test:web:unit": "node --experimental-strip-types --test web/tests/unit/api-client.test.ts web/tests/unit/formatters.test.ts web/tests/unit/i18n.test.ts web/tests/unit/policy.test.ts web/tests/unit/state.test.ts web/tests/unit/polling.test.ts",
+    "test:web:unit": "node --experimental-strip-types --test web/tests/unit/api-client.test.ts web/tests/unit/formatters.test.ts web/tests/unit/i18n.test.ts web/tests/unit/modes.test.ts web/tests/unit/policy.test.ts web/tests/unit/state.test.ts web/tests/unit/polling.test.ts web/tests/unit/scheduled-state.test.ts",
     "test:web:browser": "playwright test",
     "test:web": "npm run test:web:unit && npm run test:web:browser"
   },

@@ -100,6 +100,7 @@ fn user_defined_flow_creation_is_always_scheduled() {
 fn scheduled_job_listing_does_not_reenter_the_store_lock() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    use_scheduled_mode(&store);
     let id = store
         .create_job(NewJob {
             name: "scheduled".into(),
@@ -119,6 +120,40 @@ fn scheduled_job_listing_does_not_reenter_the_store_lock() {
 
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].id, id);
+}
+
+#[test]
+fn scheduled_capacity_change_rejects_a_serial_workspace_inside_the_store_transaction() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+
+    assert!(matches!(
+        store.set_scheduled_concurrency_for_scheduled_workspace(3),
+        Err(StoreError::ScheduledModeChanged {
+            actual: ExecutionMode::Serial
+        })
+    ));
+}
+
+#[test]
+fn scheduled_workspace_deletes_only_an_uncommitted_draft_flow() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    use_scheduled_mode(&store);
+    store
+        .create_scheduled_flow(
+            "disposable-draft".into(),
+            "Disposable draft".into(),
+            "tester".into(),
+            future_once(),
+        )
+        .unwrap();
+
+    store
+        .delete_scheduled_draft_flow("disposable-draft")
+        .unwrap();
+
+    assert!(store.get_flow("disposable-draft").is_err());
 }
 
 #[test]

@@ -85,6 +85,17 @@ pub trait JobArtifacts: Send + Sync {
     ) -> Result<LogContent, JobArtifactsError>;
 }
 
+pub trait FlowAttemptArtifacts: Send + Sync {
+    fn read_flow_attempt_log(
+        &self,
+        run_id: Uuid,
+        task_id: &str,
+        attempt: u32,
+        stream: OutputStream,
+        max_bytes: Option<usize>,
+    ) -> Result<LogContent, JobArtifactsError>;
+}
+
 pub trait DescriptionUpdater: Send + Sync {
     fn update_description(&self, input: DescriptionUpdate) -> Result<Job, JobRepositoryError>;
 }

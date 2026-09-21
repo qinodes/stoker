@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use crate::application::model::{LogContent, OutputStream};
-use crate::application::ports::{JobArtifacts, JobArtifactsError, WorkingDirectoryResolver};
+use crate::application::ports::{
+    FlowAttemptArtifacts, JobArtifacts, JobArtifactsError, WorkingDirectoryResolver,
+};
 use crate::config::{StokerPaths, normalize_path};
 use crate::log_storage;
 
@@ -47,58 +49,86 @@ impl JobArtifacts for StokerPaths {
             OutputStream::Stderr => "stderr.log",
         };
         let path = self.runs.join(id.to_string()).join(name);
-        let metadata = log_storage::read_metadata(&path).map_err(artifact_error)?;
-        let segments = log_storage::list_segments(&path).map_err(artifact_error)?;
-        if segments.is_empty() {
-            if let Some(metadata) = metadata {
-                return Ok(LogContent {
-                    bytes: Vec::new(),
-                    available: metadata.retention_cleaned,
-                    truncated: metadata.truncated,
-                    capture_error: metadata.capture_error,
-                });
-            }
-            return Ok(LogContent::default());
-        }
-        let length = segments
-            .iter()
-            .map(|segment| std::fs::metadata(segment).map(|metadata| metadata.len()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(artifact_error)?
-            .into_iter()
-            .sum::<u64>();
-        let limit = max_bytes.map(|value| value as u64);
-        let truncated = metadata.as_ref().is_some_and(|metadata| metadata.truncated)
-            || limit.is_some_and(|limit| length > limit);
-        let mut skip = limit.map_or(0, |limit| length.saturating_sub(limit));
-        let mut bytes = Vec::new();
-        for segment in segments {
-            let segment_len = std::fs::metadata(&segment).map_err(artifact_error)?.len();
-            if skip >= segment_len {
-                skip -= segment_len;
-                continue;
-            }
-            let mut file = File::open(&segment).map_err(artifact_error)?;
-            if skip > 0 {
-                file.seek(SeekFrom::Start(skip)).map_err(artifact_error)?;
-                skip = 0;
-            }
-            let mut buffer = [0_u8; 64 * 1024];
-            loop {
-                let read = file.read(&mut buffer).map_err(artifact_error)?;
-                if read == 0 {
-                    break;
-                }
-                bytes.extend_from_slice(&buffer[..read]);
-            }
-        }
-        Ok(LogContent {
-            bytes,
-            available: true,
-            truncated,
-            capture_error: metadata.and_then(|metadata| metadata.capture_error),
-        })
+        read_path_log(&path, max_bytes)
     }
+}
+
+impl FlowAttemptArtifacts for StokerPaths {
+    fn read_flow_attempt_log(
+        &self,
+        run_id: Uuid,
+        task_id: &str,
+        attempt: u32,
+        stream: OutputStream,
+        max_bytes: Option<usize>,
+    ) -> Result<LogContent, JobArtifactsError> {
+        let name = match stream {
+            OutputStream::Stdout => "stdout.log",
+            OutputStream::Stderr => "stderr.log",
+        };
+        let path = self
+            .runs
+            .join("flows")
+            .join(run_id.to_string())
+            .join(task_id)
+            .join(format!("attempt-{attempt}"))
+            .join(name);
+        read_path_log(&path, max_bytes)
+    }
+}
+
+fn read_path_log(path: &Path, max_bytes: Option<usize>) -> Result<LogContent, JobArtifactsError> {
+    let metadata = log_storage::read_metadata(path).map_err(artifact_error)?;
+    let segments = log_storage::list_segments(path).map_err(artifact_error)?;
+    if segments.is_empty() {
+        if let Some(metadata) = metadata {
+            return Ok(LogContent {
+                bytes: Vec::new(),
+                available: metadata.retention_cleaned,
+                truncated: metadata.truncated,
+                capture_error: metadata.capture_error,
+            });
+        }
+        return Ok(LogContent::default());
+    }
+    let length = segments
+        .iter()
+        .map(|segment| std::fs::metadata(segment).map(|metadata| metadata.len()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(artifact_error)?
+        .into_iter()
+        .sum::<u64>();
+    let limit = max_bytes.map(|value| value as u64);
+    let truncated = metadata.as_ref().is_some_and(|metadata| metadata.truncated)
+        || limit.is_some_and(|limit| length > limit);
+    let mut skip = limit.map_or(0, |limit| length.saturating_sub(limit));
+    let mut bytes = Vec::new();
+    for segment in segments {
+        let segment_len = std::fs::metadata(&segment).map_err(artifact_error)?.len();
+        if skip >= segment_len {
+            skip -= segment_len;
+            continue;
+        }
+        let mut file = File::open(&segment).map_err(artifact_error)?;
+        if skip > 0 {
+            file.seek(SeekFrom::Start(skip)).map_err(artifact_error)?;
+            skip = 0;
+        }
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer).map_err(artifact_error)?;
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+    }
+    Ok(LogContent {
+        bytes,
+        available: true,
+        truncated,
+        capture_error: metadata.and_then(|metadata| metadata.capture_error),
+    })
 }
 
 fn artifact_error(error: std::io::Error) -> JobArtifactsError {

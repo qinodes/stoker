@@ -29,6 +29,15 @@ pub fn resolve_document(
         .collect()
 }
 
+/// Resolves browser-provided document content relative to the workspace root.
+/// The browser never supplies a server-side definition path.
+pub fn resolve_workspace_document(
+    document: &FlowSourceDocument,
+    workspace_root: &Path,
+) -> Result<Vec<FlowDefinition>, FlowSourceError> {
+    resolve_document(document, &workspace_root.join("flow-source.json"))
+}
+
 fn definition_directory(path: &Path) -> Result<PathBuf, FlowSourceError> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()

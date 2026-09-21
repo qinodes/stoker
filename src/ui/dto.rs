@@ -12,6 +12,8 @@ use crate::config::{
 };
 use crate::domain::{Job, JobState};
 
+pub(in crate::ui) mod scheduled;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UiMetadata {
     pub pid: u32,
@@ -110,6 +112,24 @@ pub(super) struct StatusResponse {
     pub disk_pressure: bool,
     pub timezone: TimezoneResponse,
     pub generated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct WorkspaceResponse {
+    pub mode: &'static str,
+    pub queue_locked: bool,
+    pub recovery_fence: bool,
+    pub scheduler: WorkspaceSchedulerResponse,
+    pub timezone: TimezoneResponse,
+    pub generated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct WorkspaceSchedulerResponse {
+    pub running: bool,
+    pub pid: Option<u32>,
+    pub active_job: Option<Uuid>,
+    pub queued_jobs: usize,
 }
 
 #[derive(Debug, Serialize)]

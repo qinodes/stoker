@@ -6,6 +6,7 @@
 mod connection;
 mod description;
 mod error;
+mod flow_attempt_mapping;
 mod flow_cancellation;
 mod flow_edits;
 mod flow_mapping;
@@ -31,8 +32,8 @@ mod transition;
 
 pub use connection::Store;
 pub use error::StoreError;
-pub use flow_edits::ManualRequestStatus;
 pub use flow_sources::{FlowSourceMode, FlowSourceState};
 pub use flow_sync::{FlowSyncDiff, FlowSyncResult};
 pub use flows::{FlowAttemptResult, FlowTaskExecution, FlowTaskInput, StandaloneDefinition};
 pub use migrations::CURRENT_SCHEMA_VERSION;
+pub use standalone::ManualRequestStatus;

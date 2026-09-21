@@ -965,6 +965,9 @@ fn jobs_accepts_lowercase_state_and_policy_exposes_max_concurrency() {
     let home = directory.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
     let store = Store::open(home.join("stoker.db")).unwrap();
+    store.lock_queue().unwrap();
+    store.set_mode(ExecutionMode::Scheduled).unwrap();
+    store.unlock_queue().unwrap();
     let job_id = store
         .create_job(NewJob {
             name: "scheduled".into(),

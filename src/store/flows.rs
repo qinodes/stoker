@@ -1,14 +1,12 @@
 //! SQLite persistence for flow definitions and execution history.
 
-use std::collections::BTreeSet;
-
 use chrono::Utc;
 use rusqlite::{TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::domain::flow::{
     Dependency, DependencyMode, ExecutionMode, FlowDefinition, FlowTask, OccurrenceState,
-    ScheduleSpec, TaskRunState, aggregate_flow_state, validate_definition, validate_flow_metadata,
+    ScheduleSpec, validate_definition, validate_flow_metadata,
 };
 
 use super::connection::Store;
@@ -78,11 +76,35 @@ impl Store {
         owner: String,
         schedule: ScheduleSpec,
     ) -> Result<FlowDefinition, StoreError> {
+        self.create_flow_inner(flow_id, name, owner, schedule, false)
+    }
+
+    pub fn create_scheduled_flow(
+        &self,
+        flow_id: String,
+        name: String,
+        owner: String,
+        schedule: ScheduleSpec,
+    ) -> Result<FlowDefinition, StoreError> {
+        self.create_flow_inner(flow_id, name, owner, schedule, true)
+    }
+
+    fn create_flow_inner(
+        &self,
+        flow_id: String,
+        name: String,
+        owner: String,
+        schedule: ScheduleSpec,
+        require_scheduled: bool,
+    ) -> Result<FlowDefinition, StoreError> {
         let mode = ExecutionMode::Scheduled;
         validate_flow_metadata(&flow_id, &name, &owner).map_err(StoreError::InvalidData)?;
         validate_schedule(mode, Some(&schedule))?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if require_scheduled {
+            require_scheduled_mode(&transaction)?;
+        }
         require_manual_source(&transaction, Some(&flow_id))?;
         let exists: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM flow_definitions WHERE flow_id = ?1)",
@@ -107,8 +129,23 @@ impl Store {
     }
 
     pub fn commit_flow(&self, flow_id: &str) -> Result<FlowDefinition, StoreError> {
+        self.commit_flow_inner(flow_id, false)
+    }
+
+    pub fn commit_scheduled_flow(&self, flow_id: &str) -> Result<FlowDefinition, StoreError> {
+        self.commit_flow_inner(flow_id, true)
+    }
+
+    fn commit_flow_inner(
+        &self,
+        flow_id: &str,
+        require_scheduled: bool,
+    ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if require_scheduled {
+            require_scheduled_mode(&transaction)?;
+        }
         require_manual_source(&transaction, Some(flow_id))?;
         require_queue_unlocked(&transaction)?;
         let mut definition = load_flow_current(&transaction, flow_id)?;
@@ -149,6 +186,27 @@ impl Store {
         load_flow(&connection, flow_id)
     }
 
+    pub fn delete_scheduled_draft_flow(&self, flow_id: &str) -> Result<(), StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_scheduled_mode(&transaction)?;
+        require_manual_source(&transaction, Some(flow_id))?;
+        let definition = load_flow_base(&transaction, flow_id)?;
+        if definition.committed {
+            return Err(StoreError::InvalidData(
+                "only an uncommitted draft flow can be deleted".into(),
+            ));
+        }
+        transaction.execute(
+            "DELETE FROM flow_dependencies WHERE flow_id = ?1",
+            [flow_id],
+        )?;
+        transaction.execute("DELETE FROM flow_tasks WHERE flow_id = ?1", [flow_id])?;
+        transaction.execute("DELETE FROM flow_definitions WHERE flow_id = ?1", [flow_id])?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn list_flows(&self, owner: Option<&str>) -> Result<Vec<FlowDefinition>, StoreError> {
         let connection = self.lock()?;
         let mut statement = connection.prepare("SELECT flow_id FROM flow_definitions WHERE flow_id NOT LIKE 'standalone/%' AND (?1 IS NULL OR owner = ?1) ORDER BY COALESCE(queue_order, 9223372036854775807), created_at, flow_id")?;
@@ -159,8 +217,23 @@ impl Store {
     }
 
     pub fn freeze_flow(&self, flow_id: &str) -> Result<FlowDefinition, StoreError> {
+        self.freeze_flow_inner(flow_id, false)
+    }
+
+    pub fn freeze_scheduled_flow(&self, flow_id: &str) -> Result<FlowDefinition, StoreError> {
+        self.freeze_flow_inner(flow_id, true)
+    }
+
+    fn freeze_flow_inner(
+        &self,
+        flow_id: &str,
+        require_scheduled: bool,
+    ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if require_scheduled {
+            require_scheduled_mode(&transaction)?;
+        }
         require_manual_source(&transaction, Some(flow_id))?;
         let definition = load_flow_current(&transaction, flow_id)?;
         if !definition.committed {
@@ -178,8 +251,28 @@ impl Store {
     }
 
     pub fn disable_flow(&self, flow_id: &str, enabled: bool) -> Result<FlowDefinition, StoreError> {
+        self.disable_flow_inner(flow_id, enabled, false)
+    }
+
+    pub fn set_scheduled_flow_enabled(
+        &self,
+        flow_id: &str,
+        enabled: bool,
+    ) -> Result<FlowDefinition, StoreError> {
+        self.disable_flow_inner(flow_id, enabled, true)
+    }
+
+    fn disable_flow_inner(
+        &self,
+        flow_id: &str,
+        enabled: bool,
+        require_scheduled: bool,
+    ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if require_scheduled {
+            require_scheduled_mode(&transaction)?;
+        }
         require_manual_source(&transaction, Some(flow_id))?;
         let previous_enabled = load_flow_base(&transaction, flow_id)?.enabled;
         transaction.execute(
@@ -205,18 +298,38 @@ impl Store {
         flow_id: &str,
         expected_draft_revision: i64,
     ) -> Result<FlowDefinition, StoreError> {
+        self.discard_flow_draft_inner(flow_id, expected_draft_revision, false)
+    }
+
+    pub fn discard_scheduled_flow_draft(
+        &self,
+        flow_id: &str,
+        expected_draft_revision: i64,
+    ) -> Result<FlowDefinition, StoreError> {
+        self.discard_flow_draft_inner(flow_id, expected_draft_revision, true)
+    }
+
+    fn discard_flow_draft_inner(
+        &self,
+        flow_id: &str,
+        expected_draft_revision: i64,
+        require_scheduled: bool,
+    ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if require_scheduled {
+            require_scheduled_mode(&transaction)?;
+        }
         require_manual_source(&transaction, Some(flow_id))?;
         let current = load_flow_base(&transaction, flow_id)?;
         if !current.frozen {
             return Err(StoreError::InvalidData("flow is not frozen".into()));
         }
         if current.draft_revision != expected_draft_revision {
-            return Err(StoreError::InvalidData(format!(
-                "draft revision conflict: expected {expected_draft_revision}, current {}",
-                current.draft_revision
-            )));
+            return Err(StoreError::DraftRevisionConflict {
+                expected: expected_draft_revision,
+                current: current.draft_revision,
+            });
         }
         transaction.execute(
             "UPDATE flow_definitions SET draft_json = NULL WHERE flow_id = ?1",
@@ -232,8 +345,28 @@ impl Store {
         flow_id: &str,
         expected_draft_revision: Option<i64>,
     ) -> Result<FlowDefinition, StoreError> {
+        self.unfreeze_flow_inner(flow_id, expected_draft_revision, false)
+    }
+
+    pub fn apply_scheduled_flow_draft(
+        &self,
+        flow_id: &str,
+        expected_draft_revision: i64,
+    ) -> Result<FlowDefinition, StoreError> {
+        self.unfreeze_flow_inner(flow_id, Some(expected_draft_revision), true)
+    }
+
+    fn unfreeze_flow_inner(
+        &self,
+        flow_id: &str,
+        expected_draft_revision: Option<i64>,
+        require_scheduled: bool,
+    ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if require_scheduled {
+            require_scheduled_mode(&transaction)?;
+        }
         require_manual_source(&transaction, Some(flow_id))?;
         let current = load_flow_base(&transaction, flow_id)?;
         if !current.frozen {
@@ -262,10 +395,10 @@ impl Store {
             StoreError::InvalidData("a draft revision is required when a draft exists".into())
         })?;
         if expected != current.draft_revision {
-            return Err(StoreError::InvalidData(format!(
-                "draft revision conflict: expected {expected}, current {}",
-                current.draft_revision
-            )));
+            return Err(StoreError::DraftRevisionConflict {
+                expected,
+                current: current.draft_revision,
+            });
         }
         let mut draft: FlowDefinition = serde_json::from_str(&json)?;
         draft.frozen = false;
@@ -345,152 +478,4 @@ impl Store {
         transaction.commit()?;
         Ok(result)
     }
-
-    pub fn remove_flow_task(
-        &self,
-        flow_id: &str,
-        task_id: &str,
-        scope: &str,
-        run_id: Option<Uuid>,
-        expected_draft_revision: Option<i64>,
-    ) -> Result<FlowDefinition, StoreError> {
-        if !matches!(scope, "future" | "current" | "both") {
-            return Err(StoreError::InvalidData(
-                "scope must be future, current, or both".into(),
-            ));
-        }
-        if scope != "future" && run_id.is_none() {
-            return Err(StoreError::InvalidData(
-                "current and both scopes require --run".into(),
-            ));
-        }
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require_manual_source(&transaction, Some(flow_id))?;
-        let current = load_flow_base(&transaction, flow_id)?;
-        if !current.committed || !current.frozen {
-            return Err(StoreError::InvalidData(
-                "flow must be committed and frozen before editing".into(),
-            ));
-        }
-        let edit_future = matches!(scope, "future" | "both");
-        let edit_current = matches!(scope, "current" | "both");
-
-        let draft = if edit_future {
-            if current.draft_revision > 0 && expected_draft_revision.is_none() {
-                return Err(StoreError::InvalidData(
-                    "a draft revision is required when a draft exists".into(),
-                ));
-            }
-            let expected = expected_draft_revision.unwrap_or(current.draft_revision);
-            if expected != current.draft_revision {
-                return Err(StoreError::InvalidData(format!(
-                    "draft revision conflict: expected {expected}, current {}",
-                    current.draft_revision
-                )));
-            }
-            let draft_json: Option<String> = transaction.query_row(
-                "SELECT draft_json FROM flow_definitions WHERE flow_id = ?1",
-                [flow_id],
-                |row| row.get(0),
-            )?;
-            let mut draft = draft_json
-                .map(|json| serde_json::from_str::<FlowDefinition>(&json))
-                .transpose()?
-                .unwrap_or_else(|| current.clone());
-            remove_future_branch(&mut draft, task_id)?;
-            if draft.tasks.is_empty() {
-                return Err(StoreError::InvalidData(
-                    "future flow cannot be empty".into(),
-                ));
-            }
-            validate_definition(&draft).map_err(StoreError::InvalidData)?;
-            Some(draft)
-        } else {
-            None
-        };
-
-        if edit_current {
-            let run_id = run_id.expect("run was validated");
-            ensure_run_owner(&transaction, flow_id, run_id)?;
-            let state = parse_task_state(&transaction.query_row(
-                "SELECT state FROM task_runs WHERE run_id = ?1 AND task_id = ?2",
-                params![run_id.to_string(), task_id],
-                |row| row.get::<_, String>(0),
-            )?)?;
-            if matches!(
-                state,
-                TaskRunState::Starting | TaskRunState::Running | TaskRunState::Cancelling
-            ) {
-                return Err(StoreError::InvalidData(
-                    "current task has an active attempt; wait for cleanup".into(),
-                ));
-            }
-            if state.is_terminal() {
-                return Err(StoreError::InvalidData(
-                    "current task is already terminal".into(),
-                ));
-            }
-            transaction.execute("UPDATE task_runs SET state = 'SKIPPED', cancel_requested = 1 WHERE run_id = ?1 AND task_id = ?2", params![run_id.to_string(), task_id])?;
-            transaction.execute("INSERT INTO run_edit_events (run_id, graph_revision, task_id, event, reason, created_at) SELECT ?1, graph_revision, ?2, 'REMOVE', 'SKIPPED_REMOVED', ?3 FROM flow_definitions WHERE flow_id = ?4", params![run_id.to_string(), task_id, Utc::now().to_rfc3339(), flow_id])?;
-            propagate_task_states(&transaction, run_id)?;
-            let cancel_requested = transaction.query_row(
-                "SELECT cancel_requested FROM flow_runs WHERE run_id = ?1",
-                [run_id.to_string()],
-                |row| row.get::<_, i64>(0),
-            )? != 0;
-            if let Some(flow_state) =
-                aggregate_flow_state(&query_task_runs(&transaction, run_id)?, cancel_requested)
-            {
-                transaction.execute("UPDATE flow_runs SET state = ?2, finished_at = ?3 WHERE run_id = ?1 AND state NOT IN ('FAILED_TO_START','RECOVERING')", params![run_id.to_string(), flow_state_string(flow_state), Utc::now().to_rfc3339()])?;
-            }
-        }
-        if let Some(draft) = draft {
-            save_draft(&transaction, &draft, current.draft_revision + 1)?;
-        }
-        let result = load_flow(&transaction, flow_id)?;
-        transaction.commit()?;
-        Ok(result)
-    }
-}
-
-fn remove_future_branch(definition: &mut FlowDefinition, task_id: &str) -> Result<(), StoreError> {
-    if !definition.tasks.iter().any(|task| task.task_id == task_id) {
-        return Err(StoreError::InvalidData(format!(
-            "task-id {task_id:?} does not exist"
-        )));
-    }
-    let mut removed = BTreeSet::from([task_id.to_owned()]);
-    loop {
-        let mut newly_removed = Vec::new();
-        for task in &definition.tasks {
-            if removed.contains(&task.task_id) || task.dependencies.is_empty() {
-                continue;
-            }
-            let removed_edges = task
-                .dependencies
-                .iter()
-                .filter(|edge| removed.contains(&edge.upstream_task_id))
-                .count();
-            let should_remove = match task.depend_mode {
-                DependencyMode::All => removed_edges > 0,
-                DependencyMode::Any => removed_edges == task.dependencies.len(),
-            };
-            if should_remove {
-                newly_removed.push(task.task_id.clone());
-            }
-        }
-        if newly_removed.is_empty() {
-            break;
-        }
-        removed.extend(newly_removed);
-    }
-    definition
-        .tasks
-        .retain(|task| !removed.contains(&task.task_id));
-    for task in &mut definition.tasks {
-        task.dependencies
-            .retain(|edge| !removed.contains(&edge.upstream_task_id));
-    }
-    Ok(())
 }

@@ -5,7 +5,7 @@ export function shortId(id?: string | null): string {
 }
 
 export function routeTitle(route: Route): string {
-  return ({ overview: "Overview", jobs: "Jobs", queue: "Queue", logs: "Logs", configuration: "Configuration", policy: "Policy" } as const)[route] || "Overview";
+  return ({ overview: "Overview", jobs: "Jobs", queue: "Queue", workloads: "Workloads", runs: "Runs", logs: "Logs", sources: "Sources", configuration: "Configuration", policy: "Policy", "mode-change": "Mode change" } as const)[route] || "Overview";
 }
 
 export function isTerminalState(value: JobState | string | undefined): boolean {

@@ -124,6 +124,14 @@ pub(super) fn map_store_error(error: StoreError) -> JobRepositoryError {
             actual_revision,
         }),
         StoreError::InvalidData(message) => JobRepositoryError::InvalidData { message },
+        StoreError::ScheduledModeChanged { actual } => JobRepositoryError::InvalidData {
+            message: format!("workspace mode changed to {actual}"),
+        },
+        StoreError::DraftRevisionConflict { expected, current } => {
+            JobRepositoryError::InvalidData {
+                message: format!("draft revision conflict: expected {expected}, current {current}"),
+            }
+        }
         StoreError::Serialization(error) => JobRepositoryError::InvalidData {
             message: error.to_string(),
         },

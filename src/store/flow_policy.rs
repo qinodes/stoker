@@ -6,7 +6,9 @@ use crate::domain::flow::ExecutionMode;
 
 use super::connection::Store;
 use super::error::StoreError;
-use super::flow_mapping::{has_active_work, parse_mode, require_queue_locked};
+use super::flow_mapping::{
+    has_active_work, parse_mode, require_queue_locked, require_scheduled_mode,
+};
 
 impl Store {
     pub fn set_mode(&self, mode: ExecutionMode) -> Result<ExecutionMode, StoreError> {
@@ -27,6 +29,24 @@ impl Store {
     }
 
     pub fn set_scheduled_concurrency(&self, value: u32) -> Result<u32, StoreError> {
+        self.set_scheduled_concurrency_inner(value, false)
+    }
+
+    /// Web scheduled-mode writes repeat the mode check inside the immediate
+    /// transaction so a mode change cannot race a request that passed the
+    /// adapter's initial guard.
+    pub fn set_scheduled_concurrency_for_scheduled_workspace(
+        &self,
+        value: u32,
+    ) -> Result<u32, StoreError> {
+        self.set_scheduled_concurrency_inner(value, true)
+    }
+
+    fn set_scheduled_concurrency_inner(
+        &self,
+        value: u32,
+        require_scheduled: bool,
+    ) -> Result<u32, StoreError> {
         if value == 0 {
             return Err(StoreError::InvalidData(
                 "max concurrency must be a positive integer".into(),
@@ -34,6 +54,9 @@ impl Store {
         }
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if require_scheduled {
+            require_scheduled_mode(&transaction)?;
+        }
         require_queue_locked(&transaction)?;
         if has_active_work(&transaction)? {
             return Err(StoreError::InvalidData("cannot change max concurrency while an execution is active or cleanup is incomplete".into()));

@@ -81,6 +81,16 @@ async function mockBackend(page: Page, { onRequest = () => {} }: MockBackendOpti
         max_job_description_length: 200,
       } });
     }
+    if (path === "/api/v1/workspace") {
+      return route.fulfill({ json: {
+        mode: "serial",
+        queue_locked: model.locked,
+        recovery_fence: false,
+        scheduler: { running: false, pid: null, active_job: null, queued_jobs: model.queue.length },
+        timezone: timezone(model),
+        generated_at: "2026-09-10T00:00:00Z",
+      } });
+    }
     if (path === "/api/v1/status") return route.fulfill({ json: status(model) });
     if (path === "/api/v1/jobs" && method === "GET") {
       return route.fulfill({ json: { jobs: model.jobs, timezone: timezone(model) } });

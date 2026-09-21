@@ -97,6 +97,63 @@ async fn scheduled_flow_manual_run_persists_attempt_logs() {
 }
 
 #[test]
+fn flow_attempt_history_is_numbered_in_execution_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    let flow = store
+        .create_flow(
+            "attempt-history".into(),
+            "Attempt history".into(),
+            "tester".into(),
+            future_once(),
+        )
+        .unwrap();
+    store
+        .add_flow_task(FlowTaskInput {
+            flow_id: flow.flow_id.clone(),
+            task_id: "root".into(),
+            name: "Root".into(),
+            cwd: directory.path().to_string_lossy().into_owned(),
+            command: "echo root".into(),
+            retry: 1,
+            dependencies: vec![],
+            depend_mode: Default::default(),
+        })
+        .unwrap();
+    store.commit_flow(&flow.flow_id).unwrap();
+    use_scheduled_mode(&store);
+    let run = store
+        .create_flow_run(&flow.flow_id, "MANUAL", false, None)
+        .unwrap();
+    let first = store.claim_flow_task(Utc::now()).unwrap().unwrap();
+    store.mark_flow_attempt_running(first.attempt_id).unwrap();
+    store
+        .finish_flow_attempt(
+            first.attempt_id,
+            stoker::store::FlowAttemptResult::Failed {
+                exit_code: Some(1),
+                kind: "EXIT".into(),
+                detail: "retry".into(),
+            },
+        )
+        .unwrap();
+    let second = store
+        .claim_flow_task(Utc::now() + ChronoDuration::seconds(6))
+        .unwrap()
+        .unwrap();
+
+    let attempts = store.list_flow_attempts(run.run_id, "root").unwrap();
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|attempt| attempt.number)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert_eq!(attempts[1].attempt_id, second.attempt_id);
+}
+
+#[test]
 fn flow_retries_are_durable_and_dependency_branches_are_isolated() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path().join("stoker.db")).unwrap();
@@ -306,6 +363,7 @@ fn scheduled_once_occurrence_starts_automatically_within_its_window() {
 fn scheduled_standalone_uses_a_stable_hidden_flow_and_updates_job_state() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    use_scheduled_mode(&store);
     let job_id = store
         .create_job(NewJob {
             name: "scheduled-job".into(),

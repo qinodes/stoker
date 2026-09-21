@@ -10,8 +10,9 @@ pub use configuration::{
     ConfigurationReader, ConfigurationRepositoryError, ConfigurationSnapshots, ConfigurationWriter,
 };
 pub use jobs::{
-    DescriptionUpdater, JobArtifacts, JobArtifactsError, JobCanceller, JobCleaner, JobCommitter,
-    JobCreator, JobQueries, JobRepositoryError, QueueRepository, WorkingDirectoryResolver,
+    DescriptionUpdater, FlowAttemptArtifacts, JobArtifacts, JobArtifactsError, JobCanceller,
+    JobCleaner, JobCommitter, JobCreator, JobQueries, JobRepositoryError, QueueRepository,
+    WorkingDirectoryResolver,
 };
 pub use scheduler::{
     LogEventStream, SchedulerCancelGateway, SchedulerCommitGateway, SchedulerGatewayError,

@@ -18,6 +18,16 @@
 
 .content-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, .85fr); gap: 18px; }
 
+.scheduled-overview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.scheduled-overview-grid .empty-state.compact { min-height: 92px; padding: 22px 16px; }
+.scheduled-overview-grid .empty-state.compact .empty-icon { width: 34px; height: 34px; margin-bottom: 8px; font-size: 16px; }
+.occurrence-list { display: grid; gap: 0; padding: 0 22px 18px; }
+.occurrence-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 54px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 11px; }
+.occurrence-row > div { min-width: 0; }
+.occurrence-row code, .occurrence-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.occurrence-row code { color: var(--cyan); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.occurrence-row small { margin-top: 3px; color: var(--text-subtle); font-size: 9px; }
+
 .panel { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: rgba(18, 28, 42, .68); box-shadow: var(--shadow); }
 
 .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 21px 22px 17px; }
@@ -42,9 +52,11 @@
 
 .job-hero-meta span + span::before { margin-right: 9px; color: var(--border-strong); content: "·"; }
 
-.state-badge { display: inline-flex; align-items: center; gap: 6px; width: max-content; min-height: 25px; padding: 0 9px; border-radius: 99px; font-size: 10px; font-weight: 800; letter-spacing: .02em; }
+.state-badge { display: inline-flex; align-items: center; gap: 6px; width: max-content; min-height: 25px; padding: 0 9px; border-radius: 99px; font-size: 10px; font-weight: 800; letter-spacing: .02em; line-height: 1; vertical-align: middle; }
 
-.state-badge::before { width: 5px; height: 5px; border-radius: 50%; background: currentColor; content: ""; }
+.state-badge::before { flex: 0 0 5px; width: 5px; height: 5px; border-radius: 50%; background: currentColor; content: ""; }
+
+.state-badge-label { display: block; transform: translateY(1px); }
 
 .state-draft { background: rgba(154, 170, 192, .12); color: var(--text-muted); }
 .state-queued { background: rgba(120, 216, 220, .11); color: var(--cyan); }

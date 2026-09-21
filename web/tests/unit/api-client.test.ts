@@ -52,3 +52,16 @@ test("client maps non-JSON failures to a stable fallback", async () => {
   });
   await assert.rejects(client.get("/api"), /Request failed \(502\)/);
 });
+
+test("client requests the workspace mode probe", async () => {
+  let path = "";
+  const client = createApiClient({
+    fetchImpl: async (requestPath) => {
+      path = String(requestPath);
+      return response(200, { mode: "serial" });
+    },
+  });
+
+  assert.deepEqual(await client.workspace(), { mode: "serial" });
+  assert.equal(path, "/api/v1/workspace");
+});

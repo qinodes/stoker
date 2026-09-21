@@ -7,7 +7,9 @@ use axum::routing::{get, patch, post, put};
 
 use super::assets;
 use super::auth;
-use super::handlers::{configuration, filesystem, jobs, policy, queue, status, system};
+use super::handlers::{
+    configuration, filesystem, jobs, policy, queue, scheduled, status, system, workspace,
+};
 use super::state::ApiState;
 
 pub(super) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
@@ -15,6 +17,137 @@ pub(super) const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub(super) fn build_router(state: ApiState) -> Router {
     let api_routes = Router::new()
         .route("/status", get(status::status))
+        .route("/workspace", get(workspace::workspace))
+        .route("/scheduled/overview", get(scheduled::overview::overview))
+        .route("/scheduled/sources", get(scheduled::sources::state))
+        .route("/scheduled/sources/export", get(scheduled::sources::export))
+        .route(
+            "/scheduled/sources/mode",
+            post(scheduled::sources::set_mode),
+        )
+        .route(
+            "/scheduled/sources/dry-run",
+            post(scheduled::sources::dry_run),
+        )
+        .route("/scheduled/sources/sync", post(scheduled::sources::sync))
+        .route(
+            "/scheduled/sources/snapshot",
+            post(scheduled::sources::snapshot),
+        )
+        .route("/scheduled/runs/{run_id}", get(scheduled::runs::detail))
+        .route(
+            "/scheduled/runs/{run_id}/cancel",
+            post(scheduled::runs::cancel),
+        )
+        .route(
+            "/scheduled/runs/{run_id}/tasks/{task_id}/cancel",
+            post(scheduled::runs::cancel_task),
+        )
+        .route(
+            "/scheduled/runs/{run_id}/tasks/{task_id}/attempts/{attempt}/logs",
+            get(scheduled::runs::logs),
+        )
+        .route(
+            "/scheduled/settings/max-concurrency",
+            put(scheduled::runs::set_max_concurrency),
+        )
+        .route(
+            "/scheduled/recoveries/{run_id}/reconcile",
+            post(scheduled::runs::reconcile_recovery),
+        )
+        .route(
+            "/scheduled/jobs",
+            get(scheduled::jobs::list).post(scheduled::jobs::create),
+        )
+        .route("/scheduled/jobs/{job_id}", get(scheduled::jobs::detail))
+        .route(
+            "/scheduled/jobs/{job_id}/commit",
+            post(scheduled::jobs::commit),
+        )
+        .route(
+            "/scheduled/jobs/{job_id}/freeze",
+            post(scheduled::jobs::freeze),
+        )
+        .route(
+            "/scheduled/jobs/{job_id}/apply",
+            post(scheduled::jobs::apply),
+        )
+        .route(
+            "/scheduled/jobs/{job_id}/discard",
+            post(scheduled::jobs::discard),
+        )
+        .route(
+            "/scheduled/jobs/{job_id}/enable",
+            post(scheduled::jobs::enable),
+        )
+        .route(
+            "/scheduled/jobs/{job_id}/disable",
+            post(scheduled::jobs::disable),
+        )
+        .route(
+            "/scheduled/jobs/{job_id}/schedule",
+            put(scheduled::jobs::update_schedule),
+        )
+        .route(
+            "/scheduled/jobs/{job_id}/occurrences",
+            get(scheduled::jobs::occurrences),
+        )
+        .route(
+            "/scheduled/jobs/{job_id}/runs",
+            get(scheduled::jobs::runs).post(scheduled::jobs::create_run),
+        )
+        .route(
+            "/scheduled/flows",
+            get(scheduled::flows::list).post(scheduled::flows::create),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}",
+            get(scheduled::flows::detail).delete(scheduled::flows::delete_draft),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/commit",
+            post(scheduled::flows::commit),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/freeze",
+            post(scheduled::flows::freeze),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/apply",
+            post(scheduled::flows::apply),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/discard",
+            post(scheduled::flows::discard),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/enable",
+            post(scheduled::flows::enable),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/disable",
+            post(scheduled::flows::disable),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/schedule",
+            put(scheduled::flows::update_schedule),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/tasks",
+            post(scheduled::flows::add_task),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/tasks/{task_id}",
+            patch(scheduled::flows::patch_task).delete(scheduled::flows::delete_task),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/occurrences",
+            get(scheduled::flows::occurrences),
+        )
+        .route(
+            "/scheduled/flows/{flow_id}/runs",
+            get(scheduled::flows::runs).post(scheduled::flows::create_run),
+        )
         .route("/jobs", get(jobs::list).post(jobs::create))
         .route("/jobs/{id}", get(jobs::detail))
         .route("/jobs/{id}/description", patch(jobs::update_description))
@@ -78,7 +211,9 @@ async fn no_store(request: Request, next: Next) -> Response {
 mod tests {
     use std::path::Path;
 
+    use axum::Json;
     use axum::body::{Body, to_bytes};
+    use axum::extract::State;
     use axum::http::{Request, StatusCode};
     use serde::Deserialize;
     use serde_json::Value;
@@ -146,6 +281,566 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn workspace_reports_current_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = state_for(&test_paths(directory.path()));
+        let serial = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get("/api/v1/workspace")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(serial["mode"], "serial");
+
+        state.store.lock_queue().unwrap();
+        state
+            .store
+            .set_mode(crate::domain::flow::ExecutionMode::Scheduled)
+            .unwrap();
+        let scheduled = json_response(
+            build_router(state)
+                .oneshot(
+                    Request::get("/api/v1/workspace")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(scheduled["mode"], "scheduled");
+    }
+
+    #[tokio::test]
+    async fn scheduled_mode_guard_returns_typed_conflict_in_serial_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let response = Router::new()
+            .route("/scheduled", get(scheduled_test_handler))
+            .with_state(state_for(&test_paths(directory.path())))
+            .oneshot(Request::get("/scheduled").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = json_response(response).await;
+        assert_eq!(body["code"], "mode_changed");
+        assert_eq!(body["details"]["mode"], "serial");
+    }
+
+    #[tokio::test]
+    async fn scheduled_mode_guard_allows_scheduled_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = state_for(&test_paths(directory.path()));
+        state.store.lock_queue().unwrap();
+        state
+            .store
+            .set_mode(crate::domain::flow::ExecutionMode::Scheduled)
+            .unwrap();
+        let response = Router::new()
+            .route("/scheduled", get(scheduled_test_handler))
+            .with_state(state)
+            .oneshot(Request::get("/scheduled").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn scheduled_flow_routes_preserve_draft_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        let created = json_response(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows",
+                serde_json::json!({
+                    "flow_id": "nightly",
+                    "name": "Nightly publish",
+                    "owner": "web",
+                    "schedule": {"kind": "daily", "time": "23:30", "timezone": "Asia/Tokyo"}
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(created["flow"]["draft_revision"], 0);
+
+        let stale = post_json(
+            build_router(state),
+            "/api/v1/scheduled/flows/nightly/tasks",
+            serde_json::json!({
+                "task_id": "publish", "name": "Publish", "cwd": ".",
+                "command": "echo publish", "retry": 0,
+                "dependencies": [], "depend_mode": "all",
+                "expected_draft_revision": 9
+            }),
+        )
+        .await;
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            json_response(stale).await["details"]["current_draft_revision"],
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduled_job_collection_is_mode_scoped() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        let response = post_json(
+            build_router(state),
+            "/api/v1/scheduled/jobs",
+            serde_json::json!({
+                "user": "ops", "name": "refresh", "cwd": ".", "command": "echo refresh",
+                "schedule": {"kind": "periodic", "every": "15m", "first_at": null},
+                "retry": 1
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(
+            json_response(response).await["job"]["definition"]["mode"],
+            "scheduled"
+        );
+    }
+
+    #[tokio::test]
+    async fn serial_job_collection_excludes_scheduled_jobs() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        let created = post_json(
+            build_router(state.clone()),
+            "/api/v1/scheduled/jobs",
+            serde_json::json!({
+                "user": "ops", "name": "refresh", "cwd": ".", "command": "echo refresh",
+                "schedule": {"kind": "periodic", "every": "15m", "first_at": null},
+                "retry": 1
+            }),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::CREATED);
+        state.store.lock_queue().unwrap();
+        state
+            .store
+            .set_mode(crate::domain::flow::ExecutionMode::Serial)
+            .unwrap();
+        state.store.unlock_queue().unwrap();
+
+        let serial_router = build_router(state);
+        let response = serial_router
+            .oneshot(Request::get("/api/v1/jobs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let jobs = json_response(response).await;
+        assert!(
+            jobs["jobs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|job| job["mode"] != "scheduled")
+        );
+        assert!(jobs["jobs"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn scheduled_job_run_history_rejects_a_serial_job_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        let serial_id = state
+            .store
+            .create_job(crate::domain::NewJob {
+                name: "serial".into(),
+                user: "ops".into(),
+                description: None,
+                cwd: directory.path().into(),
+                command: vec!["echo".into(), "serial".into()],
+            })
+            .unwrap();
+
+        let response = build_router(state)
+            .oneshot(
+                Request::get(format!("/api/v1/scheduled/jobs/{serial_id}/runs"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn scheduled_run_detail_contains_attempts_and_bounded_logs() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, run_id, attempt_id) = seeded_running_flow(directory.path());
+        state.store.mark_flow_attempt_running(attempt_id).unwrap();
+        let path = state
+            .paths
+            .runs
+            .join("flows")
+            .join(run_id.to_string())
+            .join("root")
+            .join("attempt-1")
+            .join("stdout.log");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"hello\n").unwrap();
+
+        let detail = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get(format!("/api/v1/scheduled/runs/{run_id}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(detail["run"]["tasks"][0]["attempts"][0]["number"], 1);
+
+        let logs = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get(format!(
+                        "/api/v1/scheduled/runs/{run_id}/tasks/root/attempts/1/logs"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(logs["stdout"], "hello\n");
+        assert_eq!(logs["stderr_available"], false);
+
+        std::fs::write(&path, [b"x".as_slice(), &vec![b'y'; 256 * 1024]].concat()).unwrap();
+        let bounded = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get(format!(
+                        "/api/v1/scheduled/runs/{run_id}/tasks/root/attempts/1/logs"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(bounded["stdout"].as_str().unwrap().len(), 256 * 1024);
+        assert_eq!(bounded["stdout"].as_str().unwrap().as_bytes()[0], b'y');
+        assert_eq!(bounded["stdout_truncated"], true);
+
+        std::fs::write(
+            path.with_extension("meta.json"),
+            br#"{"truncated":true,"dropped_bytes":1,"earliest_offset":1,"retained_bytes":6,"stream":"Stdout"}"#,
+        )
+        .unwrap();
+        let truncated = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get(format!(
+                        "/api/v1/scheduled/runs/{run_id}/tasks/root/attempts/1/logs"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(truncated["stdout_truncated"], true);
+
+        assert_eq!(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get(format!(
+                        "/api/v1/scheduled/runs/{run_id}/tasks/root/attempts/2/logs"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            put_json(
+                build_router(state),
+                "/api/v1/scheduled/settings/max-concurrency",
+                serde_json::json!({"value": 0}),
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduled_flow_routes_preserve_source_commit_and_manual_run_safety() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        let router = build_router(state.clone());
+        let created = post_json(router, "/api/v1/scheduled/flows", flow_request("nightly")).await;
+        assert_eq!(created.status(), StatusCode::CREATED);
+        assert_eq!(
+            post_empty(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/nightly/commit"
+            )
+            .await
+            .status(),
+            StatusCode::CONFLICT
+        );
+
+        let sync_directory = tempfile::tempdir().unwrap();
+        let sync_state = scheduled_state(sync_directory.path());
+        sync_state.store.lock_queue().unwrap();
+        sync_state
+            .store
+            .set_flow_source_mode(crate::store::FlowSourceMode::Sync)
+            .unwrap();
+        assert_eq!(
+            post_json(
+                build_router(sync_state),
+                "/api/v1/scheduled/flows",
+                flow_request("sync-owned"),
+            )
+            .await
+            .status(),
+            StatusCode::CONFLICT
+        );
+
+        let run_state = scheduled_state(directory.path());
+        let create = post_json(
+            build_router(run_state.clone()),
+            "/api/v1/scheduled/flows",
+            serde_json::json!({
+                "flow_id": "expired-once",
+                "name": "Expired once",
+                "owner": "web",
+                "schedule": {"kind": "once", "at": "2000-01-01T00:00:00Z"}
+            }),
+        )
+        .await;
+        assert_eq!(create.status(), StatusCode::CREATED);
+        let task = post_json(
+            build_router(run_state.clone()),
+            "/api/v1/scheduled/flows/expired-once/tasks",
+            serde_json::json!({
+                "task_id": "publish", "name": "Publish", "cwd": ".",
+                "command": "echo publish", "retry": 0,
+                "dependencies": [], "depend_mode": "all",
+                "expected_draft_revision": 0
+            }),
+        )
+        .await;
+        assert_eq!(task.status(), StatusCode::OK);
+        assert_eq!(
+            post_empty(
+                build_router(run_state.clone()),
+                "/api/v1/scheduled/flows/expired-once/commit",
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let replace = post_json(
+            build_router(run_state),
+            "/api/v1/scheduled/flows/expired-once/runs",
+            serde_json::json!({"replace_next": true}),
+        )
+        .await;
+        assert_eq!(replace.status(), StatusCode::CONFLICT);
+        assert_eq!(json_response(replace).await["code"], "conflict");
+    }
+
+    #[tokio::test]
+    async fn source_sync_requires_matching_preview_hash() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        state.store.lock_queue().unwrap();
+        state
+            .store
+            .set_flow_source_mode(crate::store::FlowSourceMode::Sync)
+            .unwrap();
+        let document = state.store.export_flow_source().unwrap();
+
+        let preview = json_response(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/sources/dry-run",
+                serde_json::json!({"document": document}),
+            )
+            .await,
+        )
+        .await;
+        assert!(preview["hash"].as_str().unwrap().starts_with("sha256:"));
+
+        let apply = post_json(
+            build_router(state),
+            "/api/v1/scheduled/sources/sync",
+            serde_json::json!({"document": document, "confirmed_hash": "sha256:different"}),
+        )
+        .await;
+        assert_eq!(apply.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn source_routes_preview_removals_reject_stale_or_manual_sync_and_never_take_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        assert_eq!(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows",
+                flow_request("removable"),
+            )
+            .await
+            .status(),
+            StatusCode::CREATED
+        );
+        assert_eq!(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/removable/tasks",
+                serde_json::json!({
+                    "task_id": "root", "name": "Root", "cwd": ".",
+                    "command": "echo root", "retry": 0,
+                    "dependencies": [], "depend_mode": "all", "expected_draft_revision": 0
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            post_empty(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/removable/commit",
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        state.store.lock_queue().unwrap();
+        let source_state = json_response(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/sources/mode",
+                serde_json::json!({"mode": "sync"}),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(source_state["mode"], "sync");
+        let state_response = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get("/api/v1/scheduled/sources")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(state_response["hash"], source_state["hash"]);
+        let mut removal = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get("/api/v1/scheduled/sources/export")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await["document"]
+            .clone();
+        removal["flows"] = serde_json::json!([]);
+
+        let preview = json_response(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/sources/dry-run",
+                serde_json::json!({"document": removal.clone()}),
+            )
+            .await,
+        )
+        .await;
+        assert!(preview["diff"]["removed"].as_u64().unwrap() >= 1);
+
+        let mut stale = removal.clone();
+        stale["base"]["revision"] = serde_json::json!(0);
+        let stale_base = post_json(
+            build_router(state.clone()),
+            "/api/v1/scheduled/sources/dry-run",
+            serde_json::json!({"document": stale}),
+        )
+        .await;
+        assert_eq!(stale_base.status(), StatusCode::CONFLICT);
+
+        let browser_path = post_json(
+            build_router(state.clone()),
+            "/api/v1/scheduled/sources/dry-run",
+            serde_json::json!({"document": removal.clone(), "path": "C:/browser-supplied.json"}),
+        )
+        .await;
+        assert_eq!(browser_path.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let synced = json_response(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/sources/sync",
+                serde_json::json!({"document": removal.clone(), "confirmed_hash": preview["hash"]}),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(synced["hash"], preview["hash"]);
+        assert_eq!(synced["changed"], true);
+        assert!(state.store.list_flows(None).unwrap().is_empty());
+
+        let snapshot = json_response(
+            post_empty(
+                build_router(state.clone()),
+                "/api/v1/scheduled/sources/snapshot",
+            )
+            .await,
+        )
+        .await;
+        assert!(std::path::Path::new(snapshot["path"].as_str().unwrap()).is_file());
+
+        let manual = json_response(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/sources/mode",
+                serde_json::json!({"mode": "manual"}),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(manual["mode"], "manual");
+        let sync_in_manual_mode = post_json(
+            build_router(state),
+            "/api/v1/scheduled/sources/sync",
+            serde_json::json!({"document": removal, "confirmed_hash": preview["hash"]}),
+        )
+        .await;
+        assert_eq!(sync_in_manual_mode.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
@@ -760,11 +1455,42 @@ mod tests {
             .unwrap()
     }
 
+    async fn post_json(router: Router, path: &str, body: Value) -> axum::response::Response {
+        router
+            .oneshot(json_request("POST", path, body))
+            .await
+            .unwrap()
+    }
+
+    async fn post_empty(router: Router, path: &str) -> axum::response::Response {
+        router
+            .oneshot(Request::post(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn put_json(router: Router, path: &str, body: Value) -> axum::response::Response {
+        router
+            .oneshot(json_request("PUT", path, body))
+            .await
+            .unwrap()
+    }
+
     async fn json_response(response: axum::response::Response) -> Value {
         let body = to_bytes(response.into_body(), MAX_REQUEST_BYTES)
             .await
             .unwrap();
         serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn scheduled_test_handler(
+        State(state): State<ApiState>,
+    ) -> Result<Json<Value>, super::super::error::ApiError> {
+        super::super::handlers::workspace::require_workspace_mode(
+            &state,
+            crate::domain::flow::ExecutionMode::Scheduled,
+        )?;
+        Ok(Json(serde_json::json!({"scheduled": true})))
     }
 
     fn percent_encode(bytes: &[u8]) -> String {
@@ -786,6 +1512,67 @@ mod tests {
             crate::Store::open(&paths.database).unwrap(),
             ServiceClient::new(paths.clone()),
         )
+    }
+
+    fn scheduled_state(root: &Path) -> ApiState {
+        let paths = test_paths(root);
+        paths.ensure().unwrap();
+        let state = state_for(&paths);
+        state.store.lock_queue().unwrap();
+        state
+            .store
+            .set_mode(crate::domain::flow::ExecutionMode::Scheduled)
+            .unwrap();
+        state.store.unlock_queue().unwrap();
+        state
+    }
+
+    fn flow_request(flow_id: &str) -> Value {
+        serde_json::json!({
+            "flow_id": flow_id,
+            "name": "Nightly publish",
+            "owner": "web",
+            "schedule": {"kind": "daily", "time": "23:30", "timezone": "Asia/Tokyo"}
+        })
+    }
+
+    fn seeded_running_flow(root: &Path) -> (ApiState, uuid::Uuid, uuid::Uuid) {
+        let state = scheduled_state(root);
+        let flow = state
+            .store
+            .create_flow(
+                "run-detail".into(),
+                "Run detail".into(),
+                "web".into(),
+                crate::domain::flow::ScheduleSpec::Once {
+                    at: chrono::Utc::now() + chrono::Duration::hours(1),
+                },
+            )
+            .unwrap();
+        state
+            .store
+            .add_flow_task(crate::store::FlowTaskInput {
+                flow_id: flow.flow_id.clone(),
+                task_id: "root".into(),
+                name: "Root".into(),
+                cwd: root.to_string_lossy().into_owned(),
+                command: "echo root".into(),
+                retry: 0,
+                dependencies: vec![],
+                depend_mode: Default::default(),
+            })
+            .unwrap();
+        state.store.commit_flow(&flow.flow_id).unwrap();
+        let run = state
+            .store
+            .create_flow_run(&flow.flow_id, "MANUAL", false, None)
+            .unwrap();
+        let attempt = state
+            .store
+            .claim_flow_task(chrono::Utc::now())
+            .unwrap()
+            .unwrap();
+        (state, run.run_id, attempt.attempt_id)
     }
 
     pub(super) fn test_paths(root: &Path) -> StokerPaths {

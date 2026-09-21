@@ -12,6 +12,7 @@ use crate::store::{FlowAttemptResult, FlowTaskExecution};
 
 use super::connection::Store;
 use super::error::StoreError;
+use super::flow_attempt_mapping::attempt_from_row;
 use super::flow_mapping::*;
 use super::flow_run_dispatch::*;
 use super::flow_runtime_mapping::*;
@@ -137,6 +138,22 @@ impl Store {
         ids.into_iter()
             .map(|id| load_run(&connection, parse_uuid(&id)?))
             .collect()
+    }
+
+    pub fn list_flow_attempts(
+        &self,
+        run_id: Uuid,
+        task_id: &str,
+    ) -> Result<Vec<crate::domain::flow::Attempt>, StoreError> {
+        let connection = self.lock()?;
+        Ok(connection
+            .prepare(
+                "SELECT attempt_id, run_id, task_id, number, state, exit_code, failure_kind, \
+                 failure_detail, started_at, finished_at FROM attempts \
+                 WHERE run_id = ?1 AND task_id = ?2 ORDER BY number",
+            )?
+            .query_map(params![run_id.to_string(), task_id], attempt_from_row)?
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn list_occurrences(&self, flow_id: &str) -> Result<Vec<Occurrence>, StoreError> {
@@ -467,5 +484,14 @@ impl Store {
     pub fn flow_active_count(&self) -> Result<usize, StoreError> {
         let connection = self.lock()?;
         Ok(connection.query_row("SELECT COUNT(*) FROM flow_runs WHERE state IN ('STARTING','RUNNING','CANCELLING','RECOVERING')", [], |row| row.get::<_, i64>(0))? as usize)
+    }
+
+    pub fn flow_active_attempt_count(&self) -> Result<usize, StoreError> {
+        let connection = self.lock()?;
+        Ok(connection.query_row(
+            "SELECT COUNT(*) FROM attempts WHERE state IN ('STARTING','RUNNING')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as usize)
     }
 }

@@ -7,8 +7,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::adapters::SystemWorkingDirectoryResolver;
-use crate::application::{self, CommitSelection, CreateJobInput, DescriptionUpdate, JobFilter};
+use crate::application::{self, CommitSelection, CreateJobInput, DescriptionUpdate};
 use crate::domain::JobState;
+use crate::domain::flow::ExecutionMode;
 
 use super::super::dto::{
     CleanResponse, CreateJobRequest, CreateJobResponse, JobActionResponse, JobDetailResponse,
@@ -17,6 +18,7 @@ use super::super::dto::{
 use super::super::error::ApiError;
 use super::super::state::ApiState;
 use super::json_body;
+use super::workspace::require_workspace_mode;
 
 const MAX_LOG_BYTES: usize = 256 * 1024;
 
@@ -30,6 +32,7 @@ pub(in crate::ui) async fn list(
     State(state): State<ApiState>,
     Query(query): Query<JobsQuery>,
 ) -> Result<Json<JobsResponse>, ApiError> {
+    require_workspace_mode(&state, ExecutionMode::Serial)?;
     let job_state = query
         .state
         .as_deref()
@@ -37,13 +40,14 @@ pub(in crate::ui) async fn list(
         .map(|value| value.to_ascii_uppercase().parse::<JobState>())
         .transpose()
         .map_err(ApiError::invalid_input)?;
-    let jobs = application::jobs::query_jobs(
-        &state.store,
-        &JobFilter {
-            user: query.user.filter(|value| !value.is_empty()),
-            state: job_state,
-        },
-    )?;
+    let jobs = state
+        .store
+        .list_jobs_for_mode(
+            query.user.filter(|value| !value.is_empty()).as_deref(),
+            job_state,
+            Some(ExecutionMode::Serial),
+        )
+        .map_err(ApiError::internal)?;
     let timezone =
         crate::config::resolve_timezone(&state.paths, None).map_err(ApiError::internal)?;
     Ok(Json(JobsResponse {

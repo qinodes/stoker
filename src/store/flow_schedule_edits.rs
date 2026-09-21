@@ -18,8 +18,30 @@ impl Store {
         schedule: ScheduleSpec,
         expected_draft_revision: Option<i64>,
     ) -> Result<FlowDefinition, StoreError> {
+        self.set_flow_schedule_draft_inner(flow_id, schedule, expected_draft_revision, false)
+    }
+
+    pub fn set_scheduled_flow_schedule_draft(
+        &self,
+        flow_id: &str,
+        schedule: ScheduleSpec,
+        expected_draft_revision: i64,
+    ) -> Result<FlowDefinition, StoreError> {
+        self.set_flow_schedule_draft_inner(flow_id, schedule, Some(expected_draft_revision), true)
+    }
+
+    fn set_flow_schedule_draft_inner(
+        &self,
+        flow_id: &str,
+        schedule: ScheduleSpec,
+        expected_draft_revision: Option<i64>,
+        require_scheduled: bool,
+    ) -> Result<FlowDefinition, StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if require_scheduled {
+            super::flow_mapping::require_scheduled_mode(&transaction)?;
+        }
         require_manual_source(&transaction, Some(flow_id))?;
         expire_occurrences(&transaction, Utc::now())?;
         let current = load_flow_base(&transaction, flow_id)?;
@@ -66,10 +88,10 @@ impl Store {
         }
         let expected = expected_draft_revision.unwrap_or(current.draft_revision);
         if expected != current.draft_revision {
-            return Err(StoreError::InvalidData(format!(
-                "draft revision conflict: expected {expected}, current {}",
-                current.draft_revision
-            )));
+            return Err(StoreError::DraftRevisionConflict {
+                expected,
+                current: current.draft_revision,
+            });
         }
         let mut draft = transaction
             .query_row(

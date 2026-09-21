@@ -1,5 +1,13 @@
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 
+.workload-tabs { display: inline-flex; gap: 4px; margin: 0 0 18px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft); }
+.workload-tab { min-height: 34px; padding: 0 13px; border: 0; border-radius: 7px; background: transparent; color: var(--text-subtle); cursor: pointer; font-size: 11px; font-weight: 750; }
+.workload-tab:hover, .workload-tab.active { background: var(--surface); color: var(--cyan); }
+.workloads-table .workload-row { cursor: pointer; }
+.workloads-table .workload-row:hover { background: var(--surface-hover); }
+.workloads-table td strong, .workloads-table td small { display: block; }
+.workloads-table td small { max-width: 210px; margin-top: 4px; overflow: hidden; color: var(--text-subtle); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+
 .search-input, .select-input { min-height: 38px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font-size: 12px; }
 
 .search-input { width: min(340px, 100%); padding: 0 13px; }
@@ -29,7 +37,7 @@
 .jobs-table th:nth-child(5), .jobs-table td:nth-child(5) { width: 9%; }
 .jobs-table th:nth-child(6), .jobs-table td:nth-child(6) { width: 20%; }
 
-.data-table th { padding: 0 18px 12px; border-bottom: 1px solid var(--border); color: var(--text-subtle); font-size: 10px; font-weight: 750; letter-spacing: .08em; text-align: left; text-transform: uppercase; white-space: nowrap; }
+.data-table th { padding: 12px 18px; border-bottom: 1px solid var(--border); color: var(--text-subtle); font-size: 10px; font-weight: 750; letter-spacing: .08em; text-align: left; text-transform: uppercase; vertical-align: middle; white-space: nowrap; }
 
 .data-table td { padding: 15px 18px; border-bottom: 1px solid rgba(52, 75, 103, .38); color: var(--text-muted); font-size: 11px; white-space: nowrap; }
 
@@ -107,6 +115,8 @@
 .config-form label { display: block; margin-bottom: 8px; color: var(--text-muted); font-size: 11px; font-weight: 700; }
 
 .form-row { display: flex; flex-wrap: wrap; gap: 8px; }
+
+#timezone-form .form-row { margin-top: 12px; }
 
 .text-input { min-width: 180px; min-height: 38px; flex: 1 1 180px; padding: 0 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); font-size: 12px; }
 
@@ -253,3 +263,6 @@
 .policy-input-wrap > span { flex: 0 0 auto; color: var(--text-subtle); font-size: 9px; }
 
 .policy-field-actions { display: flex; justify-content: flex-end; gap: 7px; }
+
+.source-document { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 22px 18px; color: var(--text-muted); font-size: 11px; }
+.source-document code { overflow-wrap: anywhere; color: var(--cyan); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

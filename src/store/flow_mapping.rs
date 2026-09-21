@@ -38,6 +38,21 @@ pub(super) fn require_queue_unlocked(connection: &Connection) -> Result<(), Stor
     Ok(())
 }
 
+/// Keep scheduled Flow mutations safe if the workspace mode changes after the
+/// HTTP adapter performed its initial guard but before this transaction starts.
+pub(super) fn require_scheduled_mode(connection: &Connection) -> Result<(), StoreError> {
+    let mode: String =
+        connection.query_row("SELECT mode FROM settings WHERE id = 1", [], |row| {
+            row.get(0)
+        })?;
+    let actual = parse_mode(&mode)?;
+    if actual == ExecutionMode::Scheduled {
+        Ok(())
+    } else {
+        Err(StoreError::ScheduledModeChanged { actual })
+    }
+}
+
 pub(super) fn queue_locked_with(connection: &Connection) -> Result<bool, StoreError> {
     Ok(connection.query_row(
         "SELECT queue_locked FROM settings WHERE id = 1",

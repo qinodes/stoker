@@ -3,8 +3,10 @@ pub(super) mod filesystem;
 pub(super) mod jobs;
 pub(super) mod policy;
 pub(super) mod queue;
+pub(in crate::ui) mod scheduled;
 pub(super) mod status;
 pub(super) mod system;
+pub(super) mod workspace;
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;

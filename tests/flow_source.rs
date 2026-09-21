@@ -10,7 +10,7 @@ use stoker::domain::flow::{
 };
 use stoker::flow_source::{
     FlowSourceCwd, FlowSourceSchedule, FlowSourceTask, canonical_hash, format_document,
-    parse_document, resolve_document,
+    parse_document, resolve_document, resolve_workspace_document,
 };
 use stoker::store::{FlowSourceMode, FlowTaskInput};
 use stoker::{NewJob, Store};
@@ -185,6 +185,30 @@ fn store_export_is_consistent_complete_and_excludes_drafts_and_hidden_definition
         document.flows[0].tasks[0].cwd,
         Some(FlowSourceCwd::Path(_))
     ));
+}
+
+#[test]
+fn workspace_document_resolution_uses_the_server_selected_workspace_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = scheduled_store(directory.path());
+    create_flow(
+        &store,
+        directory.path(),
+        "browser-content",
+        ScheduleSpec::Once {
+            at: Utc::now() + Duration::hours(2),
+        },
+    );
+    let mut document = store.export_flow_source().unwrap();
+    document.flows[0].tasks[0].cwd = Some(FlowSourceCwd::Path(".".into()));
+
+    let resolved = resolve_workspace_document(&document, directory.path()).unwrap();
+    assert_eq!(
+        std::path::Path::new(&resolved[0].tasks[0].cwd)
+            .canonicalize()
+            .unwrap(),
+        directory.path().canonicalize().unwrap()
+    );
 }
 
 #[test]

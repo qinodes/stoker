@@ -1,4 +1,5 @@
 import type { PageInfo, Route, WorkspaceState } from "./types";
+import { createScheduledState } from "./scheduled/state.ts";
 
 export const JOBS_PAGE_SIZE = 6;
 export const SNAPSHOTS_PAGE_SIZE = 5;
@@ -25,6 +26,9 @@ export interface DirectoryCacheEntry {
 
 export function createState(route: Route = "overview"): WorkspaceState {
   return {
+    mode: null,
+    modeTransition: null,
+    workspace: null,
     config: null,
     settings: null,
     policy: null,
@@ -44,6 +48,7 @@ export function createState(route: Route = "overview"): WorkspaceState {
     selectedJob: null,
     selectedJobDetail: null,
     configurationDraft: null,
+    scheduled: createScheduledState(),
   };
 }
 
