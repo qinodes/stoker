@@ -60,6 +60,7 @@ export const messages = {
   "jobs.browse": "瀏覽",
   "jobs.directoryHelp": "資料夾從 Stoker 主機讀取。",
   "jobs.directoryBrowser": "目錄瀏覽器",
+  "jobs.closeDirectoryBrowser": "關閉目錄瀏覽器",
   "jobs.goParent": "← 返回上一層",
   "common.open": "開啟",
   "jobs.loadingDirectories": "正在載入目錄",

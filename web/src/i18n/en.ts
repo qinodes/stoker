@@ -58,6 +58,7 @@ export const en = {
   "jobs.browse": "Browse",
   "jobs.directoryHelp": "Folders are read from the Stoker host.",
   "jobs.directoryBrowser": "Directory browser",
+  "jobs.closeDirectoryBrowser": "Close directory browser",
   "jobs.goParent": "Back",
   "common.open": "Open",
   "jobs.loadingDirectories": "Loading directories",

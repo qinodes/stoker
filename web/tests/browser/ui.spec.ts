@@ -219,6 +219,9 @@ test("directory browser can return to parent directories", async ({ page }) => {
   await page.locator('[data-route="jobs"]').click();
   await page.locator('[data-action="new-job"]').click();
   await page.locator('[data-action="browse-directory"]').click();
+  await expect(page.locator("#directory-browser-dialog")).toBeVisible();
+  await expect(page.locator("#job-dialog .fs-browser")).toHaveCount(0);
+  await expect(page.locator("#directory-browser-dialog .fs-browser")).toBeVisible();
   await expect(page.locator('[data-directory="/workspace/child"]')).toBeVisible();
 
   await page.locator('[data-directory="/workspace/child"]').click();
@@ -237,6 +240,10 @@ test("directory browser can return to parent directories", async ({ page }) => {
   await page.locator('[data-action="fs-go-parent"]').click();
   await expect(page.locator("#fs-path")).toHaveValue("/");
   await expect(page.locator('[data-action="fs-go-parent"]')).toBeDisabled();
+
+  await page.locator('[data-action="close-directory-browser"]').click();
+  await expect(page.locator("#directory-browser-dialog")).not.toBeVisible();
+  await expect(page.locator("#job-dialog")).toBeVisible();
 });
 
 test("bundled browser creates and reads a job through the real Axum application stack", async ({ page, request }) => {

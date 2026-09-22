@@ -4,7 +4,7 @@ import { useWorkspace } from "./context";
 import { routesForMode } from "./modes.ts";
 import { ToastRegion } from "./components";
 import { Overview } from "./pages/Overview";
-import { Jobs, JobDetail, JobForm } from "./pages/Jobs";
+import { Jobs, JobDetail, JobForm, DirectoryBrowserDialog } from "./pages/Jobs";
 import { Queue } from "./pages/Queue";
 import { Logs } from "./pages/Logs";
 import { Configuration } from "./pages/Configuration";
@@ -19,7 +19,7 @@ import type { Route, WorkspaceMode } from "./types.ts";
 
 export function App() {
   const { t, renderMessage } = useI18n();
-  const { state, actions, jobFormOpen, jobDetailOpen, detailEditing, confirmation, toasts } = useWorkspace();
+  const { state, actions, jobFormOpen, directoryBrowserOpen, jobDetailOpen, detailEditing, confirmation, toasts } = useWorkspace();
   const Page = ({ overview: Overview, jobs: Jobs, queue: Queue, logs: Logs, configuration: Configuration, policy: Policy } as const)[state.route as "overview" | "jobs" | "queue" | "logs" | "configuration" | "policy"];
   const navigation = state.mode ? navigationForMode(state.mode, t) : [];
   const scheduler = state.workspace?.scheduler || state.status?.scheduler;
@@ -30,6 +30,7 @@ export function App() {
     <ToastRegion toasts={toasts} />
     <ModalDialog id="confirm-dialog" className="confirm-dialog" open={Boolean(confirmation)} onClose={() => actions.resolveConfirmation(false)}><div className="dialog-card confirm-card"><div className="dialog-kicker" id="confirm-kicker">{confirmation ? renderMessage(confirmation.kicker) : t("nav.configuration")}</div><h2 id="confirm-title">{confirmation ? renderMessage(confirmation.title) : t("common.confirmAction")}</h2><p id="confirm-message">{renderMessage(confirmation?.message || "")}</p><div className="dialog-actions"><button className="button secondary" id="confirm-cancel" type="button" onClick={() => actions.resolveConfirmation(false)}>{t("common.cancel")}</button><button className={`button ${confirmation?.destructive ? "danger" : "primary"}`} id="confirm-accept" type="button" onClick={() => actions.resolveConfirmation(true)}>{confirmation ? renderMessage(confirmation.acceptLabel) : t("common.confirm")}</button></div></div></ModalDialog>
     <ModalDialog id="job-dialog" className="job-dialog" open={jobFormOpen} onClose={actions.closeJobForm}><div className="job-dialog-shell" id="job-dialog-content"><JobForm /></div></ModalDialog>
+    <ModalDialog id="directory-browser-dialog" className="directory-browser-dialog" open={directoryBrowserOpen} onClose={actions.closeDirectoryBrowser}><DirectoryBrowserDialog /></ModalDialog>
     <ModalDialog id="job-detail-dialog" className="job-detail-dialog" open={jobDetailOpen} onClose={actions.closeJobDetail}><div className="job-detail-shell" id="job-detail-content">{detailEditing || state.selectedJob ? <JobDetail /> : <div className="page-loading"><span className="spinner"></span><span>{t("jobs.loading")}</span></div>}</div></ModalDialog>
   </div>;
 }

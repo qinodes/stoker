@@ -23,6 +23,8 @@ export interface WorkspaceActions {
   setPage: (kind: "jobs" | "snapshots", page: number) => void;
   openJobForm: () => Promise<void>;
   closeJobForm: () => void;
+  openDirectoryBrowser: (path: string) => Promise<void>;
+  closeDirectoryBrowser: () => void;
   updateDraft: (patch: Partial<JobDraft>) => void;
   loadDirectory: (path: string) => Promise<void>;
   setFilesystemInputPath: (path: string) => void;
@@ -77,6 +79,7 @@ export interface WorkspaceContextValue {
   state: WorkspaceState;
   actions: WorkspaceActions;
   jobFormOpen: boolean;
+  directoryBrowserOpen: boolean;
   jobDetailOpen: boolean;
   detailEditing: boolean;
   confirmation: Confirmation | null;
@@ -99,6 +102,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const detailRequest = useRef(0);
   const directoryCache = useRef(new Map<string, DirectoryCacheEntry>());
   const [jobFormOpen, setJobFormOpen] = useState(false);
+  const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false);
   const [jobDetailOpen, setJobDetailOpen] = useState(false);
   const [detailEditing, setDetailEditing] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
@@ -124,6 +128,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     detailRequest.current += 1;
     directoryCache.current.clear();
     setJobFormOpen(false);
+    setDirectoryBrowserOpen(false);
     setJobDetailOpen(false);
     setDetailEditing(false);
     const pendingConfirmation = resolver.current;
@@ -324,7 +329,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
     setJobFormOpen(true);
   }, [api, enterModeTransition]);
-  const closeJobForm = useCallback(() => setJobFormOpen(false), []);
+  const closeJobForm = useCallback(() => { setJobFormOpen(false); setDirectoryBrowserOpen(false); }, []);
   const updateDraft = useCallback((patch: Partial<JobDraft>) => setState((current) => ({ ...current, jobDraft: { ...current.jobDraft, ...patch } })), []);
 
   const loadDirectory = useCallback(async (path: string) => {
@@ -351,7 +356,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setState((current) => current.mode === mode ? { ...current, filesystem: { ...current.filesystem, loading: false, error: message } } : current);
     }
   }, [api, enterModeTransition]);
-  const chooseDirectory = useCallback(() => setState((current) => current.filesystem.current ? { ...current, jobDraft: { ...current.jobDraft, cwd: current.filesystem.current.path }, filesystem: { ...current.filesystem, roots: null, current: null } } : current), []);
+  const openDirectoryBrowser = useCallback(async (path: string) => {
+    setDirectoryBrowserOpen(true);
+    await loadDirectory(path);
+  }, [loadDirectory]);
+  const closeDirectoryBrowser = useCallback(() => setDirectoryBrowserOpen(false), []);
+  const chooseDirectory = useCallback(() => {
+    setState((current) => current.filesystem.current ? { ...current, jobDraft: { ...current.jobDraft, cwd: current.filesystem.current.path }, filesystem: { ...current.filesystem, roots: null, current: null } } : current);
+    setDirectoryBrowserOpen(false);
+  }, []);
   const setFilesystemInputPath = useCallback((path: string) => setState((current) => ({ ...current, filesystem: { ...current.filesystem, inputPath: path } })), []);
 
   const mutate = useCallback(async <T,>(path: string, method: string, body: unknown = null, message: UiMessage = uiMessage("toast.saved")): Promise<T | null> => {
@@ -449,8 +462,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const acceptModeTransition = useCallback(() => loadData(true), [loadData]);
   const deferModeTransitionAction = useCallback(() => setState((current) => deferModeTransition(current)), []);
   const checkModeTransition = useCallback(() => loadData(false), [loadData]);
-  const actions = useMemo<WorkspaceActions>(() => ({ loadData, acceptModeTransition, deferModeTransition: deferModeTransitionAction, checkModeTransition, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, setWorkspaceMode, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy, ...scheduledActions }), [loadData, acceptModeTransition, deferModeTransitionAction, checkModeTransition, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, setWorkspaceMode, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy, scheduledActions]);
-  return <WorkspaceContext.Provider value={{ state, actions, jobFormOpen, jobDetailOpen, detailEditing, confirmation, toasts }}>{children}</WorkspaceContext.Provider>;
+  const actions = useMemo<WorkspaceActions>(() => ({ loadData, acceptModeTransition, deferModeTransition: deferModeTransitionAction, checkModeTransition, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, openDirectoryBrowser, closeDirectoryBrowser, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, setWorkspaceMode, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy, ...scheduledActions }), [loadData, acceptModeTransition, deferModeTransitionAction, checkModeTransition, navigate, setFilter, setLogSearch, selectLogJob, setLogStream, setPage, openJobForm, closeJobForm, openDirectoryBrowser, closeDirectoryBrowser, updateDraft, loadDirectory, setFilesystemInputPath, chooseDirectory, saveJob, openJobDetail, closeJobDetail, toggleDescriptionEdit, saveDescription, copyJobId, requestConfirmation, resolveConfirmation, cleanJobs, queueLock, setWorkspaceMode, moveQueueJob, commitJob, cancelJob, viewJobLogs, setConfigurationDraft, saveTimezone, unsetTimezone, createSnapshot, restoreSnapshot, savePolicy, unsetPolicy, scheduledActions]);
+  return <WorkspaceContext.Provider value={{ state, actions, jobFormOpen, directoryBrowserOpen, jobDetailOpen, detailEditing, confirmation, toasts }}>{children}</WorkspaceContext.Provider>;
 }
 
 export { JOBS_PAGE_SIZE, SNAPSHOTS_PAGE_SIZE, pageInfo };

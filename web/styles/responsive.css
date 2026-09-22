@@ -88,6 +88,9 @@
   .job-card { padding: 19px; border-radius: 0; }
   .job-detail-dialog { inset: 0; width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; }
   .job-detail-shell { max-height: 100vh; }
+  .directory-browser-dialog { width: calc(100vw - 24px); max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); }
+  .directory-browser-shell { max-height: calc(100vh - 24px); padding: 12px; border-radius: 14px; }
+  .directory-browser-shell > .dialog-close { top: 27px; right: 27px; }
   .job-detail-card { padding: 19px; border-radius: 0; }
   .job-detail-status { align-items: flex-start; flex-direction: column; }
   .job-detail-status-meta { justify-items: start; }
