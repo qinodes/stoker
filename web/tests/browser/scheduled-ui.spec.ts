@@ -114,11 +114,14 @@ test("Flow editing moves between clean, dirty, discarded, and applied states", a
 
   await page.getByRole("button", { name: "Edit schedule" }).click();
   const scheduleDate = page.locator('.flow-schedule-editor input[type="date"]');
-  const scheduleTime = page.locator('.flow-schedule-editor input[type="time"]');
+  const scheduleHour = page.getByRole("combobox", { name: "Hour" });
+  const scheduleMinute = page.getByRole("combobox", { name: "Minute" });
   await expect(scheduleDate).toHaveValue("2026-09-22");
-  await expect(scheduleTime).toHaveValue("00:00");
+  await expect(scheduleHour).toHaveValue("00");
+  await expect(scheduleMinute).toHaveValue("00");
   await scheduleDate.fill("2026-09-23");
-  await scheduleTime.fill("01:30");
+  await scheduleHour.selectOption("01");
+  await scheduleMinute.selectOption("30");
   const scheduleRequest = page.waitForRequest((request) => request.method() === "PUT" && new URL(request.url()).pathname.endsWith("/schedule"));
   await page.getByRole("button", { name: "Save", exact: true }).click();
   expect((await scheduleRequest).postDataJSON().schedule).toEqual({ kind: "once", at: "2026-09-23T01:30:00Z" });
@@ -129,18 +132,21 @@ test("Flow editing moves between clean, dirty, discarded, and applied states", a
   await expect(page.getByRole("button", { name: "Exit edit mode" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Apply changes" })).toHaveCount(0);
   await expect(scheduleDate).toHaveValue("2026-09-22");
-  await expect(scheduleTime).toHaveValue("00:00");
+  await expect(scheduleHour).toHaveValue("00");
+  await expect(scheduleMinute).toHaveValue("00");
 
   await scheduleDate.fill("2026-09-24");
-  await scheduleTime.fill("02:30");
+  await scheduleHour.selectOption("02");
+  await scheduleMinute.selectOption("30");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await page.getByRole("button", { name: "Apply changes" }).click();
   await expect(page.getByRole("button", { name: "Freeze for edits" })).toBeVisible();
 
   await page.getByRole("button", { name: "Freeze for edits" }).click();
-  await page.locator(".schedule-inputs select").selectOption("daily");
+  await page.getByRole("combobox", { name: "Schedule type" }).selectOption("daily");
   await page.locator("#schedule-timezone").fill("Tokyo");
-  await page.locator('[data-timezone="Asia/Tokyo"]').click();
+  await page.locator("#schedule-timezone").press("ArrowDown");
+  await page.locator("#schedule-timezone").press("Enter");
   await expect(page.locator("#schedule-timezone")).toHaveValue("Asia/Tokyo");
   await page.getByRole("button", { name: "Exit edit mode" }).click();
   await expect(page.getByRole("button", { name: "Freeze for edits" })).toBeVisible();

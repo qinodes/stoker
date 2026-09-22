@@ -341,6 +341,8 @@ export const en = {
   "scheduled.flow.scheduleType": "Schedule type",
   "scheduled.flow.date": "Date",
   "scheduled.flow.time": "Time",
+  "scheduled.flow.hour": "Hour",
+  "scheduled.flow.minute": "Minute",
   "scheduled.flow.timezone": "Timezone",
   "scheduled.flow.interval": "Interval",
   "scheduled.flow.chooseTimezone": "Choose an IANA timezone from the suggestions.",

@@ -1,5 +1,5 @@
 import { useI18n } from "./i18n/context";
-import { useState, type ReactNode, type KeyboardEvent } from "react";
+import { useEffect, useState, type ReactNode, type KeyboardEvent } from "react";
 import type { UiMessage } from "./i18n/messages.ts";
 import type { Job, PageInfo } from "./types";
 import { classForState, formatDate, shortId } from "./formatters";
@@ -22,9 +22,38 @@ export function PageHeading({ eyebrow, title, description, actions }: { eyebrow:
 
 export function TimezonePicker({ id, suggestionsId, value, timezones, placeholder, required = false, onChange }: { id: string; suggestionsId: string; value: string; timezones: string[]; placeholder: string; required?: boolean; onChange: (value: string) => void }) {
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const query = value.trim().toLowerCase();
   const suggestions = query ? timezones.filter((zone) => zone.toLowerCase().includes(query)).slice(0, 8) : [];
-  return <div className="timezone-picker"><input className="text-input" id={id} name="timezone" value={value} placeholder={placeholder} required={required} autoComplete="off" role="combobox" aria-autocomplete="list" aria-controls={suggestionsId} aria-expanded={showSuggestions && suggestions.length > 0} onFocus={() => setShowSuggestions(true)} onChange={(event) => { onChange(event.target.value); setShowSuggestions(true); }} /><div className={`timezone-suggestions${showSuggestions && suggestions.length ? " visible" : ""}`} id={suggestionsId} role="listbox">{suggestions.map((zone) => <button className="timezone-option" type="button" role="option" data-timezone={zone} key={zone} onClick={() => { onChange(zone); setShowSuggestions(false); }}>{zone}</button>)}</div></div>;
+  const visible = showSuggestions && suggestions.length > 0;
+  const choose = (zone: string) => { onChange(zone); setShowSuggestions(false); setActiveIndex(-1); };
+  useEffect(() => {
+    if (activeIndex >= 0) document.getElementById(`${suggestionsId}-option-${activeIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, suggestionsId]);
+  return <div className="timezone-picker"><input className="text-input" id={id} name="timezone" value={value} placeholder={placeholder} required={required} autoComplete="off" role="combobox" aria-autocomplete="list" aria-controls={suggestionsId} aria-expanded={visible} aria-activedescendant={visible && activeIndex >= 0 ? `${suggestionsId}-option-${activeIndex}` : undefined} onFocus={() => { setShowSuggestions(true); setActiveIndex(-1); }} onChange={(event) => { onChange(event.target.value); setShowSuggestions(true); setActiveIndex(-1); }} onKeyDown={(event) => {
+    if ((event.key === "ArrowDown" || event.key === "ArrowUp") && suggestions.length) {
+      event.preventDefault();
+      setShowSuggestions(true);
+      setActiveIndex((current) => event.key === "ArrowDown" ? Math.min(current + 1, suggestions.length - 1) : current <= 0 ? suggestions.length - 1 : current - 1);
+    } else if (event.key === "Enter" && visible && activeIndex >= 0) {
+      event.preventDefault();
+      choose(suggestions[activeIndex]);
+    } else if (event.key === "Escape" && showSuggestions) {
+      event.preventDefault();
+      setShowSuggestions(false);
+      setActiveIndex(-1);
+    }
+  }} /><div className={`timezone-suggestions${visible ? " visible" : ""}`} id={suggestionsId} role="listbox">{suggestions.map((zone, index) => <button className={`timezone-option${index === activeIndex ? " active" : ""}`} id={`${suggestionsId}-option-${index}`} type="button" role="option" aria-selected={index === activeIndex} data-timezone={zone} key={zone} onMouseEnter={() => setActiveIndex(index)} onClick={() => choose(zone)}>{zone}</button>)}</div></div>;
+}
+
+const HOURS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, "0"));
+const MINUTES = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
+
+export function TimePicker({ id, value, hourLabel, minuteLabel, required = false, onChange }: { id: string; value: string; hourLabel: string; minuteLabel: string; required?: boolean; onChange: (value: string) => void }) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value);
+  const hour = match?.[1] || "";
+  const minute = match?.[2] || "";
+  return <div className="time-picker" id={id}><select className="select-input" aria-label={hourLabel} required={required} value={hour} onChange={(event) => onChange(`${event.target.value}:${minute || "00"}`)}><option value="" disabled>HH</option>{HOURS.map((item) => <option value={item} key={item}>{item}</option>)}</select><span className="time-picker-separator" aria-hidden="true">:</span><select className="select-input" aria-label={minuteLabel} required={required} value={minute} onChange={(event) => onChange(`${hour || "00"}:${event.target.value}`)}><option value="" disabled>MM</option>{MINUTES.map((item) => <option value={item} key={item}>{item}</option>)}</select></div>;
 }
 
 export function Metric({ label, value, note, accent = "" }: { label: string; value: string | number; note: string; accent?: string }) {

@@ -132,8 +132,12 @@
 .schedule-inputs { align-items: flex-end; }
 .schedule-field { display: grid; gap: 5px; min-width: 132px; color: var(--text-subtle); font-size: 10px; font-weight: 700; }
 .schedule-kind-field { min-width: 150px; }
+.schedule-time-field { min-width: 154px; }
 .schedule-timezone-field { min-width: 240px; }
 .schedule-error { flex-basis: 100%; }
+.time-picker { display: grid; grid-template-columns: minmax(64px, 1fr) auto minmax(64px, 1fr); align-items: center; gap: 6px; }
+.time-picker .select-input { width: 100%; min-width: 0; padding-right: 7px; padding-left: 9px; font-variant-numeric: tabular-nums; }
+.time-picker-separator { color: var(--text-muted); font-size: 16px; font-weight: 750; }
 .flow-section { padding: 0 22px 22px; }
 .flow-section h3 { margin: 6px 0 14px; color: var(--text); font-size: 15px; }
 .flow-graph { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; align-items: start; }
