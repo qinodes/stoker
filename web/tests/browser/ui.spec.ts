@@ -549,6 +549,7 @@ test.describe("localized Web UI", () => {
 
       await page.locator('[data-route="jobs"]').click();
       await expect(page.getByRole("heading", { name: translate(locale, "jobs.title") })).toBeVisible();
+      await expect(page.locator('[data-action="clean-jobs"]')).toHaveText(translate(locale, "jobs.cleanHistory"));
       await page.locator("#job-search").fill("使用者");
       await page.locator("#state-filter").selectOption("DRAFT");
       await chooseLanguage(page, "en");

@@ -15,14 +15,14 @@
 
 **stoker は Rust で作られた、軽量でリソース使用量の少ないタスクスケジューリング CLI です。** serial mode と scheduled mode の 2 つの運用モードを提供します。
 
-serial mode は、**長時間にわたって実行する、GPU、CPU、メモリを大量に使う** Job を 1 件ずつ実行する用途に向いています。
+serial mode は、**長時間実行し、GPU、CPU、メモリを大量に使う** Job を 1 件ずつ処理する用途に向いています。
 
-scheduled mode は、**定期的に実行する**軽量な複数 step の task や、依存関係のある task に向いており、1 つの Flow で複数 task を実行できます。
+scheduled mode は、**定期実行する**軽量な複数 step の task や依存関係のある task に向いており、1 つの Flow で複数の task を実行できます。
 
 Job の状態と log はローカルに保存されるため、外部データベースは必要ありません。
 
 <p align="center">
-  <img src="assets/ui-demo-v2.png" alt="Stoker Web UI 展示">
+  <img src="assets/ui-demo-v2.png" alt="Stoker Web UI のデモ">
 </p>
 
 ## インストール

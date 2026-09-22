@@ -398,7 +398,7 @@ These operations are still available:
 - Queries
 - `run`
 - `cancel`
-- `log`
+- `logs`
 - `export`
 - `snapshot`
 

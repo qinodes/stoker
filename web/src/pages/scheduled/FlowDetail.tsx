@@ -116,9 +116,149 @@ export function schedulePayload(value: ScheduleInput, timezones: string[]): { ok
     : { ok: false, reason: "local-time" };
 }
 
+type CalendarDate = { year: number; month: number; day: number };
+type CalendarMonth = Omit<CalendarDate, "day">;
+
+function validCalendarDate(year: number, month: number, day: number): boolean {
+  if (year < 1000 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function toIsoDate({ year, month, day }: CalendarDate): string {
+  return `${String(year).padStart(4, "0")}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function parseScheduleDate(value: string, locale: string): string | null {
+  const normalized = value.trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(normalized);
+  if (iso) {
+    const [, year, month, day] = iso.map(Number);
+    return validCalendarDate(year, month, day) ? normalized : null;
+  }
+  const localized = locale === "en" ? /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/ : /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/;
+  const match = localized.exec(normalized);
+  if (!match) return null;
+  const parts = match.slice(1).map(Number);
+  const [year, month, day] = locale === "en" ? [parts[2], parts[0], parts[1]] : parts;
+  return validCalendarDate(year, month, day) ? toIsoDate({ year, month: month - 1, day }) : null;
+}
+
+function formatScheduleDate(value: string, locale: string): string {
+  const iso = parseScheduleDate(value, "en") || parseScheduleDate(value, "zh-TW");
+  if (!iso) return value;
+  const [, year, month, day] = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso) || [];
+  return locale === "en" ? `${month}/${day}/${year}` : `${year}/${month}/${day}`;
+}
+
+function calendarMonth(value?: string): CalendarMonth {
+  const match = value && /^(\d{4})-(\d{2})-\d{2}$/.exec(value);
+  if (match) return { year: Number(match[1]), month: Number(match[2]) - 1 };
+  const now = new Date();
+  return { year: now.getFullYear(), month: now.getMonth() };
+}
+
+function todayIso(): string {
+  const now = new Date();
+  return toIsoDate({ year: now.getFullYear(), month: now.getMonth(), day: now.getDate() });
+}
+
+function shiftCalendarMonth(value: CalendarMonth, amount: number): CalendarMonth {
+  const date = new Date(Date.UTC(value.year, value.month + amount, 1));
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() };
+}
+
+function calendarDays(value: CalendarMonth): Array<{ iso: string; day: number; outside: boolean }> {
+  const first = new Date(Date.UTC(value.year, value.month, 1));
+  const firstWeekday = first.getUTCDay();
+  const daysInMonth = new Date(Date.UTC(value.year, value.month + 1, 0)).getUTCDate();
+  const count = Math.ceil((firstWeekday + daysInMonth) / 7) * 7;
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(Date.UTC(value.year, value.month, index - firstWeekday + 1));
+    return { iso: toIsoDate({ year: date.getUTCFullYear(), month: date.getUTCMonth(), day: date.getUTCDate() }), day: date.getUTCDate(), outside: date.getUTCMonth() !== value.month };
+  });
+}
+
+function calendarLocale(locale: string): string {
+  return locale === "en" ? "en-US" : locale === "ja" ? "ja-JP" : "zh-TW";
+}
+
+function formatCalendarDate(value: string, locale: string, options: Intl.DateTimeFormatOptions): string {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Intl.DateTimeFormat(calendarLocale(locale), { ...options, timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function LocalizedDateInput({ id, value, required, onChange }: { id: string; value: string; required?: boolean; onChange: (value: string) => void }) {
+  const { locale, t } = useI18n();
+  const pickerId = `${id}-picker`;
+  const placeholder = t("scheduled.flow.dateFormat");
+  const label = t("scheduled.flow.chooseDate");
+  const formattedValue = value ? formatScheduleDate(value, locale) : "";
+  const [draft, setDraft] = useState(formattedValue);
+  const [open, setOpen] = useState(false);
+  const [viewMonth, setViewMonth] = useState<CalendarMonth>(() => calendarMonth(value));
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const today = todayIso();
+  const days = calendarDays(viewMonth);
+  const weekdays = Array.from({ length: 7 }, (_, index) => formatCalendarDate(`2026-09-${String(20 + index).padStart(2, "0")}`, locale, { weekday: "short" }));
+
+  useEffect(() => setDraft(formattedValue), [formattedValue]);
+  useEffect(() => {
+    if (!open) return;
+    const dismissOutside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !pickerRef.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  const commitDraft = (next: string) => {
+    const parsed = parseScheduleDate(next, locale);
+    if (!next.trim()) {
+      setDraft("");
+      onChange("");
+      return;
+    }
+    if (!parsed) {
+      setDraft(formattedValue);
+      return;
+    }
+    setDraft(formatScheduleDate(parsed, locale));
+    setViewMonth(calendarMonth(parsed));
+    onChange(parsed);
+  };
+  const openPicker = () => {
+    const parsed = parseScheduleDate(draft, locale) || value;
+    setViewMonth(calendarMonth(parsed));
+    setOpen(true);
+  };
+  const chooseDate = (next: string) => {
+    setDraft(formatScheduleDate(next, locale));
+    setViewMonth(calendarMonth(next));
+    onChange(next);
+    setOpen(false);
+  };
+  return <div className="localized-date-input" ref={pickerRef}>
+    <div className="schedule-date-control"><input id={id} className="text-input" type="text" lang={locale} inputMode="numeric" autoComplete="off" aria-label={label} title={label} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? pickerId : undefined} placeholder={placeholder} required={required} value={draft} aria-invalid={draft.trim() && !parseScheduleDate(draft, locale) ? true : undefined} onClick={openPicker} onChange={(event) => { const next = event.target.value; setDraft(next); const parsed = parseScheduleDate(next, locale); if (!next.trim()) onChange(""); else if (parsed) onChange(parsed); }} onBlur={() => commitDraft(draft)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === "ArrowDown" || event.key === " ") { event.preventDefault(); openPicker(); } }} /><button className="schedule-date-trigger" type="button" lang={locale} aria-label={label} title={label} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? pickerId : undefined} onClick={openPicker}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" focusable="false"><rect x="4" y="5.5" width="16" height="14" rx="2" /><path d="M8 3.5v4M16 3.5v4M4 9.5h16" /></svg></button></div>
+    {open && <div className="schedule-date-picker" id={pickerId} role="dialog" aria-label={label}>
+      <div className="schedule-date-picker-header"><strong>{formatCalendarDate(`${viewMonth.year}-${String(viewMonth.month + 1).padStart(2, "0")}-01`, locale, { year: "numeric", month: "long" })}</strong><div className="schedule-date-picker-nav"><button className="schedule-date-nav-button" type="button" aria-label={t("scheduled.flow.previousMonth")} title={t("scheduled.flow.previousMonth")} onClick={() => setViewMonth(shiftCalendarMonth(viewMonth, -1))}>‹</button><button className="schedule-date-nav-button" type="button" aria-label={t("scheduled.flow.nextMonth")} title={t("scheduled.flow.nextMonth")} onClick={() => setViewMonth(shiftCalendarMonth(viewMonth, 1))}>›</button></div></div>
+      <div className="schedule-date-weekdays" aria-hidden="true">{weekdays.map((weekday, index) => <span className="schedule-date-weekday" key={`${weekday}-${index}`}>{weekday}</span>)}</div>
+      <div className="schedule-date-grid">{days.map((day) => <button className={`schedule-date-day${day.outside ? " outside-month" : ""}${day.iso === value ? " selected" : ""}${day.iso === today ? " today" : ""}`} type="button" data-date={day.iso} aria-label={formatCalendarDate(day.iso, locale, { year: "numeric", month: "long", day: "numeric" })} aria-pressed={day.iso === value} onClick={() => chooseDate(day.iso)} key={day.iso}>{day.day}</button>)}</div>
+      <div className="schedule-date-picker-footer"><button className="button small secondary" type="button" onClick={() => chooseDate("")}>{t("scheduled.flow.clearDate")}</button><button className="button small secondary" type="button" onClick={() => chooseDate(today)}>{t("scheduled.flow.today")}</button></div>
+    </div>}
+  </div>;
+}
+
 export function ScheduleInputs({ value, timezones, defaultTimezone, onChange, idPrefix = "schedule" }: { value: ScheduleInput; timezones: string[]; defaultTimezone: string; onChange: (value: ScheduleInput) => void; idPrefix?: string }) {
   const { t } = useI18n();
   const timezoneField = (timezone: string, update: (timezone: string) => void) => <label className="schedule-field schedule-timezone-field"><span>{t("scheduled.flow.timezone")}</span><TimezonePicker id={`${idPrefix}-timezone`} suggestionsId={`${idPrefix}-timezone-suggestions`} value={timezone} timezones={timezones} placeholder={t("config.timezonePlaceholder")} required onChange={update} /></label>;
   const timeField = (time: string, update: (time: string) => void) => <label className="schedule-field schedule-time-field"><span>{t("scheduled.flow.time")}</span><TimePicker id={`${idPrefix}-time`} value={time} hourLabel={t("scheduled.flow.hour")} minuteLabel={t("scheduled.flow.minute")} required onChange={update} /></label>;
-  return <div className="schedule-inputs"><label className="schedule-field schedule-kind-field"><span>{t("scheduled.flow.scheduleType")}</span><select className="select-input" value={value.kind} onChange={(event) => onChange(event.target.value === "daily" ? { kind: "daily", time: "00:00", timezone: defaultTimezone } : event.target.value === "periodic" ? { kind: "periodic", every: "1h", first_at: null } : { kind: "once", date: "", time: "", timezone: defaultTimezone })}><option value="once">{t("scheduled.flow.once")}</option><option value="daily">{t("scheduled.flow.daily")}</option><option value="periodic">{t("scheduled.flow.periodic")}</option></select></label>{value.kind === "once" ? <><label className="schedule-field"><span>{t("scheduled.flow.date")}</span><input className="text-input" type="date" required value={value.date} onChange={(event) => onChange({ ...value, date: event.target.value })} /></label>{timeField(value.time, (time) => onChange({ ...value, time }))}{timezoneField(value.timezone, (timezone) => onChange({ ...value, timezone }))}</> : value.kind === "daily" ? <>{timeField(value.time, (time) => onChange({ ...value, time }))}{timezoneField(value.timezone, (timezone) => onChange({ ...value, timezone }))}</> : <label className="schedule-field"><span>{t("scheduled.flow.interval")}</span><input className="text-input" required value={value.every} onChange={(event) => onChange({ ...value, every: event.target.value })} /></label>}</div>;
+  return <div className="schedule-inputs"><label className="schedule-field schedule-kind-field"><span>{t("scheduled.flow.scheduleType")}</span><select className="select-input" value={value.kind} onChange={(event) => onChange(event.target.value === "daily" ? { kind: "daily", time: "00:00", timezone: defaultTimezone } : event.target.value === "periodic" ? { kind: "periodic", every: "1h", first_at: null } : { kind: "once", date: "", time: "", timezone: defaultTimezone })}><option value="once">{t("scheduled.flow.once")}</option><option value="daily">{t("scheduled.flow.daily")}</option><option value="periodic">{t("scheduled.flow.periodic")}</option></select></label>{value.kind === "once" ? <><label className="schedule-field"><span>{t("scheduled.flow.date")}</span><LocalizedDateInput id={`${idPrefix}-date`} value={value.date} required onChange={(date) => onChange({ ...value, date })} /></label>{timeField(value.time, (time) => onChange({ ...value, time }))}{timezoneField(value.timezone, (timezone) => onChange({ ...value, timezone }))}</> : value.kind === "daily" ? <>{timeField(value.time, (time) => onChange({ ...value, time }))}{timezoneField(value.timezone, (timezone) => onChange({ ...value, timezone }))}</> : <label className="schedule-field"><span>{t("scheduled.flow.interval")}</span><input className="text-input" required value={value.every} onChange={(event) => onChange({ ...value, every: event.target.value })} /></label>}</div>;
 }

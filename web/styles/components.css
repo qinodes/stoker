@@ -117,6 +117,7 @@
 .source-file-name { color: var(--text-subtle); font-size: 11px; font-weight: 500; }
 
 .flow-detail, .scheduled-job-detail { margin-top: 18px; overflow: hidden; }
+.flow-detail:has(.schedule-date-picker) { overflow: visible; }
 .scheduled-run-detail { margin-top: 18px; overflow: hidden; }
 .recovery-banner { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 16px 20px; border-color: rgba(251, 136, 126, .34); background: rgba(251, 136, 126, .07); }
 .recovery-banner strong { color: var(--red); font-size: 12px; }
@@ -142,6 +143,27 @@
 .time-picker { display: grid; grid-template-columns: minmax(64px, 1fr) auto minmax(64px, 1fr); align-items: center; gap: 6px; }
 .time-picker .select-input { width: 100%; min-width: 0; padding-right: 7px; padding-left: 9px; font-variant-numeric: tabular-nums; }
 .time-picker-separator { color: var(--text-muted); font-size: 16px; font-weight: 750; }
+.localized-date-input { position: relative; min-width: 0; }
+.schedule-date-control { position: relative; }
+.schedule-date-control .text-input { width: 100%; padding-right: 40px; }
+.schedule-date-control .text-input[aria-invalid="true"] { border-color: var(--red); }
+.schedule-date-trigger { position: absolute; top: 50%; right: 8px; display: grid; width: 27px; height: 27px; padding: 0; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; transform: translateY(-50%); }
+.schedule-date-trigger svg { width: 16px; height: 16px; }
+.schedule-date-trigger:hover, .schedule-date-trigger:focus-visible { outline: none; background: var(--surface-hover); color: var(--cyan); }
+.schedule-date-picker { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 20; display: grid; width: min(278px, calc(100vw - 34px)); gap: 10px; padding: 13px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-raised); box-shadow: 0 18px 44px rgba(0, 0, 0, .42); color: var(--text); }
+.schedule-date-picker-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.schedule-date-picker-header strong { color: var(--text); font-size: 12px; font-weight: 800; }
+.schedule-date-picker-nav { display: flex; gap: 4px; }
+.schedule-date-nav-button { display: grid; width: 27px; height: 27px; padding: 0; place-items: center; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text-muted); cursor: pointer; font-size: 20px; line-height: 1; }
+.schedule-date-nav-button:hover, .schedule-date-nav-button:focus-visible { outline: none; border-color: var(--cyan); background: var(--surface-hover); color: var(--cyan); }
+.schedule-date-weekdays, .schedule-date-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.schedule-date-weekday { padding: 2px 0; color: var(--text-subtle); font-size: 9px; font-weight: 750; text-align: center; }
+.schedule-date-day { min-height: 29px; padding: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 11px; font-variant-numeric: tabular-nums; }
+.schedule-date-day:hover, .schedule-date-day:focus-visible { outline: none; border-color: rgba(120, 216, 220, .58); background: rgba(120, 216, 220, .12); color: var(--text); }
+.schedule-date-day.outside-month { color: var(--text-subtle); opacity: .5; }
+.schedule-date-day.today { border-color: rgba(120, 216, 220, .55); color: var(--cyan); }
+.schedule-date-day.selected { border-color: var(--cyan); background: var(--cyan); color: #0b1821; font-weight: 800; }
+.schedule-date-picker-footer { display: flex; justify-content: space-between; gap: 8px; padding-top: 9px; border-top: 1px solid rgba(52, 75, 103, .55); }
 .flow-section { padding: 0 22px 22px; }
 .flow-detail-close { display: flex; justify-content: flex-end; padding: 0 22px 22px; }
 .flow-section h3 { margin: 6px 0 14px; color: var(--text); font-size: 15px; }

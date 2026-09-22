@@ -1,6 +1,6 @@
 # Serial mode 詳細操作指南
 
-本指南說明 `serial` mode：每個 Job 只執行一次，並依 queue 順序一次執行一個。從 [README.zh-TW](../README.zh-TW.md) 開始；需要排程或多 task 相依時，請改看 [scheduled 詳細操作指南](scheduled.zh-TW.md)。
+本指南說明 `serial` mode：每個 Job 只執行一次，並依 queue 順序一次執行一個。請從 [README.zh-TW](../README.zh-TW.md) 開始；需要排程或多 task 相依時，請改看 [scheduled 詳細操作指南](scheduled.zh-TW.md)。
 
 
 ## Job 的建立與提交

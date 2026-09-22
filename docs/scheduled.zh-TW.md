@@ -49,7 +49,7 @@ stoker queue unlock
 
 ### 2.1 建立 Flow
 
-`<FLOW_ID>` 是 Flow 的識別名稱。`--name` 是給人看的顯示名稱，兩者可以不同。
+`<FLOW_ID>` 是 Flow 的識別碼。`--name` 是給人看的顯示名稱，兩者可以不同。
 
 建立 Flow 時，請從以下三種 schedule 中選一種：
 
@@ -70,7 +70,7 @@ stoker flow create <FLOW_ID> --user <USER> --name <FLOW_NAME> --every <Nm|Nh> --
 
 請先切換到 task 要執行的資料夾，再執行 `flow task add`。目前資料夾會成為 task 的工作目錄。
 
-`<TASK_ID>` 是 task 的識別名稱。`--name` 是給人看的顯示名稱，兩者可以不同。
+`<TASK_ID>` 是 task 的識別碼。`--name` 是給人看的顯示名稱，兩者可以不同。
 
 ```bash
 # 不指定相依 task
@@ -399,7 +399,7 @@ stoker queue unlock
 - 查詢
 - `run`
 - `cancel`
-- `log`
+- `logs`
 - `export`
 - `snapshot`
 

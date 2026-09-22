@@ -44,7 +44,7 @@ export function translateMessage(locale: Locale, message: UiMessage): string {
 
 const stateKeys: Record<string, StaticKey> = {
   DRAFT: "state.DRAFT", QUEUED: "state.QUEUED", STARTING: "state.STARTING", RUNNING: "state.RUNNING",
-  CANCELLING: "state.CANCELLING", RECOVERING: "state.RECOVERING", SUCCEEDED: "state.SUCCEEDED", FAILED: "state.FAILED", CANCELLED: "state.CANCELLED", LOST: "state.LOST", UNKNOWN: "state.UNKNOWN",
+  CANCELLING: "state.CANCELLING", RECOVERING: "state.RECOVERING", SUCCEEDED: "state.SUCCEEDED", FAILED: "state.FAILED", CANCELLED: "state.CANCELLED", FROZEN: "state.FROZEN", LOST: "state.LOST", UNKNOWN: "state.UNKNOWN",
 };
 
 export function translateState(locale: Locale, value?: string | null): string {

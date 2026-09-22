@@ -129,6 +129,20 @@ test("scheduled Flows show five rows per page without desktop outer scrolling", 
   await expect(page.getByText("flow-6", { exact: true })).toBeVisible();
 });
 
+test("scheduled Flow lists show frozen status alongside the primary status", async ({ page }) => {
+  await mockBackend(page, {
+    workspaceMode: "scheduled",
+    flow: { committed: true, enabled: true, frozen: true },
+  });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+
+  const row = page.locator(".workloads-table tbody tr").first();
+  await expect(row.locator(".state-badge")).toHaveCount(2);
+  await expect(row.locator(".state-badge").nth(0)).toHaveText("RUNNING");
+  await expect(row.locator(".state-badge").nth(1)).toHaveText("FROZEN");
+});
+
 test("Flow editing moves between clean, dirty, discarded, and applied states", async ({ page }) => {
   await mockBackend(page, {
     workspaceMode: "scheduled",
@@ -151,10 +165,10 @@ test("Flow editing moves between clean, dirty, discarded, and applied states", a
   await expect(page.getByRole("button", { name: "Discard draft" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Edit schedule" }).click();
-  const scheduleDate = page.locator('.flow-schedule-editor input[type="date"]');
+  const scheduleDate = page.locator("#schedule-date");
   const scheduleHour = page.getByRole("combobox", { name: "Hour" });
   const scheduleMinute = page.getByRole("combobox", { name: "Minute" });
-  await expect(scheduleDate).toHaveValue("2026-09-22");
+  await expect(scheduleDate).toHaveValue("09/22/2026");
   await expect(scheduleHour).toHaveValue("00");
   await expect(scheduleMinute).toHaveValue("00");
   await scheduleDate.fill("2026-09-23");
@@ -169,7 +183,7 @@ test("Flow editing moves between clean, dirty, discarded, and applied states", a
   await page.getByRole("button", { name: "Discard draft" }).click();
   await expect(page.getByRole("button", { name: "Exit edit mode" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Apply changes" })).toHaveCount(0);
-  await expect(scheduleDate).toHaveValue("2026-09-22");
+  await expect(scheduleDate).toHaveValue("09/22/2026");
   await expect(scheduleHour).toHaveValue("00");
   await expect(scheduleMinute).toHaveValue("00");
 
@@ -312,10 +326,71 @@ test("scheduled workloads create a Flow, add a task, commit, run, and open its a
   await page.getByText("release-flow", { exact: true }).click();
   await expect(page.getByRole("heading", { name: "Run detail" })).toBeVisible();
   await page.locator('[data-route="logs"]').click();
+  await page.locator(".language-picker").click();
+  await page.locator('[data-locale="zh-TW"]').click();
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-TW");
   await page.locator("#scheduled-log-run").selectOption("50000000-0000-4000-8000-000000000005");
   await page.locator("#scheduled-log-task").selectOption("build");
   await page.locator("#scheduled-log-attempt").selectOption("1");
+  await expect(page.locator('#scheduled-log-task option[value="build"]')).toHaveText("build · 成功");
   await expect(page.locator(".log-output")).toContainText("attempt output");
+});
+
+test("localized schedule controls keep date labels in the active language", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.locator('[data-action="new-flow"]').click();
+  const date = page.locator("#new-flow-schedule-date");
+  const expected = { en: "Choose date", "zh-TW": "選擇日期", ja: "日付を選択" } as const;
+  const expectedFormat = { en: "MM/DD/YYYY", "zh-TW": "YYYY/MM/DD", ja: "YYYY/MM/DD" } as const;
+  const expectedValue = { en: "09/23/2026", "zh-TW": "2026/09/23", ja: "2026/09/23" } as const;
+  for (const locale of ["en", "zh-TW", "ja"] as const) {
+    await page.locator(".language-picker").click();
+    await page.locator(`[data-locale="${locale}"]`).click();
+    await expect(page.locator("html")).toHaveAttribute("lang", locale);
+    await expect(date).toHaveAttribute("lang", locale);
+    await expect(date).toHaveAttribute("title", expected[locale]);
+    await expect(date).toHaveAttribute("aria-label", expected[locale]);
+    await expect(date).toHaveAttribute("placeholder", expectedFormat[locale]);
+    await expect(date).toHaveValue("");
+    await date.fill("2026-09-23");
+    await date.blur();
+    await expect(date).toHaveValue(expectedValue[locale]);
+    await date.fill("");
+    await date.blur();
+  }
+});
+
+test("schedule date picker uses the active language instead of the browser locale", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.locator('[data-action="new-flow"]').click();
+  const date = page.locator("#new-flow-schedule-date");
+  const expected = {
+    en: { clear: "Clear", today: "Today", previous: "Previous month", next: "Next month", weekday: "Sun" },
+    "zh-TW": { clear: "清除", today: "今天", previous: "上個月", next: "下個月", weekday: "週日" },
+    ja: { clear: "クリア", today: "今日", previous: "前月", next: "次月", weekday: "日" },
+  } as const;
+  for (const locale of ["en", "zh-TW", "ja"] as const) {
+    await page.locator(".language-picker").click();
+    await page.locator(`[data-locale="${locale}"]`).click();
+    await date.click();
+    const picker = page.locator(".schedule-date-picker");
+    await expect(picker).toBeVisible();
+    await expect(picker.getByRole("button", { name: expected[locale].clear, exact: true })).toBeVisible();
+    await expect(picker.getByRole("button", { name: expected[locale].today, exact: true })).toBeVisible();
+    await expect(picker.getByRole("button", { name: expected[locale].previous, exact: true })).toBeVisible();
+    await expect(picker.getByRole("button", { name: expected[locale].next, exact: true })).toBeVisible();
+    await expect(picker.locator(".schedule-date-weekday").first()).toHaveText(expected[locale].weekday);
+    await picker.locator(".schedule-date-day:not(.outside-month)").first().click();
+    await expect(date).not.toHaveValue("");
+    await expect(picker).toHaveCount(0);
+    await date.click();
+    await expect(page.locator(".schedule-date-picker")).toBeVisible();
+    await picker.getByRole("button", { name: expected[locale].clear, exact: true }).click();
+  }
 });
 
 test("a frozen Flow keeps its typed schedule after a revision conflict", async ({ page }) => {
@@ -331,12 +406,12 @@ test("a frozen Flow keeps its typed schedule after a revision conflict", async (
   await page.getByRole("button", { name: "Commit", exact: true }).click();
   await page.getByRole("button", { name: "Freeze for edits" }).click();
   await page.getByRole("button", { name: "Edit schedule" }).click();
-  const schedule = page.locator('.schedule-inputs input[type="date"]');
+  const schedule = page.locator("#schedule-date");
   await schedule.fill("2031-01-01");
   backend.revisionConflict = true;
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("This Flow changed on the server. Reload it before applying your draft.")).toBeVisible();
-  await expect(schedule).toHaveValue("2031-01-01");
+  await expect(schedule).toHaveValue("01/01/2031");
   backend.revisionConflict = false;
   await page.getByRole("button", { name: "Reload Flow" }).click();
   await expect(page.getByText("This Flow changed on the server. Reload it before applying your draft.")).toHaveCount(0);
@@ -405,6 +480,16 @@ test("scheduled-to-serial transition clears scheduled data and holds after defer
   await expect(page.locator('[data-route="workloads"]')).toHaveCount(0);
   await page.getByRole("button", { name: "Later" }).click();
   await expect(page.getByRole("heading", { name: /server mode changed to serial/i })).toBeVisible();
+});
+
+test("mode transition breadcrumb follows the selected language", async ({ page }) => {
+  const backend = await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.goto("/");
+  await page.locator(".language-picker").click();
+  await page.locator('[data-locale="zh-TW"]').click();
+  backend.workspaceMode = "serial";
+  await expect(page.getByRole("heading", { name: /伺服器模式已變更為 serial/ })).toBeVisible();
+  await expect(page.locator("#breadcrumb-current")).toHaveText("模式變更");
 });
 
 test("scheduled locales fit a 320px viewport without horizontal document overflow", async ({ page }) => {

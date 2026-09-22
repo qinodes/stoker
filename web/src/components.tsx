@@ -50,10 +50,11 @@ const HOURS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2,
 const MINUTES = Array.from({ length: 60 }, (_, index) => String(index).padStart(2, "0"));
 
 export function TimePicker({ id, value, hourLabel, minuteLabel, required = false, onChange }: { id: string; value: string; hourLabel: string; minuteLabel: string; required?: boolean; onChange: (value: string) => void }) {
+  const { locale } = useI18n();
   const match = /^(\d{2}):(\d{2})$/.exec(value);
   const hour = match?.[1] || "";
   const minute = match?.[2] || "";
-  return <div className="time-picker" id={id}><select className="select-input" aria-label={hourLabel} required={required} value={hour} onChange={(event) => onChange(`${event.target.value}:${minute || "00"}`)}><option value="" disabled>HH</option>{HOURS.map((item) => <option value={item} key={item}>{item}</option>)}</select><span className="time-picker-separator" aria-hidden="true">:</span><select className="select-input" aria-label={minuteLabel} required={required} value={minute} onChange={(event) => onChange(`${hour || "00"}:${event.target.value}`)}><option value="" disabled>MM</option>{MINUTES.map((item) => <option value={item} key={item}>{item}</option>)}</select></div>;
+  return <div className="time-picker" id={id}><select className="select-input" lang={locale} aria-label={hourLabel} required={required} value={hour} onChange={(event) => onChange(`${event.target.value}:${minute || "00"}`)}><option value="" disabled>HH</option>{HOURS.map((item) => <option value={item} key={item}>{item}</option>)}</select><span className="time-picker-separator" aria-hidden="true">:</span><select className="select-input" lang={locale} aria-label={minuteLabel} required={required} value={minute} onChange={(event) => onChange(`${hour || "00"}:${event.target.value}`)}><option value="" disabled>MM</option>{MINUTES.map((item) => <option value={item} key={item}>{item}</option>)}</select></div>;
 }
 
 export function Metric({ label, value, note, accent = "" }: { label: string; value: string | number; note: string; accent?: string }) {

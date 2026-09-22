@@ -1,6 +1,6 @@
 # 共用設定與維護指南
 
-本指南適用於 `serial` mode 與 `scheduled` mode。內容包含時區、設定 snapshot、Log、執行 policy、Web UI、資料庫、更新與解除安裝；Job 或 Flow 的執行方式請分別參考 [serial 詳細操作指南](serial.zh-TW.md) 與 [scheduled 詳細操作指南](scheduled.zh-TW.md)。
+本指南適用於 `serial` mode 與 `scheduled` mode。內容包含時區、設定 snapshot、Log、執行 policy、Web UI、資料庫、更新與解除安裝。Job 或 Flow 的執行方式，請分別參考 [serial 詳細操作指南](serial.zh-TW.md) 與 [scheduled 詳細操作指南](scheduled.zh-TW.md)。
 
 
 ## Web UI
@@ -11,7 +11,7 @@ stoker ui status
 stoker ui stop
 ```
 
-預設只監聽 `127.0.0.1:8765`。若要讓區域網路存取，明確設定非 loopback 位址，且只用於信任的網路：
+Web UI 預設只監聽 `127.0.0.1:8765`。若要讓區域網路上的裝置存取，請明確設定非 loopback 位址，且只用於信任的網路：
 
 ```bash
 stoker ui start --host 0.0.0.0 --port 8765
@@ -42,7 +42,7 @@ stoker show <JOB_ID> --timezone UTC
 
 ## Log 與執行 policy
 
-預設會限制單一 Job log 至 64 MB、已結束 Job 的總 log 至 1024 MB，並保留最新 100 個 terminal Job 的 log。低於 512 MB 可用磁碟空間時，scheduler 不會啟動下一個 Job。
+預設會限制單一 Job log 至 64 MB、已結束 Job 的總 log 至 1024 MB，並保留最新 100 個 terminal Job 的 log。當可用磁碟空間低於 512 MB 時，scheduler 不會啟動下一個 Job。
 
 修改 policy 前，先鎖定 queue，且不能有 `STARTING`、`RUNNING` 或 `CANCELLING` Job：
 
@@ -57,7 +57,7 @@ stoker policy show
 stoker queue unlock
 ```
 
-log 容量以不帶單位的整數 MB 輸入，例如 `256`。可用 `stoker policy get <KEY>` 查看單一有效值；log 受限或寫入失敗時，Stoker 仍會讀取子程序輸出，但較舊的分段可能被捨棄。
+log 容量以不帶單位的整數 MB 輸入，例如 `256`。可用 `stoker policy get <KEY>` 查看單一有效值；log 達到上限或寫入失敗時，Stoker 仍會讀取子程序輸出，但較舊的分段可能被捨棄。
 
 
 ## 資料庫、更新與解除安裝

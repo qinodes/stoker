@@ -399,7 +399,7 @@ source mode の切り替えと正式な sync には、queue が locked である
 - query
 - `run`
 - `cancel`
-- `log`
+- `logs`
 - `export`
 - `snapshot`
 

@@ -68,6 +68,7 @@
 .state-starting, .state-recovering { background: rgba(244, 198, 107, .12); color: var(--yellow); }
 .state-running { background: rgba(117, 214, 163, .11); color: var(--green); }
 .state-cancelling, .state-cancelled { background: rgba(184, 161, 255, .12); color: var(--purple); }
+.state-frozen { background: rgba(244, 198, 107, .12); color: var(--yellow); }
 .state-succeeded { background: rgba(117, 214, 163, .11); color: var(--green); }
 .state-failed, .state-lost { background: rgba(251, 136, 126, .11); color: var(--red); }
 

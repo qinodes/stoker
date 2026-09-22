@@ -13,16 +13,16 @@
 
 [English](README.md) | 繁體中文 | [日本語](README.ja.md)
 
-**stoker 是一個以 Rust 撰寫、低資源占用的輕量任務排程 CLI。** 提供兩種運作模式:serial 模式及scheduled 模式。
+**stoker 是一個以 Rust 撰寫、低資源占用的輕量任務排程 CLI。** 提供兩種運作模式：serial mode 與 scheduled mode。
 
-serial 模式適合不間斷地執行**需要大量 GPU、CPU 或記憶體**任務。設計成一次只執行一個任務。
+serial mode 適合執行**長時間運作、需要大量 GPU、CPU 或記憶體**的 Job，並且一次只執行一個。
 
-scheduled 模式適合**定期**觸發具相依性、較**輕量**的多步驟任務(flow)，設計成可以一次執行多個任務。
+scheduled mode 適合**定期執行**、具相依關係的**輕量**多步驟 task，可在一個 Flow 中執行多個 task。
 
 Job 狀態與 log 都保存在本機，不需要架設外部資料庫。
 
 <p align="center">
-  <img src="assets/ui-demo-v2.png" alt="Stoker Web UI 展示">
+  <img src="assets/ui-demo-v2.png" alt="Stoker Web UI 示意圖">
 </p>
 
 ## 安裝
