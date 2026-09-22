@@ -333,7 +333,9 @@ test("a frozen Flow keeps its typed schedule after a revision conflict", async (
   backend.revisionConflict = false;
   await page.getByRole("button", { name: "Reload Flow" }).click();
   await expect(page.getByText("This Flow changed on the server. Reload it before applying your draft.")).toHaveCount(0);
-  await page.getByRole("button", { name: "Close Flow detail" }).click();
+  const close = page.getByRole("button", { name: "Close", exact: true });
+  await expect(close.locator("..")).toHaveClass("flow-detail-close");
+  await close.click();
   await expect(page.getByRole("heading", { name: "Nightly Flow" })).toHaveCount(0);
 });
 

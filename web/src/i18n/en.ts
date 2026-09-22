@@ -318,7 +318,7 @@ export const en = {
   "scheduled.directory": "Working directory",
   "scheduled.created": "Created",
   "scheduled.flow.detail": "Flow detail",
-  "scheduled.flow.closeDetail": "Close Flow detail",
+  "scheduled.flow.closeDetail": "Close",
   "scheduled.flow.new": "New Flow",
   "scheduled.flow.create": "Create Flow",
   "scheduled.flow.commit": "Commit",
