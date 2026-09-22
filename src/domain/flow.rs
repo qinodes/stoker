@@ -167,6 +167,8 @@ pub struct FlowDefinition {
     pub graph_revision: i64,
     pub schedule_generation: i64,
     pub draft_revision: i64,
+    #[serde(skip)]
+    pub has_draft: bool,
     pub queue_order: Option<i64>,
 }
 
@@ -502,6 +504,7 @@ mod tests {
             graph_revision: 0,
             schedule_generation: 0,
             draft_revision: 0,
+            has_draft: false,
             queue_order: None,
         };
         assert!(validate_definition(&definition).is_ok());

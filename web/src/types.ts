@@ -188,6 +188,7 @@ export interface ScheduledFlow {
   graph_revision: number;
   schedule_generation: number;
   draft_revision: number;
+  has_draft: boolean;
   queue_order?: number | null;
 }
 

@@ -177,6 +177,7 @@ pub(super) fn load_flow(
         let mut draft: FlowDefinition = serde_json::from_str(&json)?;
         draft.frozen = base.frozen;
         draft.draft_revision = base.draft_revision;
+        draft.has_draft = true;
         return Ok(draft);
     }
     Ok(base)
@@ -301,6 +302,7 @@ pub(super) fn load_flow_base(
         graph_revision,
         schedule_generation: generation,
         draft_revision,
+        has_draft: false,
         queue_order,
     })
 }

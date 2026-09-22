@@ -9,6 +9,7 @@ import {
   reduceScheduled,
   withSyncPreview,
 } from "../../src/scheduled/state.ts";
+import { instantToLocalDateTime, localDateTimeToRfc3339 } from "../../src/scheduled/timezone.ts";
 
 test("Flow mutations use the revision returned by the server", () => {
   const state = reduceScheduled(createScheduledState(), {
@@ -43,4 +44,23 @@ test("clearing a confirmed source import removes its document and preview", () =
   const cleared = reduceScheduled(reviewed, { type: "sourceImportCleared" });
   assert.equal(cleared.sourceDocument, null);
   assert.equal(cleared.syncPreview, null);
+});
+
+test("IANA local schedule times round-trip and reject DST gaps", () => {
+  assert.deepEqual(instantToLocalDateTime("2026-10-01T01:30:00Z", "Asia/Taipei"), {
+    date: "2026-10-01",
+    time: "09:30",
+  });
+  assert.deepEqual(localDateTimeToRfc3339("2026-10-01", "09:30", "Asia/Taipei"), {
+    ok: true,
+    value: "2026-10-01T01:30:00Z",
+  });
+  assert.deepEqual(localDateTimeToRfc3339("2026-03-08", "02:30", "America/New_York"), {
+    ok: false,
+    reason: "nonexistent",
+  });
+  assert.deepEqual(localDateTimeToRfc3339("2026-11-01", "01:30", "America/New_York"), {
+    ok: true,
+    value: "2026-11-01T05:30:00Z",
+  });
 });

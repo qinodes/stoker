@@ -325,6 +325,16 @@ impl Store {
         if !current.frozen {
             return Err(StoreError::InvalidData("flow is not frozen".into()));
         }
+        let has_draft: bool = transaction.query_row(
+            "SELECT draft_json IS NOT NULL FROM flow_definitions WHERE flow_id = ?1",
+            [flow_id],
+            |row| row.get(0),
+        )?;
+        if !has_draft {
+            return Err(StoreError::InvalidData(
+                "flow has no draft to discard".into(),
+            ));
+        }
         if current.draft_revision != expected_draft_revision {
             return Err(StoreError::DraftRevisionConflict {
                 expected: expected_draft_revision,
@@ -354,6 +364,10 @@ impl Store {
         expected_draft_revision: i64,
     ) -> Result<FlowDefinition, StoreError> {
         self.unfreeze_flow_inner(flow_id, Some(expected_draft_revision), true)
+    }
+
+    pub fn unfreeze_scheduled_flow(&self, flow_id: &str) -> Result<FlowDefinition, StoreError> {
+        self.unfreeze_flow_inner(flow_id, None, true)
     }
 
     fn unfreeze_flow_inner(

@@ -157,6 +157,62 @@ fn scheduled_workspace_deletes_only_an_uncommitted_draft_flow() {
 }
 
 #[test]
+fn scheduled_flow_edit_state_distinguishes_clean_and_dirty_frozen_edits() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    create_runnable_flow(&store, directory.path(), "empty-edit");
+
+    let clean = store.freeze_scheduled_flow("empty-edit").unwrap();
+    assert!(clean.frozen);
+    assert!(!clean.has_draft);
+    let clean_revision = clean.draft_revision;
+    assert!(matches!(
+        store.apply_scheduled_flow_draft("empty-edit", clean_revision),
+        Err(StoreError::InvalidData(message)) if message.contains("no draft exists")
+    ));
+
+    let edited = store
+        .set_scheduled_flow_schedule_draft("empty-edit", future_once(), clean_revision)
+        .unwrap();
+    assert!(edited.frozen);
+    assert!(edited.has_draft);
+    assert_eq!(edited.draft_revision, clean_revision + 1);
+    assert!(matches!(
+        store.unfreeze_scheduled_flow("empty-edit"),
+        Err(StoreError::InvalidData(message)) if message.contains("draft revision is required")
+    ));
+
+    let discarded = store
+        .discard_scheduled_flow_draft("empty-edit", edited.draft_revision)
+        .unwrap();
+    assert!(discarded.frozen);
+    assert!(!discarded.has_draft);
+    assert_eq!(discarded.draft_revision, edited.draft_revision);
+    assert!(matches!(
+        store.discard_scheduled_flow_draft("empty-edit", discarded.draft_revision),
+        Err(StoreError::InvalidData(message)) if message.contains("no draft to discard")
+    ));
+
+    let unfrozen = store.unfreeze_scheduled_flow("empty-edit").unwrap();
+    assert!(!unfrozen.frozen);
+    assert!(!unfrozen.has_draft);
+    assert_eq!(unfrozen.draft_revision, edited.draft_revision);
+
+    let clean = store.freeze_scheduled_flow("empty-edit").unwrap();
+    let edited = store
+        .set_scheduled_flow_schedule_draft("empty-edit", future_once(), clean.draft_revision)
+        .unwrap();
+    let applied = store
+        .apply_scheduled_flow_draft("empty-edit", edited.draft_revision)
+        .unwrap();
+
+    assert!(!applied.frozen);
+    assert!(!applied.has_draft);
+    assert_eq!(applied.draft_revision, edited.draft_revision);
+    assert_eq!(applied.tasks.len(), 1);
+}
+
+#[test]
 fn manual_run_obeys_queue_lock_and_request_id_is_idempotent_while_active() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path().join("stoker.db")).unwrap();

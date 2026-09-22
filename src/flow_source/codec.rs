@@ -229,6 +229,7 @@ impl FlowSourceFlow {
             graph_revision: 0,
             schedule_generation: 1,
             draft_revision: 0,
+            has_draft: false,
             queue_order: None,
         })
     }
@@ -668,6 +669,7 @@ mod tests {
                 graph_revision: 8,
                 schedule_generation: 9,
                 draft_revision: 4,
+                has_draft: false,
                 queue_order: Some(index as i64),
             })
             .collect::<Vec<_>>();

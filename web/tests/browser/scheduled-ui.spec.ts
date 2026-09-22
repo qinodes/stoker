@@ -91,6 +91,61 @@ test("a scheduled draft Flow can be deleted after confirmation", async ({ page }
   await expect(page.getByText("No Flows are available")).toBeVisible();
 });
 
+test("Flow editing moves between clean, dirty, discarded, and applied states", async ({ page }) => {
+  await mockBackend(page, {
+    workspaceMode: "scheduled",
+    flow: {
+      committed: true,
+      enabled: true,
+      frozen: false,
+      draft_revision: 7,
+      has_draft: false,
+      tasks: [{ task_id: "prepare", name: "Prepare", cwd: "/workspace", command: "echo prepare", retry: 0, dependencies: [], depend_mode: "all", sequence: 0 }],
+    },
+  });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.getByRole("row", { name: /Nightly Flow nightly-flow/ }).click();
+
+  await page.getByRole("button", { name: "Freeze for edits" }).click();
+  await expect(page.getByRole("button", { name: "Exit edit mode" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Apply changes" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Discard draft" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Edit schedule" }).click();
+  const scheduleDate = page.locator('.flow-schedule-editor input[type="date"]');
+  const scheduleTime = page.locator('.flow-schedule-editor input[type="time"]');
+  await expect(scheduleDate).toHaveValue("2026-09-22");
+  await expect(scheduleTime).toHaveValue("00:00");
+  await scheduleDate.fill("2026-09-23");
+  await scheduleTime.fill("01:30");
+  const scheduleRequest = page.waitForRequest((request) => request.method() === "PUT" && new URL(request.url()).pathname.endsWith("/schedule"));
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  expect((await scheduleRequest).postDataJSON().schedule).toEqual({ kind: "once", at: "2026-09-23T01:30:00Z" });
+  await expect(page.getByRole("button", { name: "Apply changes" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Discard draft" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Discard draft" }).click();
+  await expect(page.getByRole("button", { name: "Exit edit mode" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Apply changes" })).toHaveCount(0);
+  await expect(scheduleDate).toHaveValue("2026-09-22");
+  await expect(scheduleTime).toHaveValue("00:00");
+
+  await scheduleDate.fill("2026-09-24");
+  await scheduleTime.fill("02:30");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.getByRole("button", { name: "Apply changes" }).click();
+  await expect(page.getByRole("button", { name: "Freeze for edits" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Freeze for edits" }).click();
+  await page.locator(".schedule-inputs select").selectOption("daily");
+  await page.locator("#schedule-timezone").fill("Tokyo");
+  await page.locator('[data-timezone="Asia/Tokyo"]').click();
+  await expect(page.locator("#schedule-timezone")).toHaveValue("Asia/Tokyo");
+  await page.getByRole("button", { name: "Exit edit mode" }).click();
+  await expect(page.getByRole("button", { name: "Freeze for edits" })).toBeVisible();
+});
+
 test("scheduled saves show feedback and configuration actions retain breathing room", async ({ page }) => {
   await mockBackend(page, { workspaceMode: "scheduled" });
   await page.goto("/");
@@ -187,12 +242,12 @@ test("a frozen Flow keeps its typed schedule after a revision conflict", async (
   await page.getByRole("button", { name: "Commit", exact: true }).click();
   await page.getByRole("button", { name: "Freeze for edits" }).click();
   await page.getByRole("button", { name: "Edit schedule" }).click();
-  const schedule = page.locator(".schedule-inputs input");
-  await schedule.fill("2031-01-01T00:00:00Z");
+  const schedule = page.locator('.schedule-inputs input[type="date"]');
+  await schedule.fill("2031-01-01");
   backend.revisionConflict = true;
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("This Flow changed on the server. Reload it before applying your draft.")).toBeVisible();
-  await expect(schedule).toHaveValue("2031-01-01T00:00:00Z");
+  await expect(schedule).toHaveValue("2031-01-01");
 });
 
 test("scheduled standalone jobs are available only in the Workloads job tab", async ({ page }) => {

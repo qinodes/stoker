@@ -1,5 +1,5 @@
 import { useI18n } from "./i18n/context";
-import type { ReactNode, KeyboardEvent } from "react";
+import { useState, type ReactNode, type KeyboardEvent } from "react";
 import type { UiMessage } from "./i18n/messages.ts";
 import type { Job, PageInfo } from "./types";
 import { classForState, formatDate, shortId } from "./formatters";
@@ -18,6 +18,13 @@ export function StateBadge({ value }: { value?: string | null }) {
 
 export function PageHeading({ eyebrow, title, description, actions }: { eyebrow: string; title: string; description: string; actions?: ReactNode }) {
   return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div><div className="page-actions">{actions}</div></div>;
+}
+
+export function TimezonePicker({ id, suggestionsId, value, timezones, placeholder, required = false, onChange }: { id: string; suggestionsId: string; value: string; timezones: string[]; placeholder: string; required?: boolean; onChange: (value: string) => void }) {
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const query = value.trim().toLowerCase();
+  const suggestions = query ? timezones.filter((zone) => zone.toLowerCase().includes(query)).slice(0, 8) : [];
+  return <div className="timezone-picker"><input className="text-input" id={id} name="timezone" value={value} placeholder={placeholder} required={required} autoComplete="off" role="combobox" aria-autocomplete="list" aria-controls={suggestionsId} aria-expanded={showSuggestions && suggestions.length > 0} onFocus={() => setShowSuggestions(true)} onChange={(event) => { onChange(event.target.value); setShowSuggestions(true); }} /><div className={`timezone-suggestions${showSuggestions && suggestions.length ? " visible" : ""}`} id={suggestionsId} role="listbox">{suggestions.map((zone) => <button className="timezone-option" type="button" role="option" data-timezone={zone} key={zone} onClick={() => { onChange(zone); setShowSuggestions(false); }}>{zone}</button>)}</div></div>;
 }
 
 export function Metric({ label, value, note, accent = "" }: { label: string; value: string | number; note: string; accent?: string }) {

@@ -159,6 +159,19 @@ pub(in crate::ui) async fn apply(
     )
 }
 
+pub(in crate::ui) async fn unfreeze(
+    State(state): State<ApiState>,
+    Path(flow_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    scheduled(&state)?;
+    flow_response(
+        state
+            .store
+            .unfreeze_scheduled_flow(&flow_id)
+            .map_err(store_error)?,
+    )
+}
+
 pub(in crate::ui) async fn discard(
     State(state): State<ApiState>,
     Path(flow_id): Path<String>,

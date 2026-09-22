@@ -118,6 +118,10 @@ pub(super) fn build_router(state: ApiState) -> Router {
             post(scheduled::flows::apply),
         )
         .route(
+            "/scheduled/flows/{flow_id}/unfreeze",
+            post(scheduled::flows::unfreeze),
+        )
+        .route(
             "/scheduled/flows/{flow_id}/discard",
             post(scheduled::flows::discard),
         )
@@ -416,6 +420,97 @@ mod tests {
             json_response(stale).await["details"]["current_draft_revision"],
             0
         );
+    }
+
+    #[tokio::test]
+    async fn scheduled_flow_edit_routes_report_clean_and_dirty_states() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        let router = build_router(state.clone());
+
+        assert_eq!(
+            post_json(
+                router,
+                "/api/v1/scheduled/flows",
+                flow_request("empty-edit")
+            )
+            .await
+            .status(),
+            StatusCode::CREATED
+        );
+        assert_eq!(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/empty-edit/tasks",
+                serde_json::json!({
+                    "task_id": "prepare", "name": "Prepare", "cwd": ".",
+                    "command": "echo prepare", "retry": 0,
+                    "dependencies": [], "depend_mode": "all",
+                    "expected_draft_revision": 0
+                }),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            post_empty(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/empty-edit/commit",
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let frozen = json_response(
+            post_empty(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/empty-edit/freeze",
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(frozen["flow"]["frozen"], true);
+        assert_eq!(frozen["flow"]["has_draft"], false);
+
+        let edited = json_response(
+            put_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/empty-edit/schedule",
+                serde_json::json!({
+                    "schedule": {"kind": "daily", "time": "08:30", "timezone": "Asia/Tokyo"},
+                    "expected_draft_revision": 0
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(edited["flow"]["has_draft"], true);
+        assert_eq!(edited["flow"]["draft_revision"], 1);
+
+        let discarded = json_response(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/empty-edit/discard",
+                serde_json::json!({"expected_draft_revision": 1}),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(discarded["flow"]["frozen"], true);
+        assert_eq!(discarded["flow"]["has_draft"], false);
+        assert_eq!(discarded["flow"]["draft_revision"], 1);
+
+        let unfrozen = post_empty(
+            build_router(state),
+            "/api/v1/scheduled/flows/empty-edit/unfreeze",
+        )
+        .await;
+        assert_eq!(unfrozen.status(), StatusCode::OK);
+        let body = json_response(unfrozen).await;
+        assert_eq!(body["flow"]["frozen"], false);
+        assert_eq!(body["flow"]["has_draft"], false);
+        assert_eq!(body["flow"]["draft_revision"], 1);
     }
 
     #[tokio::test]

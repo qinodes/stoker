@@ -126,6 +126,7 @@ pub(in crate::ui) struct ScheduledFlowDto {
     pub graph_revision: i64,
     pub schedule_generation: i64,
     pub draft_revision: i64,
+    pub has_draft: bool,
     pub queue_order: Option<i64>,
 }
 
@@ -144,6 +145,7 @@ impl From<FlowDefinition> for ScheduledFlowDto {
             graph_revision: flow.graph_revision,
             schedule_generation: flow.schedule_generation,
             draft_revision: flow.draft_revision,
+            has_draft: flow.has_draft,
             queue_order: flow.queue_order,
         }
     }

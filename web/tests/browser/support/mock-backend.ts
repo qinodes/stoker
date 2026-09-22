@@ -6,6 +6,7 @@ export interface MockBackendOptions {
   maxConcurrency?: number;
   activeAttempts?: number;
   recoveryFence?: boolean;
+  flow?: Partial<ScheduledFlow>;
 }
 
 export interface MockBackend {
@@ -33,7 +34,8 @@ export async function mockBackend(page: Page, options: MockBackendOptions): Prom
     activeAttempts: options.activeAttempts ?? 0,
     queueLocked: false,
   };
-  const flows: ScheduledFlow[] = [flow()];
+  const flows: ScheduledFlow[] = [{ ...flow(), ...options.flow }];
+  const appliedSchedules = new Map(flows.map((item) => [item.flow_id, item.schedule]));
   const jobs: ScheduledStandaloneJob[] = [standaloneJob()];
   const runs: ScheduledRun[] = [];
 
@@ -89,7 +91,7 @@ export async function mockBackend(page: Page, options: MockBackendOptions): Prom
     }
 
     const flowMatch = path.match(/^\/api\/v1\/scheduled\/flows\/([^/]+)(.*)$/);
-    if (flowMatch) return flowRoute(route, request, flows, runs, model, decodeURIComponent(flowMatch[1]), flowMatch[2]);
+    if (flowMatch) return flowRoute(route, request, flows, appliedSchedules, runs, model, decodeURIComponent(flowMatch[1]), flowMatch[2]);
     const jobMatch = path.match(/^\/api\/v1\/scheduled\/jobs\/([^/]+)(.*)$/);
     if (jobMatch) return jobRoute(route, jobs, runs, decodeURIComponent(jobMatch[1]), jobMatch[2]);
     const runMatch = path.match(/^\/api\/v1\/scheduled\/runs\/([^/]+)(.*)$/);
@@ -104,7 +106,7 @@ export async function mockBackend(page: Page, options: MockBackendOptions): Prom
   return model;
 }
 
-function flowRoute(route: Route, request: Request, flows: ScheduledFlow[], runs: ScheduledRun[], model: MockBackend, id: string, suffix: string) {
+function flowRoute(route: Route, request: Request, flows: ScheduledFlow[], appliedSchedules: Map<string, ScheduledFlow["schedule"]>, runs: ScheduledRun[], model: MockBackend, id: string, suffix: string) {
   const index = flows.findIndex((entry) => entry.flow_id === id);
   const item = flows[index];
   if (!item) return typedError(route, 404, "not_found", "flow not found");
@@ -124,8 +126,16 @@ function flowRoute(route: Route, request: Request, flows: ScheduledFlow[], runs:
     const body = requestJson<ScheduledFlow["tasks"][number]>(request);
     item.tasks.push({ ...body, sequence: item.tasks.length + 1 });
     item.draft_revision += 1;
+    item.has_draft = true;
     return json(route, { flow: item });
   }
+  if (suffix === "/apply" && request.method() === "POST") { appliedSchedules.set(id, item.schedule); item.frozen = false; item.has_draft = false; return json(route, { flow: item }); }
+  if (suffix === "/unfreeze" && request.method() === "POST") {
+    if (item.has_draft) return typedError(route, 409, "conflict", "a draft revision is required when a draft exists");
+    item.frozen = false;
+    return json(route, { flow: item });
+  }
+  if (suffix === "/discard" && request.method() === "POST") { item.schedule = appliedSchedules.get(id) ?? null; item.has_draft = false; return json(route, { flow: item }); }
   if (suffix === "/commit" && request.method() === "POST") {
     item.committed = true;
     item.enabled = true;
@@ -135,6 +145,11 @@ function flowRoute(route: Route, request: Request, flows: ScheduledFlow[], runs:
   if (suffix === "/freeze" && request.method() === "POST") { item.frozen = true; return json(route, { flow: item }); }
   if (suffix === "/schedule" && request.method() === "PUT") {
     if (model.revisionConflict) return typedError(route, 409, "conflict", "stale draft revision");
+    const body = requestJson<{ schedule?: ScheduledFlow["schedule"] }>(request);
+    if (!body.schedule) return typedError(route, 422, "invalid_json", "missing field `schedule`");
+    item.schedule = body.schedule;
+    item.draft_revision += 1;
+    item.has_draft = true;
     return json(route, { flow: item });
   }
   return json(route, { flow: item });
@@ -167,7 +182,7 @@ function serial(route: Route, path: string, method: string) {
 }
 
 function workspace(model: MockBackend) { return { mode: model.workspaceMode, queue_locked: model.queueLocked, recovery_fence: model.recoveryFence, scheduler: { running: true, pid: 7, active_job: null, queued_jobs: 0 }, timezone: { name: "UTC", source: "config" }, generated_at: now }; }
-function flow(): ScheduledFlow { return { flow_id: flowId, name: "Nightly Flow", owner: "alice", mode: "scheduled", schedule: { kind: "once", at: "2026-09-22T00:00:00Z" }, tasks: [], committed: false, frozen: false, enabled: false, graph_revision: 1, schedule_generation: 0, draft_revision: 0 }; }
+function flow(): ScheduledFlow { return { flow_id: flowId, name: "Nightly Flow", owner: "alice", mode: "scheduled", schedule: { kind: "once", at: "2026-09-22T00:00:00Z" }, tasks: [], committed: false, frozen: false, enabled: false, graph_revision: 1, schedule_generation: 0, draft_revision: 0, has_draft: false }; }
 function standaloneJob(): ScheduledStandaloneJob { return { job: { id: "40000000-0000-4000-8000-000000000004", name: "Standalone scheduled job", user: "alice", cwd: "/workspace", command_line: "echo standalone", state: "DRAFT", created_at: now }, definition: { mode: "scheduled", schedule: null, retry: 0, enabled: false, generation: 0 }, flow_id: "standalone" }; }
 function seededRun(id = flowId): ScheduledRun { return { run_id: runId, flow_id: id, state: "SUCCEEDED", generation: 1, source: "MANUAL", started_at: now, finished_at: now, tasks: [{ task_id: "build", state: "SUCCEEDED", attempt_count: 1, cancel_requested: false, attempts: [{ attempt_id: "60000000-0000-4000-8000-000000000006", number: 1, state: "SUCCEEDED", exit_code: 0, started_at: now, finished_at: now }] }] }; }
 function summary(run: ScheduledRun) { return { run_id: run.run_id, flow_id: run.flow_id, state: run.state, started_at: run.started_at, finished_at: run.finished_at }; }
