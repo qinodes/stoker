@@ -129,6 +129,15 @@ function flowRoute(route: Route, request: Request, flows: ScheduledFlow[], appli
     item.has_draft = true;
     return json(route, { flow: item });
   }
+  const taskMatch = suffix.match(/^\/tasks\/([^/]+)$/);
+  if (taskMatch && request.method() === "PATCH") {
+    const task = item.tasks.find((entry) => entry.task_id === decodeURIComponent(taskMatch[1]));
+    if (!task) return typedError(route, 404, "not_found", "task not found");
+    Object.assign(task, requestJson<Partial<ScheduledFlow["tasks"][number]>>(request));
+    item.draft_revision += 1;
+    item.has_draft = true;
+    return json(route, { flow: item });
+  }
   if (suffix === "/apply" && request.method() === "POST") { appliedSchedules.set(id, item.schedule); item.frozen = false; item.has_draft = false; return json(route, { flow: item }); }
   if (suffix === "/unfreeze" && request.method() === "POST") {
     if (item.has_draft) return typedError(route, 409, "conflict", "a draft revision is required when a draft exists");

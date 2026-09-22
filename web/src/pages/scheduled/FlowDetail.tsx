@@ -45,7 +45,7 @@ export function FlowDetail({ flow }: { flow: ScheduledFlow }) {
   return <section className="panel flow-detail"><div className="panel-header"><div className="panel-title"><div><div className="section-kicker">{t("scheduled.flow.detail")}</div><h2>{flow.name}</h2><p>{flow.flow_id} · {flow.owner}</p></div></div><div className="page-actions"><FlowActions flow={flow} sync={sync} mutate={mutate} /></div></div>
     {sync && <div className="flow-notice">{t("scheduled.flow.syncReadOnly")}</div>}
     {state.scheduled.revisionConflict && <div className="flow-notice conflict"><span>{t("scheduled.flow.revisionConflict")}</span><button className="button small secondary" type="button" onClick={() => void actions.openFlow(flow.flow_id)}>{t("scheduled.flow.reload")}</button></div>}
-    <div className="flow-meta"><div><span>{t("scheduled.schedule")}</span><strong>{scheduleLabel(flow.schedule, t("scheduled.unscheduled"))}</strong></div><div><span>{t("scheduled.tasks")}</span><strong>{flow.tasks.length}</strong></div><div><span>{t("scheduled.status")}</span><StateBadge value={!flow.committed ? "DRAFT" : flow.enabled ? "RUNNING" : "CANCELLED"} /></div></div>
+    <div className="flow-meta"><div><span className="flow-meta-label">{t("scheduled.schedule")}</span><strong className="flow-meta-value">{scheduleLabel(flow.schedule, t("scheduled.unscheduled"))}</strong></div><div><span className="flow-meta-label">{t("scheduled.tasks")}</span><strong className="flow-meta-value">{flow.tasks.length}</strong></div><div><span className="flow-meta-label">{t("scheduled.status")}</span><StateBadge value={!flow.committed ? "DRAFT" : flow.enabled ? "RUNNING" : "CANCELLED"} /></div></div>
     {actionState === "frozen" && !sync && <div className="flow-schedule-editor"><button className="button small secondary" type="button" onClick={() => setEditingSchedule((value) => !value)}>{t("scheduled.flow.editSchedule")}</button>{editingSchedule && <form onSubmit={(event) => { event.preventDefault(); saveSchedule(); }}><ScheduleInputs value={schedule} timezones={timezones} defaultTimezone={effectiveTimezone} onChange={updateSchedule} /><button className="button small primary" type="submit">{t("common.save")}</button>{scheduleError && <div className="form-feedback invalid schedule-error" aria-live="polite">{scheduleError}</div>}</form>}</div>}
     <section className="flow-section"><div className="section-heading-row"><div><div className="section-kicker">{t("scheduled.flow.graph")}</div><h3>{t("scheduled.flow.tasks")}</h3></div></div><TaskGraph tasks={flow.tasks} />{(actionState === "draft" || actionState === "frozen") && !sync && <TaskEditor flow={flow} />}{!flow.tasks.length && <EmptyState compact icon="◇" title={t("scheduled.flow.noTasks")} />}</section>
   </section>;
@@ -63,9 +63,29 @@ function FlowActions({ flow, sync, mutate }: { flow: ScheduledFlow; sync: boolea
 
 function TaskGraph({ tasks }: { tasks: ScheduledTask[] }) {
   const { t } = useI18n();
+  const { state, actions } = useWorkspace();
+  const flow = state.scheduled.selectedFlow;
+  const [editingTask, setEditingTask] = useState<ScheduledTask | null>(null);
+  return <><div className="flow-graph" aria-label={t("scheduled.flow.graph")}><div className="flow-links" aria-hidden="true">{tasks.flatMap((task) => task.dependencies.map((dependency) => <span key={`${task.task_id}:${dependency.task_id}`}>{dependency.task_id} → {task.task_id}</span>))}</div>{tasks.map((task) => <article className="task-card" key={task.task_id}><div className="task-card-heading"><strong>{task.name}</strong><code>{task.task_id}</code></div><code>{task.command}</code><small>{task.dependencies.length ? `${t("scheduled.flow.dependsOn")} ${task.dependencies.map((dependency) => dependency.task_id).join(", ")}` : t("scheduled.flow.rootTask")}</small>{flow?.frozen && <div className="task-card-actions"><button className="button small secondary" type="button" onClick={() => setEditingTask(task)}>{t("common.edit")}</button><button className="button small danger" type="button" onClick={() => void actions.scheduledFlowMutation(flow, `/tasks/${encodeURIComponent(task.task_id)}`, "DELETE")}>{t("scheduled.flow.removeTask")}</button></div>}</article>)}</div>{flow && editingTask && <TaskEditDialog flow={flow} task={editingTask} onClose={() => setEditingTask(null)} />}</>;
+}
+
+function TaskEditDialog({ flow, task, onClose }: { flow: ScheduledFlow; task: ScheduledTask; onClose: () => void }) {
+  const { t } = useI18n();
   const { actions } = useWorkspace();
-  const flow = useWorkspace().state.scheduled.selectedFlow;
-  return <div className="flow-graph" aria-label={t("scheduled.flow.graph")}><div className="flow-links" aria-hidden="true">{tasks.flatMap((task) => task.dependencies.map((dependency) => <span key={`${task.task_id}:${dependency.task_id}`}>{dependency.task_id} → {task.task_id}</span>))}</div>{tasks.map((task) => <article className="task-card" key={task.task_id}><div className="task-card-heading"><strong>{task.name}</strong><code>{task.task_id}</code></div><code>{task.command}</code><small>{task.dependencies.length ? `${t("scheduled.flow.dependsOn")} ${task.dependencies.map((dependency) => dependency.task_id).join(", ")}` : t("scheduled.flow.rootTask")}</small>{flow?.frozen && <div className="task-card-actions"><button className="button small secondary" type="button" onClick={() => { const command = window.prompt(t("scheduled.flow.editTask"), task.command); if (command !== null) void actions.scheduledFlowMutation(flow, `/tasks/${encodeURIComponent(task.task_id)}`, "PATCH", { command }); }}>{t("common.edit")}</button><button className="button small danger" type="button" onClick={() => void actions.scheduledFlowMutation(flow, `/tasks/${encodeURIComponent(task.task_id)}`, "DELETE")}>{t("scheduled.flow.removeTask")}</button></div>}</article>)}</div>;
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [command, setCommand] = useState(task.command);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!dialog.current?.open) dialog.current?.showModal();
+  }, []);
+  const save = async () => {
+    if (!command.trim() || saving) return;
+    setSaving(true);
+    const saved = await actions.scheduledFlowMutation(flow, `/tasks/${encodeURIComponent(task.task_id)}`, "PATCH", { command });
+    setSaving(false);
+    if (saved) onClose();
+  };
+  return <dialog ref={dialog} className="confirm-dialog task-edit-dialog" aria-labelledby="task-edit-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}><form className="dialog-card task-edit-card" onSubmit={(event) => { event.preventDefault(); void save(); }}><h2 id="task-edit-title">{t("scheduled.flow.editTask")}</h2><p>{task.name}</p><label htmlFor="task-edit-command">{t("scheduled.command")}</label><textarea id="task-edit-command" autoFocus required value={command} onChange={(event) => setCommand(event.target.value)} /><div className="dialog-actions"><button className="button secondary" type="button" onClick={onClose}>{t("common.cancel")}</button><button className="button primary" type="submit" disabled={saving || !command.trim()}>{t("common.save")}</button></div></form></dialog>;
 }
 
 function TaskEditor({ flow }: { flow: ScheduledFlow }) {

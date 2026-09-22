@@ -152,6 +152,37 @@ test("Flow editing moves between clean, dirty, discarded, and applied states", a
   await expect(page.getByRole("button", { name: "Freeze for edits" })).toBeVisible();
 });
 
+test("a frozen Flow edits a task in the styled dialog", async ({ page }) => {
+  await mockBackend(page, {
+    workspaceMode: "scheduled",
+    flow: {
+      committed: true,
+      enabled: true,
+      frozen: true,
+      draft_revision: 7,
+      has_draft: false,
+      tasks: [{ task_id: "prepare", name: "Prepare", cwd: "/workspace", command: "echo prepare", retry: 0, dependencies: [], depend_mode: "all", sequence: 0 }],
+    },
+  });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.getByRole("row", { name: /Nightly Flow nightly-flow/ }).click();
+
+  await page.locator(".task-card").getByRole("button", { name: "Edit" }).click();
+  const dialog = page.getByRole("dialog", { name: "Edit task command" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("textarea")).toHaveValue("echo prepare");
+  await dialog.locator("textarea").fill("echo changed");
+  await dialog.getByRole("button", { name: "Save" }).click();
+
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator(".task-card")).toContainText("echo changed");
+  await expect(page.getByRole("button", { name: "Apply changes" })).toBeVisible();
+  await expect(page.locator(".task-card-actions")).toHaveCSS("gap", "8px");
+  await expect(page.locator(".flow-meta .state-badge")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(page.locator(".flow-meta .state-badge")).toHaveCSS("color", "rgb(117, 214, 163)");
+});
+
 test("scheduled saves show feedback and configuration actions retain breathing room", async ({ page }) => {
   await mockBackend(page, { workspaceMode: "scheduled" });
   await page.goto("/");
