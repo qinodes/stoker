@@ -59,6 +59,8 @@ export const messages = {
   "jobs.directoryPlaceholder": "Stoker ホストのフォルダーを選択",
   "jobs.browse": "参照",
   "jobs.directoryHelp": "フォルダーは Stoker ホストから読み込まれます。",
+  "jobs.directoryBrowser": "ディレクトリブラウザー",
+  "jobs.goParent": "← 上の階層へ戻る",
   "common.open": "開く",
   "jobs.loadingDirectories": "ディレクトリを読み込み中",
   "jobs.noDirectories": "サブディレクトリはありません",

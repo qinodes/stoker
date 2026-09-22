@@ -50,6 +50,26 @@
 
 .path-input-row .text-input, .fs-path-row .text-input { min-width: 0; }
 
+.fs-browser { display: grid; gap: 0; margin-top: 15px; padding: 15px; border: 1px solid var(--border); border-radius: 12px; background: rgba(11, 16, 24, .34); }
+
+.fs-browser-toolbar { margin-top: 0; }
+
+.fs-browser-title { display: grid; min-width: 0; gap: 5px; }
+
+.fs-browser-current-path { max-width: 100%; overflow: hidden; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+
+.fs-parent-button { flex: 0 0 auto; white-space: nowrap; }
+
+.fs-browser > .fs-path-row { margin-top: 13px; }
+
+.fs-path-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+
+.fs-browser .form-feedback { margin-top: 10px; }
+
+.fs-directory-list { margin-top: 12px; }
+
+.fs-browser-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
+
 .mono-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
 
 .command-input { display: block; width: 100%; min-height: 112px; padding: 11px; resize: vertical; border: 1px solid var(--border); border-radius: 9px; outline: none; background: var(--bg-soft); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; }
@@ -178,7 +198,7 @@
 
 .fs-breadcrumb { margin-top: 11px; overflow: auto; color: var(--ember-soft); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; white-space: nowrap; }
 
-.fs-browser-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; color: var(--text-subtle); font-size: 10px; }
+.fs-browser-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 0; color: var(--text-subtle); font-size: 10px; }
 
 .fs-directory-list { min-height: 160px; max-height: 300px; margin-top: 9px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft); }
 

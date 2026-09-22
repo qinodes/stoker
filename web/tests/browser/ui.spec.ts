@@ -133,7 +133,14 @@ async function mockBackend(page: Page, { onRequest = () => {} }: MockBackendOpti
       return route.fulfill({ json: { default_path: "/workspace", locations: [{ kind: "root", label: "Workspace", path: "/workspace" }] } });
     }
     if (path === "/api/v1/fs/directories") {
-      return route.fulfill({ json: { path: url.searchParams.get("path"), parent: "/", directories: [{ name: "child", path: "/workspace/child", is_symlink: false }], truncated: false, skipped_entries: 0 } });
+      const directoryPath = url.searchParams.get("path") || "/workspace";
+      const fixtures: Record<string, { parent: string | null; directories: Array<{ name: string; path: string; is_symlink: boolean }> }> = {
+        "/": { parent: null, directories: [{ name: "workspace", path: "/workspace", is_symlink: false }] },
+        "/workspace": { parent: "/", directories: [{ name: "child", path: "/workspace/child", is_symlink: false }] },
+        "/workspace/child": { parent: "/workspace", directories: [{ name: "grandchild", path: "/workspace/child/grandchild", is_symlink: false }] },
+      };
+      const fixture = fixtures[directoryPath] || { parent: "/workspace", directories: [] };
+      return route.fulfill({ json: { path: directoryPath, parent: fixture.parent, directories: fixture.directories, truncated: false, skipped_entries: 0 } });
     }
     const jobMatch = path.match(/^\/api\/v1\/jobs\/([^/]+)(?:\/(description|commit|cancel|logs))?$/);
     if (jobMatch) {
@@ -205,6 +212,32 @@ async function mockBackend(page: Page, { onRequest = () => {} }: MockBackendOpti
   });
   return model;
 }
+
+test("directory browser can return to parent directories", async ({ page }) => {
+  await mockBackend(page);
+  await page.goto("/");
+  await page.locator('[data-route="jobs"]').click();
+  await page.locator('[data-action="new-job"]').click();
+  await page.locator('[data-action="browse-directory"]').click();
+  await expect(page.locator('[data-directory="/workspace/child"]')).toBeVisible();
+
+  await page.locator('[data-directory="/workspace/child"]').click();
+  await expect(page.locator("#fs-path")).toHaveValue("/workspace/child");
+  await expect(page.locator('[data-action="fs-go-parent"]')).toBeEnabled();
+  const pathRow = page.locator(".fs-path-row");
+  await expect(pathRow.locator('[data-action="fs-go-parent"]')).toHaveText("Back");
+  await expect(pathRow.locator("button").nth(0)).toHaveText("Back");
+  await expect(pathRow.locator("button").nth(1)).toHaveText("Open");
+  await expect(page.locator(".fs-browser-footer")).toHaveCSS("border-top-width", "0px");
+
+  await page.locator('[data-action="fs-go-parent"]').click();
+  await expect(page.locator("#fs-path")).toHaveValue("/workspace");
+  await expect(page.locator('[data-directory="/workspace/child"]')).toBeVisible();
+
+  await page.locator('[data-action="fs-go-parent"]').click();
+  await expect(page.locator("#fs-path")).toHaveValue("/");
+  await expect(page.locator('[data-action="fs-go-parent"]')).toBeDisabled();
+});
 
 test("bundled browser creates and reads a job through the real Axum application stack", async ({ page, request }) => {
   const rootsResponse = await request.get("/api/v1/fs/roots");

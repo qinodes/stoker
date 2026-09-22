@@ -57,6 +57,8 @@ export const en = {
   "jobs.directoryPlaceholder": "Choose a folder on the Stoker host",
   "jobs.browse": "Browse",
   "jobs.directoryHelp": "Folders are read from the Stoker host.",
+  "jobs.directoryBrowser": "Directory browser",
+  "jobs.goParent": "Back",
   "common.open": "Open",
   "jobs.loadingDirectories": "Loading directories",
   "jobs.noDirectories": "No subdirectories",
