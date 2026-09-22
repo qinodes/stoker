@@ -61,6 +61,17 @@ export async function mockBackend(page: Page, options: MockBackendOptions): Prom
     }
     if (path === "/api/v1/policy") return json(route, policy());
     if (path === "/api/v1/config" || path === "/api/v1/config/snapshots") return json(route, { config: { timezone: "UTC" }, effective_timezone: { name: "UTC", source: "config" }, timezones: ["UTC", "Asia/Tokyo"], config_path: "/config.json", snapshot_dir: "/snapshots", snapshots: [] });
+    if (path === "/api/v1/fs/roots") return json(route, { default_path: "/workspace", locations: [] });
+    if (path === "/api/v1/fs/directories") {
+      const directoryPath = url.searchParams.get("path") || "/workspace";
+      const fixtures: Record<string, { parent: string | null; directories: Array<{ name: string; path: string; is_symlink: boolean }> }> = {
+        "/": { parent: null, directories: [{ name: "workspace", path: "/workspace", is_symlink: false }] },
+        "/workspace": { parent: "/", directories: [{ name: "child", path: "/workspace/child", is_symlink: false }] },
+        "/workspace/child": { parent: "/workspace", directories: [{ name: "grandchild", path: "/workspace/child/grandchild", is_symlink: false }] },
+      };
+      const fixture = fixtures[directoryPath] || { parent: "/workspace", directories: [] };
+      return json(route, { path: directoryPath, parent: fixture.parent, directories: fixture.directories, truncated: false, skipped_entries: 0 });
+    }
     if (model.workspaceMode === "serial") return serial(route, path, method);
     if (!path.startsWith("/api/v1/scheduled/")) return typedError(route, 409, "mode_changed", "workspace mode changed", { mode: "scheduled" });
 
@@ -196,7 +207,6 @@ function serial(route: Route, path: string, method: string) {
   if (path === "/api/v1/queue") return json(route, { jobs: [], locked: false });
   if (path === "/api/v1/policy") return json(route, policy());
   if (path === "/api/v1/config" || path === "/api/v1/config/snapshots") return json(route, { config: { timezone: "UTC" }, effective_timezone: { name: "UTC", source: "config" }, timezones: ["UTC", "Asia/Tokyo"], config_path: "/config.json", snapshot_dir: "/snapshots", snapshots: [] });
-  if (path === "/api/v1/fs/roots") return json(route, { default_path: "/workspace", locations: [] });
   return typedError(route, 404, "not_found", `unmocked ${method} ${path}`);
 }
 

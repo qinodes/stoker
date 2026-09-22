@@ -23,7 +23,7 @@ export interface WorkspaceActions {
   setPage: (kind: "jobs" | "snapshots", page: number) => void;
   openJobForm: () => Promise<void>;
   closeJobForm: () => void;
-  openDirectoryBrowser: (path: string) => Promise<void>;
+  openDirectoryBrowser: (path: string, onChoose?: (path: string) => void) => Promise<void>;
   closeDirectoryBrowser: () => void;
   updateDraft: (patch: Partial<JobDraft>) => void;
   loadDirectory: (path: string) => Promise<void>;
@@ -101,6 +101,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const sequence = useRef(createRequestSequence());
   const detailRequest = useRef(0);
   const directoryCache = useRef(new Map<string, DirectoryCacheEntry>());
+  const directoryBrowserSelection = useRef<((path: string) => void) | null>(null);
   const [jobFormOpen, setJobFormOpen] = useState(false);
   const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false);
   const [jobDetailOpen, setJobDetailOpen] = useState(false);
@@ -127,6 +128,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     sequence.current.next();
     detailRequest.current += 1;
     directoryCache.current.clear();
+    directoryBrowserSelection.current = null;
     setJobFormOpen(false);
     setDirectoryBrowserOpen(false);
     setJobDetailOpen(false);
@@ -329,13 +331,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
     setJobFormOpen(true);
   }, [api, enterModeTransition]);
-  const closeJobForm = useCallback(() => { setJobFormOpen(false); setDirectoryBrowserOpen(false); }, []);
+  const closeJobForm = useCallback(() => { setJobFormOpen(false); directoryBrowserSelection.current = null; setDirectoryBrowserOpen(false); }, []);
   const updateDraft = useCallback((patch: Partial<JobDraft>) => setState((current) => ({ ...current, jobDraft: { ...current.jobDraft, ...patch } })), []);
 
   const loadDirectory = useCallback(async (path: string) => {
     if (!path) return;
     const mode = stateRef.current.mode;
-    if (mode !== "serial") return;
+    if (!mode) return;
     const cached = cachedDirectory(directoryCache.current, path);
     if (cached) {
       setState((current) => current.mode === mode ? { ...current, filesystem: { ...current.filesystem, current: cached, inputPath: cached?.path || path, loading: false, error: "" } } : current);
@@ -356,13 +358,41 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setState((current) => current.mode === mode ? { ...current, filesystem: { ...current.filesystem, loading: false, error: message } } : current);
     }
   }, [api, enterModeTransition]);
-  const openDirectoryBrowser = useCallback(async (path: string) => {
+  const openDirectoryBrowser = useCallback(async (path: string, onChoose?: (path: string) => void) => {
+    const mode = stateRef.current.mode;
+    if (!mode) return;
+    directoryBrowserSelection.current = onChoose || null;
+    let initialPath = path;
+    if (!initialPath) {
+      try {
+        const current = stateRef.current;
+        const roots = current.filesystem.roots || await api.get<WorkspaceState["filesystem"]["roots"]>("/api/v1/fs/roots");
+        initialPath = roots?.default_path || "";
+        setState((value) => value.mode === mode ? { ...value, filesystem: { ...value.filesystem, roots, inputPath: initialPath } } : value);
+      } catch (error) {
+        const actualMode = modeFromApiError(error);
+        if (actualMode) {
+          enterModeTransition(actualMode);
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        setState((value) => value.mode === mode ? { ...value, filesystem: { ...value.filesystem, error: message } } : value);
+      }
+    }
     setDirectoryBrowserOpen(true);
-    await loadDirectory(path);
-  }, [loadDirectory]);
-  const closeDirectoryBrowser = useCallback(() => setDirectoryBrowserOpen(false), []);
+    await loadDirectory(initialPath);
+  }, [api, enterModeTransition, loadDirectory]);
+  const closeDirectoryBrowser = useCallback(() => { directoryBrowserSelection.current = null; setDirectoryBrowserOpen(false); }, []);
   const chooseDirectory = useCallback(() => {
-    setState((current) => current.filesystem.current ? { ...current, jobDraft: { ...current.jobDraft, cwd: current.filesystem.current.path }, filesystem: { ...current.filesystem, roots: null, current: null } } : current);
+    const path = stateRef.current.filesystem.current?.path;
+    const onChoose = directoryBrowserSelection.current;
+    directoryBrowserSelection.current = null;
+    if (!path) {
+      setDirectoryBrowserOpen(false);
+      return;
+    }
+    onChoose?.(path);
+    setState((current) => current.filesystem.current?.path === path ? { ...current, ...(onChoose ? {} : { jobDraft: { ...current.jobDraft, cwd: path } }), filesystem: { ...current.filesystem, roots: null, current: null } } : current);
     setDirectoryBrowserOpen(false);
   }, []);
   const setFilesystemInputPath = useCallback((path: string) => setState((current) => ({ ...current, filesystem: { ...current.filesystem, inputPath: path } })), []);

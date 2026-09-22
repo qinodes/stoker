@@ -294,6 +294,13 @@ test("scheduled workloads create a Flow, add a task, commit, run, and open its a
   await page.locator("#new-flow-form").getByRole("button", { name: "Create Flow" }).click();
   expect((await created).postDataJSON()).toMatchObject({ schedule: { kind: "daily", time: "00:00", timezone: "UTC" } });
   await page.getByRole("row", { name: /Release Flow release-flow/ }).click();
+  await page.locator('[data-action="browse-scheduled-directory"]').click();
+  await expect(page.locator("#directory-browser-dialog")).toBeVisible();
+  await expect(page.locator('[data-directory="/workspace/child"]')).toBeVisible();
+  await page.locator('[data-directory="/workspace/child"]').click();
+  await page.locator("#directory-browser-dialog [data-action=\"choose-directory\"]").click();
+  await expect(page.locator("#flow-task-cwd")).toHaveValue("/workspace/child");
+  await expect(page.locator("#directory-browser-dialog")).not.toBeVisible();
   await page.locator("#flow-task-id").fill("build");
   await page.locator(".task-editor input").nth(1).fill("Build");
   await page.locator(".task-editor input").nth(2).fill("echo build");
