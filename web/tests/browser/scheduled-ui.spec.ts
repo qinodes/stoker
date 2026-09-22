@@ -9,6 +9,29 @@ test("scheduled navigation excludes serial pages", async ({ page }) => {
   await expect(page.locator('[data-route="queue"]')).toHaveCount(0);
 });
 
+test("scheduled overview separates summary metrics from run details", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.goto("/");
+
+  await expect(page.getByText("Next occurrences", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".scheduled-metrics .metric-card")).toHaveCount(2);
+  await expect(page.locator(".scheduled-metrics")).toContainText("Flows");
+  await expect(page.locator(".scheduled-metrics")).toContainText("0 live · 1 draft");
+  await expect(page.locator(".scheduled-overview-grid > .panel")).toHaveCount(3);
+  await expect(page.locator(".scheduled-overview-grid")).toContainText("Active runs");
+  await expect(page.locator(".scheduled-overview-grid")).toContainText("Recent failures");
+  await expect(page.locator(".scheduled-overview-grid")).toContainText("No recovery required");
+});
+
+test("scheduled overview highlights an active recovery fence", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled", recoveryFence: true });
+  await page.goto("/");
+
+  const recovery = page.locator(".overview-run-panel.recovery-warning");
+  await expect(recovery).toBeVisible();
+  await expect(recovery).toContainText("Recovery fence is active");
+});
+
 test("workspace queue lock is operable from the shared topbar", async ({ page }) => {
   await mockBackend(page, { workspaceMode: "scheduled" });
   await page.goto("/");
@@ -89,6 +112,21 @@ test("a scheduled draft Flow can be deleted after confirmation", async ({ page }
   await expect(page.getByRole("heading", { name: "Delete Flow?" })).toBeVisible();
   await page.locator("#confirm-accept").click();
   await expect(page.getByText("No Flows are available")).toBeVisible();
+});
+
+test("scheduled Flows show five rows per page without desktop outer scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 2187, height: 1173 });
+  await mockBackend(page, { workspaceMode: "scheduled", flowCount: 11 });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+
+  await expect(page.locator(".workloads-table tbody tr")).toHaveCount(5);
+  const pagination = page.getByRole("navigation", { name: "Flows pagination" });
+  await expect(pagination).toContainText("Showing 1–5 of 11");
+  await expect.poll(() => page.locator(".main-content").evaluate((element) => element.scrollHeight === element.clientHeight)).toBe(true);
+  await pagination.getByRole("button", { name: "Next" }).click();
+  await expect(pagination).toContainText("Showing 6–10 of 11");
+  await expect(page.getByText("flow-6", { exact: true })).toBeVisible();
 });
 
 test("Flow editing moves between clean, dirty, discarded, and applied states", async ({ page }) => {
@@ -247,7 +285,14 @@ test("scheduled workloads create a Flow, add a task, commit, run, and open its a
   await page.locator("#flow-id").fill("release-flow");
   await page.locator("#flow-name").fill("Release Flow");
   await page.locator("#flow-owner").fill("alice");
+  const scheduleKind = page.locator("#new-flow-form .schedule-kind-field select");
+  await expect(scheduleKind).toHaveValue("once");
+  await expect(scheduleKind.locator("option")).toHaveCount(3);
+  await expect(page.locator("#new-flow-form .schedule-inputs")).toHaveCSS("margin-top", "18px");
+  await scheduleKind.selectOption("daily");
+  const created = page.waitForRequest((request) => request.url().endsWith("/api/v1/scheduled/flows") && request.method() === "POST");
   await page.locator("#new-flow-form").getByRole("button", { name: "Create Flow" }).click();
+  expect((await created).postDataJSON()).toMatchObject({ schedule: { kind: "daily", time: "00:00", timezone: "UTC" } });
   await page.getByRole("row", { name: /Release Flow release-flow/ }).click();
   await page.locator("#flow-task-id").fill("build");
   await page.locator(".task-editor input").nth(1).fill("Build");
@@ -285,6 +330,11 @@ test("a frozen Flow keeps its typed schedule after a revision conflict", async (
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("This Flow changed on the server. Reload it before applying your draft.")).toBeVisible();
   await expect(schedule).toHaveValue("2031-01-01");
+  backend.revisionConflict = false;
+  await page.getByRole("button", { name: "Reload Flow" }).click();
+  await expect(page.getByText("This Flow changed on the server. Reload it before applying your draft.")).toHaveCount(0);
+  await page.getByRole("button", { name: "Close Flow detail" }).click();
+  await expect(page.getByRole("heading", { name: "Nightly Flow" })).toHaveCount(0);
 });
 
 test("scheduled standalone jobs are available only in the Workloads job tab", async ({ page }) => {

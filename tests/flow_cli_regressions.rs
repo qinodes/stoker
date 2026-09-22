@@ -1816,6 +1816,49 @@ fn flow_list_is_a_flow_only_summary_and_empty_lists_are_explicit() {
 }
 
 #[test]
+fn flow_list_calculates_the_next_daily_time_without_materializing_an_occurrence() {
+    let directory = tempfile::tempdir().unwrap();
+    let home = directory.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let store = Store::open(home.join("stoker.db")).unwrap();
+    let time = NaiveTime::parse_from_str(
+        &(Utc::now() + Duration::hours(2))
+            .format("%H:%M")
+            .to_string(),
+        "%H:%M",
+    )
+    .unwrap();
+    let schedule = ScheduleSpec::Daily {
+        time,
+        timezone: "UTC".into(),
+    };
+    store
+        .create_flow(
+            "daily-next".into(),
+            "Daily next".into(),
+            "tester".into(),
+            schedule.clone(),
+        )
+        .unwrap();
+    add_task(&store, directory.path(), "daily-next", "root");
+    store.commit_flow("daily-next").unwrap();
+    assert!(store.list_occurrences("daily-next").unwrap().is_empty());
+    let expected = schedule
+        .next_daily_after(Utc::now())
+        .unwrap()
+        .due_at
+        .to_rfc3339();
+
+    cli(&home, directory.path())
+        .args(["flow", "list"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(expected));
+
+    assert!(store.list_occurrences("daily-next").unwrap().is_empty());
+}
+
+#[test]
 fn every_flow_edit_command_has_success_and_validation_coverage() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path().join("home");

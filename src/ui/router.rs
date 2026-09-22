@@ -709,6 +709,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scheduled_overview_counts_flows_and_separates_recovering_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, run_id, attempt_id) = seeded_running_flow(directory.path());
+        state.store.mark_flow_attempt_running(attempt_id).unwrap();
+        state
+            .store
+            .create_flow(
+                "draft-flow".into(),
+                "Draft flow".into(),
+                "web".into(),
+                crate::domain::flow::ScheduleSpec::Once {
+                    at: chrono::Utc::now() + chrono::Duration::hours(2),
+                },
+            )
+            .unwrap();
+        assert!(state.store.recover_runtime_jobs().unwrap());
+
+        let overview = json_response(
+            build_router(state)
+                .oneshot(
+                    Request::get("/api/v1/scheduled/overview")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+
+        assert_eq!(overview["flow_count"], 2);
+        assert_eq!(overview["live_flow_count"], 1);
+        assert_eq!(overview["draft_flow_count"], 1);
+        assert_eq!(overview["active_runs"].as_array().unwrap().len(), 0);
+        assert_eq!(overview["recovering_runs"].as_array().unwrap().len(), 1);
+        assert_eq!(overview["recovering_runs"][0]["run_id"], run_id.to_string());
+        assert_eq!(overview["recovery_fence"], true);
+    }
+
+    #[tokio::test]
     async fn scheduled_flow_routes_preserve_source_commit_and_manual_run_safety() {
         let directory = tempfile::tempdir().unwrap();
         let state = scheduled_state(directory.path());

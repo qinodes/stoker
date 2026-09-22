@@ -86,13 +86,13 @@
 
 .move-button:disabled { cursor: not-allowed; opacity: .35; }
 
-.queue-lock-banner { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 22px 18px; padding: 13px 15px; border: 1px solid rgba(243, 198, 107, .28); border-radius: 10px; background: rgba(243, 198, 107, .08); color: var(--yellow); font-size: 11px; }
+.queue-lock-banner { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 0 18px; padding: 13px 15px; border: 1px solid rgba(243, 198, 107, .28); border-radius: 10px; background: rgba(243, 198, 107, .08); color: var(--yellow); font-size: 11px; }
 
 .queue-lock-banner strong { display: block; margin-bottom: 3px; }
 
 .queue-lock-banner small { color: rgba(243, 198, 107, .75); }
 
-.queue-unlock-banner { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 22px 18px; padding: 13px 15px; border: 1px solid rgba(120, 216, 220, .22); border-radius: 10px; background: rgba(120, 216, 220, .06); color: var(--cyan); font-size: 11px; }
+.queue-unlock-banner { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 0 18px; padding: 13px 15px; border: 1px solid rgba(120, 216, 220, .22); border-radius: 10px; background: rgba(120, 216, 220, .06); color: var(--cyan); font-size: 11px; }
 
 .queue-unlock-banner strong { display: block; margin-bottom: 3px; }
 

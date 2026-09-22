@@ -75,6 +75,7 @@ export function useScheduledActions({ api, stateRef, setState, showToast, loadDa
       setState((current) => current.mode === "scheduled" ? { ...current, scheduled: reduceScheduled(current.scheduled, { type: "flowLoaded", flow }) } : current);
     } catch (error) { showToast(error instanceof Error ? error.message : String(error), true); }
   }, [scheduled, setState, showToast, stateRef]);
+  const closeScheduledFlow = useCallback(() => setState((current) => current.mode === "scheduled" ? { ...current, scheduled: reduceScheduled(current.scheduled, { type: "flowClosed" }) } : current), [setState]);
   const deleteScheduledDraftFlow = useCallback(async (flow: ScheduledFlow) => {
     if (!await requestConfirmation({ kicker: uiMessage("confirm.scheduledFlow"), title: uiMessage("confirm.deleteFlowTitle"), message: uiMessage("confirm.deleteFlowMessage"), acceptLabel: uiMessage("scheduled.flow.delete"), destructive: true })) return false;
     try {
@@ -191,5 +192,5 @@ export function useScheduledActions({ api, stateRef, setState, showToast, loadDa
     try { await scheduled.reconcileRecovery(runId); showToast(uiMessage("toast.saved")); await loadData(); }
     catch (error) { showToast(error instanceof Error ? error.message : String(error), true); }
   }, [loadData, requestConfirmation, scheduled, showToast]);
-  return { selectScheduledTab, createScheduledFlow, openFlow, deleteScheduledDraftFlow, openScheduledJob, scheduledFlowMutation, scheduledJobMutation, loadScheduledRuns, openScheduledRun, cancelScheduledRun, cancelScheduledRunTask, selectScheduledLogTarget, setScheduledLogStream, loadScheduledSourceFile, previewScheduledSource, syncScheduledSource, setScheduledSourceMode, exportScheduledSource, snapshotScheduledSource, saveScheduledConcurrency, reconcileScheduledRecovery };
+  return { selectScheduledTab, createScheduledFlow, openFlow, closeScheduledFlow, deleteScheduledDraftFlow, openScheduledJob, scheduledFlowMutation, scheduledJobMutation, loadScheduledRuns, openScheduledRun, cancelScheduledRun, cancelScheduledRunTask, selectScheduledLogTarget, setScheduledLogStream, loadScheduledSourceFile, previewScheduledSource, syncScheduledSource, setScheduledSourceMode, exportScheduledSource, snapshotScheduledSource, saveScheduledConcurrency, reconcileScheduledRecovery };
 }

@@ -23,6 +23,20 @@ test("Flow mutations use the revision returned by the server", () => {
   );
 });
 
+test("loading or closing a Flow clears an earlier revision conflict", () => {
+  const conflicted = reduceScheduled(createScheduledState(), { type: "revisionConflict", value: true });
+  const loaded = reduceScheduled(conflicted, {
+    type: "flowLoaded",
+    flow: { flow_id: "new-flow", frozen: false, draft_revision: 0, tasks: [] } as unknown as ScheduledFlow,
+  });
+
+  assert.equal(loaded.revisionConflict, false);
+  assert.equal(loaded.selectedFlow?.flow_id, "new-flow");
+  const closed = reduceScheduled({ ...loaded, revisionConflict: true }, { type: "flowClosed" });
+  assert.equal(closed.selectedFlow, null);
+  assert.equal(closed.revisionConflict, false);
+});
+
 test("sync can only submit its previewed hash", () => {
   const state = withSyncPreview(createScheduledState(), {
     hash: "sha256:abc", changed: true,

@@ -44,6 +44,7 @@ test("localized sentences preserve literal data and English singular and plural 
 test("known states translate while new states and backend messages retain original values", () => {
   assert.equal(translateState("ja", "DRAFT"), "下書き");
   assert.equal(translateState("zh-TW", "RUNNING"), "執行中");
+  assert.equal(translateState("zh-TW", "RECOVERING"), "復原中");
   assert.equal(translateState("ja", null), "不明");
   for (const raw of ["NEW_STATE", "toString", "__proto__"]) assert.equal(translateState("ja", raw), raw);
   assert.equal(translateMessage("zh-TW", "job not found"), "job not found");

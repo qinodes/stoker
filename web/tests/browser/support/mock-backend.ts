@@ -7,6 +7,7 @@ export interface MockBackendOptions {
   activeAttempts?: number;
   recoveryFence?: boolean;
   flow?: Partial<ScheduledFlow>;
+  flowCount?: number;
 }
 
 export interface MockBackend {
@@ -35,6 +36,9 @@ export async function mockBackend(page: Page, options: MockBackendOptions): Prom
     queueLocked: false,
   };
   const flows: ScheduledFlow[] = [{ ...flow(), ...options.flow }];
+  for (let index = 2; index <= (options.flowCount ?? 1); index += 1) {
+    flows.push({ ...flow(), flow_id: `flow-${index}`, name: `Flow ${index}` });
+  }
   const appliedSchedules = new Map(flows.map((item) => [item.flow_id, item.schedule]));
   const jobs: ScheduledStandaloneJob[] = [standaloneJob()];
   const runs: ScheduledRun[] = [];
@@ -62,7 +66,13 @@ export async function mockBackend(page: Page, options: MockBackendOptions): Prom
 
     if (path === "/api/v1/scheduled/overview") return json(route, {
       capacity: { max_concurrency: model.maxConcurrency, active_attempts: model.activeAttempts },
-      active_runs: runs.map(summary), next_occurrences: [], recent_failures: [],
+      flow_count: flows.length,
+      live_flow_count: flows.filter((flow) => flow.committed).length,
+      draft_flow_count: flows.filter((flow) => !flow.committed).length,
+      active_runs: runs.filter((run) => run.state !== "RECOVERING" && !["CANCELLED", "SUCCEEDED", "FAILED", "FAILED_TO_START", "SKIPPED", "LOST"].includes(run.state)).map(summary),
+      recovering_runs: runs.filter((run) => run.state === "RECOVERING").map(summary),
+      recovery_fence: model.recoveryFence,
+      next_occurrences: [], recent_failures: [],
     });
     if (path === "/api/v1/scheduled/flows" && method === "GET") return json(route, { flows });
     if (path === "/api/v1/scheduled/flows" && method === "POST") {

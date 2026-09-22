@@ -302,6 +302,20 @@ test("job owner suggestions close when the form is clicked elsewhere", async ({ 
   await expect(page.locator("#job-user")).toHaveAttribute("aria-expanded", "false");
 });
 
+test("jobs shows five rows per page without desktop outer scrolling", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  const model = await mockBackend(page);
+  for (let index = 2; index <= 11; index += 1) {
+    model.jobs.push(baseJob({ name: `seed-job-${index}`, queue_order: index }));
+  }
+  await page.goto("/#jobs");
+
+  await expect(page.locator(".jobs-table tbody tr")).toHaveCount(5);
+  await expect(page.locator(".list-pagination")).toContainText("Showing 1–5 of 11");
+  const main = page.locator(".main-content");
+  await expect.poll(() => main.evaluate((element) => element.scrollHeight === element.clientHeight)).toBe(true);
+});
+
 test("queue keeps scrolling inside the job list on desktop", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 800 });
   await mockBackend(page);
@@ -330,6 +344,20 @@ test("queue keeps scrolling inside the job list on desktop", async ({ page }) =>
 
   expect(overflow.mainScrollHeight).toBe(overflow.mainClientHeight);
   expect(overflow.queueScrollHeight).toBeGreaterThan(overflow.queueClientHeight);
+});
+
+test("queue lock banner aligns with the queue panel", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await mockBackend(page);
+  await page.goto("/#queue");
+  await page.locator('[data-queue-lock="true"]').click();
+
+  const banner = await page.locator(".queue-lock-banner").boundingBox();
+  const panel = await page.locator('.page[data-view="queue"] > .panel').boundingBox();
+  expect(banner).not.toBeNull();
+  expect(panel).not.toBeNull();
+  expect(banner!.x).toBe(panel!.x);
+  expect(banner!.x + banner!.width).toBe(panel!.x + panel!.width);
 });
 
 test("v1.3.1 layout contract and two-second refresh preserve active input", async ({ page }) => {

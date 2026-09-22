@@ -18,10 +18,11 @@ pub(in crate::ui) async fn overview(
         "max_concurrency": state.store.scheduled_concurrency().map_err(ApiError::internal)?,
         "active_attempts": state.store.flow_active_attempt_count().map_err(ApiError::internal)?,
     });
-    let mut flow_ids = state
-        .store
-        .list_flows(None)
-        .map_err(ApiError::internal)?
+    let flows = state.store.list_flows(None).map_err(ApiError::internal)?;
+    let flow_count = flows.len();
+    let live_flow_count = flows.iter().filter(|flow| flow.committed).count();
+    let draft_flow_count = flow_count - live_flow_count;
+    let mut flow_ids = flows
         .into_iter()
         .filter(|flow| flow.mode == ExecutionMode::Scheduled)
         .map(|flow| flow.flow_id)
@@ -35,6 +36,7 @@ pub(in crate::ui) async fn overview(
     }
 
     let mut active_runs = Vec::new();
+    let mut recovering_runs = Vec::new();
     let mut next_occurrences = Vec::new();
     let mut recent_failures = Vec::new();
     for flow_id in flow_ids {
@@ -63,7 +65,9 @@ pub(in crate::ui) async fn overview(
                 "started_at": run.started_at.map(|value| value.to_rfc3339()),
                 "finished_at": run.finished_at.map(|value| value.to_rfc3339()),
             });
-            if !run.state.is_terminal() {
+            if run.state == FlowRunState::Recovering {
+                recovering_runs.push(summary);
+            } else if !run.state.is_terminal() {
                 active_runs.push(summary);
             } else if matches!(
                 run.state,
@@ -74,13 +78,19 @@ pub(in crate::ui) async fn overview(
         }
     }
     active_runs.sort_by_key(|item| item["started_at"].as_str().unwrap_or_default().to_owned());
+    recovering_runs.sort_by_key(|item| item["started_at"].as_str().unwrap_or_default().to_owned());
     next_occurrences.sort_by_key(|item| item["due_at"].as_str().unwrap_or_default().to_owned());
     recent_failures.sort_by_key(|item| item["finished_at"].as_str().unwrap_or_default().to_owned());
     recent_failures.reverse();
     recent_failures.truncate(10);
     Ok(Json(json!({
         "capacity": capacity,
+        "flow_count": flow_count,
+        "live_flow_count": live_flow_count,
+        "draft_flow_count": draft_flow_count,
         "active_runs": active_runs,
+        "recovering_runs": recovering_runs,
+        "recovery_fence": state.store.queue_recovery_fence().map_err(ApiError::internal)?,
         "next_occurrences": next_occurrences,
         "recent_failures": recent_failures,
     })))

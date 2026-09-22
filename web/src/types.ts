@@ -200,7 +200,12 @@ export interface ScheduledStandaloneJob {
 
 export interface ScheduledOverviewResponse {
   capacity: { max_concurrency: number; active_attempts: number };
+  flow_count: number;
+  live_flow_count: number;
+  draft_flow_count: number;
   active_runs: ScheduledRunSummary[];
+  recovering_runs: ScheduledRunSummary[];
+  recovery_fence: boolean;
   next_occurrences: ScheduledOccurrence[];
   recent_failures: ScheduledRunSummary[];
 }

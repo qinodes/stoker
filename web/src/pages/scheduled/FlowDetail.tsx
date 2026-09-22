@@ -8,12 +8,12 @@ import type { ScheduledFlow, ScheduledSchedule, ScheduledTask } from "../../type
 import { scheduleLabel } from "./Workloads";
 
 const EMPTY_TASK = { task_id: "", name: "", cwd: "", command: "", retry: 0, dependencies: "", depend_mode: "all" };
-type ScheduleInput =
+export type ScheduleInput =
   | { kind: "once"; date: string; time: string; timezone: string }
   | { kind: "daily"; time: string; timezone: string }
   | { kind: "periodic"; every: string; first_at: string | null };
 
-export function FlowDetail({ flow }: { flow: ScheduledFlow }) {
+export function FlowDetail({ flow, onClose }: { flow: ScheduledFlow; onClose: () => void }) {
   const { t } = useI18n();
   const { state, actions } = useWorkspace();
   const effectiveTimezone = state.settings?.effective_timezone.name || "UTC";
@@ -42,7 +42,7 @@ export function FlowDetail({ flow }: { flow: ScheduledFlow }) {
     setScheduleError("");
     mutate("/schedule", "PUT", { schedule: result.schedule });
   };
-  return <section className="panel flow-detail"><div className="panel-header"><div className="panel-title"><div><div className="section-kicker">{t("scheduled.flow.detail")}</div><h2>{flow.name}</h2><p>{flow.flow_id} · {flow.owner}</p></div></div><div className="page-actions"><FlowActions flow={flow} sync={sync} mutate={mutate} /></div></div>
+  return <section className="panel flow-detail"><div className="panel-header"><div className="panel-title"><div><div className="section-kicker">{t("scheduled.flow.detail")}</div><h2>{flow.name}</h2><p>{flow.flow_id} · {flow.owner}</p></div></div><div className="page-actions"><button className="button small secondary" type="button" onClick={onClose}>{t("scheduled.flow.closeDetail")}</button><FlowActions flow={flow} sync={sync} mutate={mutate} /></div></div>
     {sync && <div className="flow-notice">{t("scheduled.flow.syncReadOnly")}</div>}
     {state.scheduled.revisionConflict && <div className="flow-notice conflict"><span>{t("scheduled.flow.revisionConflict")}</span><button className="button small secondary" type="button" onClick={() => void actions.openFlow(flow.flow_id)}>{t("scheduled.flow.reload")}</button></div>}
     <div className="flow-meta"><div><span className="flow-meta-label">{t("scheduled.schedule")}</span><strong className="flow-meta-value">{scheduleLabel(flow.schedule, t("scheduled.unscheduled"))}</strong></div><div><span className="flow-meta-label">{t("scheduled.tasks")}</span><strong className="flow-meta-value">{flow.tasks.length}</strong></div><div><span className="flow-meta-label">{t("scheduled.status")}</span><StateBadge value={!flow.committed ? "DRAFT" : flow.enabled ? "RUNNING" : "CANCELLED"} /></div></div>
@@ -106,7 +106,7 @@ function toScheduleInput(flow: ScheduledFlow, timezone: string): ScheduleInput {
   return { kind: "periodic", every: schedule.every, first_at: schedule.first_at || null };
 }
 
-function schedulePayload(value: ScheduleInput, timezones: string[]): { ok: true; schedule: ScheduledSchedule } | { ok: false; reason: "timezone" | "local-time" } {
+export function schedulePayload(value: ScheduleInput, timezones: string[]): { ok: true; schedule: ScheduledSchedule } | { ok: false; reason: "timezone" | "local-time" } {
   if (value.kind === "periodic") return { ok: true, schedule: value };
   if (!timezones.includes(value.timezone.trim())) return { ok: false, reason: "timezone" };
   if (value.kind === "daily") return { ok: true, schedule: { ...value, timezone: value.timezone.trim() } };
@@ -116,9 +116,9 @@ function schedulePayload(value: ScheduleInput, timezones: string[]): { ok: true;
     : { ok: false, reason: "local-time" };
 }
 
-function ScheduleInputs({ value, timezones, defaultTimezone, onChange }: { value: ScheduleInput; timezones: string[]; defaultTimezone: string; onChange: (value: ScheduleInput) => void }) {
+export function ScheduleInputs({ value, timezones, defaultTimezone, onChange, idPrefix = "schedule" }: { value: ScheduleInput; timezones: string[]; defaultTimezone: string; onChange: (value: ScheduleInput) => void; idPrefix?: string }) {
   const { t } = useI18n();
-  const timezoneField = (timezone: string, update: (timezone: string) => void) => <label className="schedule-field schedule-timezone-field"><span>{t("scheduled.flow.timezone")}</span><TimezonePicker id="schedule-timezone" suggestionsId="schedule-timezone-suggestions" value={timezone} timezones={timezones} placeholder={t("config.timezonePlaceholder")} required onChange={update} /></label>;
-  const timeField = (time: string, update: (time: string) => void) => <label className="schedule-field schedule-time-field"><span>{t("scheduled.flow.time")}</span><TimePicker id="schedule-time" value={time} hourLabel={t("scheduled.flow.hour")} minuteLabel={t("scheduled.flow.minute")} required onChange={update} /></label>;
+  const timezoneField = (timezone: string, update: (timezone: string) => void) => <label className="schedule-field schedule-timezone-field"><span>{t("scheduled.flow.timezone")}</span><TimezonePicker id={`${idPrefix}-timezone`} suggestionsId={`${idPrefix}-timezone-suggestions`} value={timezone} timezones={timezones} placeholder={t("config.timezonePlaceholder")} required onChange={update} /></label>;
+  const timeField = (time: string, update: (time: string) => void) => <label className="schedule-field schedule-time-field"><span>{t("scheduled.flow.time")}</span><TimePicker id={`${idPrefix}-time`} value={time} hourLabel={t("scheduled.flow.hour")} minuteLabel={t("scheduled.flow.minute")} required onChange={update} /></label>;
   return <div className="schedule-inputs"><label className="schedule-field schedule-kind-field"><span>{t("scheduled.flow.scheduleType")}</span><select className="select-input" value={value.kind} onChange={(event) => onChange(event.target.value === "daily" ? { kind: "daily", time: "00:00", timezone: defaultTimezone } : event.target.value === "periodic" ? { kind: "periodic", every: "1h", first_at: null } : { kind: "once", date: "", time: "", timezone: defaultTimezone })}><option value="once">{t("scheduled.flow.once")}</option><option value="daily">{t("scheduled.flow.daily")}</option><option value="periodic">{t("scheduled.flow.periodic")}</option></select></label>{value.kind === "once" ? <><label className="schedule-field"><span>{t("scheduled.flow.date")}</span><input className="text-input" type="date" required value={value.date} onChange={(event) => onChange({ ...value, date: event.target.value })} /></label>{timeField(value.time, (time) => onChange({ ...value, time }))}{timezoneField(value.timezone, (timezone) => onChange({ ...value, timezone }))}</> : value.kind === "daily" ? <>{timeField(value.time, (time) => onChange({ ...value, time }))}{timezoneField(value.timezone, (timezone) => onChange({ ...value, timezone }))}</> : <label className="schedule-field"><span>{t("scheduled.flow.interval")}</span><input className="text-input" required value={value.every} onChange={(event) => onChange({ ...value, every: event.target.value })} /></label>}</div>;
 }

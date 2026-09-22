@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   DIRECTORY_CACHE_LIMIT,
+  JOBS_PAGE_SIZE,
   cacheDirectory,
   cachedDirectory,
   createState,
@@ -18,6 +19,7 @@ test("state starts with the overview route and empty workspace values", () => {
 });
 
 test("pagination clamps empty, boundary, and final pages", () => {
+  assert.equal(JOBS_PAGE_SIZE, 5);
   assert.deepEqual(pageInfo([], 9, 6).items, []);
   assert.equal(pageInfo([1, 2, 3], 0, 2).page, 1);
   assert.deepEqual(pageInfo([1, 2, 3], 9, 2).items, [3]);

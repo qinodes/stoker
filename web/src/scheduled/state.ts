@@ -3,6 +3,7 @@ import type { ScheduledFlow, ScheduledRun, ScheduledSourceDocument, ScheduledSta
 export type ScheduledAction =
   | { type: "loaded"; value: Pick<ScheduledWorkspaceState, "overview" | "flows" | "jobs" | "source"> }
   | { type: "flowLoaded"; flow: ScheduledFlow }
+  | { type: "flowClosed" }
   | { type: "jobLoaded"; job: ScheduledStandaloneJob }
   | { type: "tabSelected"; tab: ScheduledWorkspaceState["activeTab"] }
   | { type: "revisionConflict"; value: boolean }
@@ -20,7 +21,8 @@ export function createScheduledState(): ScheduledWorkspaceState {
 export function reduceScheduled(state: ScheduledWorkspaceState, action: ScheduledAction): ScheduledWorkspaceState {
   switch (action.type) {
     case "loaded": return { ...state, ...action.value };
-    case "flowLoaded": return { ...state, selectedFlow: action.flow, flows: replace(state.flows, action.flow, "flow_id") };
+    case "flowLoaded": return { ...state, selectedFlow: action.flow, revisionConflict: false, flows: replace(state.flows, action.flow, "flow_id") };
+    case "flowClosed": return { ...state, selectedFlow: null, revisionConflict: false };
     case "jobLoaded": return { ...state, selectedJob: action.job, jobs: replace(state.jobs, action.job, "flow_id") };
     case "tabSelected": return { ...state, activeTab: action.tab };
     case "revisionConflict": return { ...state, revisionConflict: action.value };

@@ -52,6 +52,7 @@ export interface WorkspaceActions {
   selectScheduledTab: (tab: "flows" | "jobs") => void;
   createScheduledFlow: (flow: Pick<ScheduledFlow, "flow_id" | "name" | "owner" | "schedule">) => Promise<boolean>;
   openFlow: (flowId: string) => Promise<void>;
+  closeScheduledFlow: () => void;
   deleteScheduledDraftFlow: (flow: ScheduledFlow) => Promise<boolean>;
   openScheduledJob: (jobId: string) => Promise<void>;
   scheduledFlowMutation: (flow: ScheduledFlow, path: string, method: string, body?: Record<string, unknown>) => Promise<boolean>;

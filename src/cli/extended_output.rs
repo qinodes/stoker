@@ -1,6 +1,7 @@
 //! Output and lookup helpers for scheduled jobs and flows.
 
 use anyhow::{Context, Result};
+use chrono::Utc;
 use chrono_tz::Tz;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -347,6 +348,7 @@ fn json_string(value: &str) -> String {
 pub(super) fn print_flow_list(store: &Store, owner: Option<&str>) -> Result<()> {
     let flows = store.list_flows(owner)?;
     let mut rows = Vec::with_capacity(flows.len());
+    let now = Utc::now();
     for flow in flows {
         let mut status = vec![if flow.committed { "LIVE" } else { "DRAFT" }];
         if flow.frozen {
@@ -361,22 +363,31 @@ pub(super) fn print_flow_list(store: &Store, owner: Option<&str>) -> Result<()> 
             .find(|run| !run.state.is_terminal())
             .map_or_else(|| "-".to_owned(), |run| format!("{:?}", run.state));
         let next = if flow.committed && flow.enabled && !flow.frozen {
-            store
+            let pending = store
                 .list_occurrences(&flow.flow_id)?
                 .into_iter()
                 .filter(|occurrence| occurrence.state == OccurrenceState::Pending)
                 .min_by_key(|occurrence| occurrence.due_at)
-                .map_or_else(
-                    || "-".to_owned(),
-                    |occurrence| {
-                        if let Some(ScheduleSpec::Daily { timezone, .. }) = &flow.schedule
-                            && let Ok(timezone) = timezone.parse::<Tz>()
-                        {
-                            return occurrence.due_at.with_timezone(&timezone).to_rfc3339();
-                        }
-                        occurrence.due_at.to_rfc3339()
-                    },
-                )
+                .map(|occurrence| occurrence.due_at);
+            let due_at = pending.or_else(|| {
+                flow.schedule.as_ref().and_then(|schedule| match schedule {
+                    ScheduleSpec::Daily { .. } => {
+                        schedule.next_daily_after(now).ok().map(|next| next.due_at)
+                    }
+                    _ => None,
+                })
+            });
+            due_at.map_or_else(
+                || "-".to_owned(),
+                |due_at| {
+                    if let Some(ScheduleSpec::Daily { timezone, .. }) = &flow.schedule
+                        && let Ok(timezone) = timezone.parse::<Tz>()
+                    {
+                        return due_at.with_timezone(&timezone).to_rfc3339();
+                    }
+                    due_at.to_rfc3339()
+                },
+            )
         } else {
             "-".to_owned()
         };

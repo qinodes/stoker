@@ -1,7 +1,7 @@
 import type { PageInfo, Route, WorkspaceState } from "./types";
 import { createScheduledState } from "./scheduled/state.ts";
 
-export const JOBS_PAGE_SIZE = 6;
+export const JOBS_PAGE_SIZE = 5;
 export const SNAPSHOTS_PAGE_SIZE = 5;
 export const DIRECTORY_CACHE_TTL_MS = 20_000;
 export const DIRECTORY_CACHE_LIMIT = 64;

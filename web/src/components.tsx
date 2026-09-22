@@ -80,11 +80,12 @@ export function JobRow({ job, timezone, onOpen }: { job: Job; timezone?: string 
   </tr>;
 }
 
-export function Pagination({ kind, page, onPage }: { kind: "jobs" | "snapshots"; page: PageInfo<unknown>; onPage: (page: number) => void }) {
+export function Pagination({ kind, page, onPage }: { kind: "jobs" | "flows" | "snapshots"; page: PageInfo<unknown>; onPage: (page: number) => void }) {
   const { t } = useI18n();
-  if (page.totalPages <= 1 && kind !== "jobs") return null;
+  if (page.totalPages <= 1 && kind === "snapshots") return null;
   const from = page.totalItems ? page.start + 1 : 0;
-  return <nav className="list-pagination" aria-label={t(kind === "jobs" ? "pagination.jobs" : "pagination.snapshots")}><span>{t("pagination.showing", { from, end: page.end, total: page.totalItems })}</span><div className="list-pagination-controls">
+  const label = kind === "jobs" ? t("pagination.jobs") : kind === "flows" ? t("pagination.flows") : t("pagination.snapshots");
+  return <nav className="list-pagination" aria-label={label}><span>{t("pagination.showing", { from, end: page.end, total: page.totalItems })}</span><div className="list-pagination-controls">
     <button className="button small secondary" type="button" disabled={page.page === 1} onClick={() => onPage(page.page - 1)}>{t("common.previous")}</button>
     <span>{t("pagination.page", { page: page.page, total: page.totalPages })}</span>
     <button className="button small secondary" type="button" disabled={page.page === page.totalPages} onClick={() => onPage(page.page + 1)}>{t("common.next")}</button>
