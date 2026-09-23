@@ -81,6 +81,7 @@ impl Scheduler {
 mod tests {
     use super::logs::{flush_log_events, watch_logs};
     use super::*;
+    use crate::config::RuntimePolicy;
     use crate::process::{ManagedProcess, ProcessSpec};
     use crate::{JobState, NewJob, StokerPaths, Store};
     use async_trait::async_trait;
@@ -452,6 +453,61 @@ mod tests {
             job.failure_detail
                 .as_deref()
                 .is_some_and(|detail| detail.contains("mock process wait failed"))
+        );
+
+        shutdown_tx.send(true).unwrap();
+        drop(wake_tx);
+        scheduler_task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn runtime_timeout_cancels_process_and_persists_diagnostic() {
+        let (directory, store, scheduler) =
+            scheduler_fixture_with_controller(Arc::new(CancelAwareController));
+        store.lock_queue().unwrap();
+        store
+            .set_runtime_policy(RuntimePolicy {
+                termination_grace_ms: 10,
+                max_runtime_ms: Some(10),
+                startup_timeout_ms: 1_000,
+            })
+            .unwrap();
+        store.unlock_queue().unwrap();
+        let id = store
+            .create_job(NewJob {
+                name: "runtime timeout".into(),
+                user: "test".into(),
+                description: None,
+                cwd: directory.path().to_path_buf(),
+                command: vec!["ignored-by-fake".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+        let scheduler = Arc::new(scheduler);
+        let (wake_tx, wake_rx) = watch::channel(0_u64);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let scheduler_task = tokio::spawn(Arc::clone(&scheduler).run(wake_rx, shutdown_rx));
+        wake_tx.send_modify(|value| *value += 1);
+
+        let completion = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let job = store.get_job(id).unwrap();
+                if job.state == JobState::Cancelled
+                    && job
+                        .failure_detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.contains("maximum runtime exceeded"))
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(
+            completion.is_ok(),
+            "runtime timeout should cancel and finalize the process: job={:?}",
+            store.get_job(id).unwrap()
         );
 
         shutdown_tx.send(true).unwrap();

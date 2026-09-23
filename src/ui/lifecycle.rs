@@ -394,7 +394,41 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
+    use crate::NewJob;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn filesystem_roots_include_a_recent_existing_job_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = test_paths(&directory.path().join("data"));
+        paths.ensure().unwrap();
+        let recent = directory.path().join("recent-work");
+        fs::create_dir(&recent).unwrap();
+        let store = Store::open(&paths.database).unwrap();
+        store
+            .create_job(NewJob {
+                name: "recent".into(),
+                user: "tester".into(),
+                description: None,
+                cwd: recent,
+                command: vec!["echo".into(), "recent".into()],
+            })
+            .unwrap();
+        let state = ApiState::new(paths.clone(), store, ServiceClient::new(paths));
+        let response = crate::ui::handlers::filesystem::roots(axum::extract::State(state))
+            .await
+            .unwrap()
+            .0;
+        assert!(response.default_path.is_some());
+        assert!(
+            response
+                .locations
+                .iter()
+                .any(|location| location.kind == "recent"
+                    && location.label.contains("recent-work")
+                    && location.path.ends_with("recent-work"))
+        );
+    }
 
     struct FakeUiStartupGateway {
         reachable: VecDeque<bool>,

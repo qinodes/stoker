@@ -480,3 +480,358 @@ pub(super) fn schedule_from_row(
         Some(other) => Err(format!("unknown schedule kind {other}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::Store;
+    use crate::domain::flow::DependencyMode;
+    use crate::store::FlowTaskInput;
+
+    fn daily_store(
+        root: &std::path::Path,
+        flow_id: &str,
+        time: NaiveTime,
+        timezone: &str,
+    ) -> Store {
+        let store = Store::open(root.join(format!("{flow_id}.db"))).unwrap();
+        store
+            .create_flow(
+                flow_id.into(),
+                flow_id.into(),
+                "tester".into(),
+                ScheduleSpec::Daily {
+                    time,
+                    timezone: timezone.into(),
+                },
+            )
+            .unwrap();
+        store
+            .add_flow_task(FlowTaskInput {
+                flow_id: flow_id.into(),
+                task_id: "root".into(),
+                name: "Root".into(),
+                cwd: root.to_string_lossy().into_owned(),
+                command: "echo daily".into(),
+                retry: 0,
+                dependencies: vec![],
+                depend_mode: DependencyMode::All,
+            })
+            .unwrap();
+        store.commit_flow(flow_id).unwrap();
+        store
+    }
+
+    #[test]
+    fn daily_materialization_records_missed_due_and_nonexistent_local_times() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = daily_store(
+            directory.path(),
+            "daily-utc",
+            NaiveTime::from_hms_opt(8, 30, 0).unwrap(),
+            "UTC",
+        );
+        let now = DateTime::parse_from_rfc3339("2026-09-23T08:30:02Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        {
+            let mut connection = store.lock().unwrap();
+            connection.execute("UPDATE flow_definitions SET committed_at = '2026-09-20T09:00:00+00:00', daily_cursor_date = '2026-09-19' WHERE flow_id = 'daily-utc'", []).unwrap();
+            let transaction = connection.transaction().unwrap();
+            materialize_daily_occurrences(&transaction, now).unwrap();
+            materialize_daily_occurrences(&transaction, now).unwrap();
+            transaction.commit().unwrap();
+            let rows = connection
+                .prepare("SELECT local_date, state, reason FROM occurrences ORDER BY local_date")
+                .unwrap()
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(rows.len(), 3);
+            assert_eq!(
+                rows[0],
+                (
+                    "2026-09-21".into(),
+                    "SKIPPED".into(),
+                    Some("SKIPPED_MISSED".into())
+                )
+            );
+            assert_eq!(rows[1].0, "2026-09-22");
+            assert_eq!(rows[2], ("2026-09-23".into(), "PENDING".into(), None));
+            let cursor: String = connection
+                .query_row(
+                    "SELECT daily_cursor_date FROM flow_definitions WHERE flow_id = 'daily-utc'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(cursor, "2026-09-23");
+        }
+
+        let store = daily_store(
+            directory.path(),
+            "dst-gap",
+            NaiveTime::from_hms_opt(2, 30, 0).unwrap(),
+            "America/New_York",
+        );
+        let now = DateTime::parse_from_rfc3339("2026-03-08T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut connection = store.lock().unwrap();
+        connection.execute("UPDATE flow_definitions SET committed_at = '2026-03-01T00:00:00+00:00', schedule_effective_from = '2026-03-08', daily_cursor_date = '2026-03-07' WHERE flow_id = 'dst-gap'", []).unwrap();
+        let transaction = connection.transaction().unwrap();
+        materialize_daily_occurrences(&transaction, now).unwrap();
+        transaction.commit().unwrap();
+        let row: (String, String) = connection
+            .query_row(
+                "SELECT state, reason FROM occurrences WHERE flow_id = 'dst-gap'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("SKIPPED".into(), "SKIPPED_NONEXISTENT_TIME".into()));
+    }
+
+    #[test]
+    fn daily_materialization_reports_invalid_persisted_schedule_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = daily_store(
+            directory.path(),
+            "bad-daily",
+            NaiveTime::from_hms_opt(8, 30, 0).unwrap(),
+            "UTC",
+        );
+        let now = DateTime::parse_from_rfc3339("2026-09-23T09:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut connection = store.lock().unwrap();
+        for (column, value) in [
+            ("daily_time", "bad-time"),
+            ("daily_cursor_date", "bad-date"),
+            ("schedule_effective_from", "bad-date"),
+        ] {
+            connection.execute("UPDATE flow_definitions SET daily_time = '08:30', daily_cursor_date = NULL, schedule_effective_from = NULL WHERE flow_id = 'bad-daily'", []).unwrap();
+            connection
+                .execute(
+                    &format!(
+                        "UPDATE flow_definitions SET {column} = ?1 WHERE flow_id = 'bad-daily'"
+                    ),
+                    [value],
+                )
+                .unwrap();
+            let transaction = connection.transaction().unwrap();
+            let error = materialize_daily_occurrences(&transaction, now).unwrap_err();
+            assert!(
+                matches!(&error, StoreError::InvalidData(_)),
+                "{column}: {error}"
+            );
+        }
+        connection.execute("UPDATE flow_definitions SET daily_time = '08:30', daily_cursor_date = NULL, schedule_effective_from = NULL, schedule_timezone = 'Not/A_Zone' WHERE flow_id = 'bad-daily'", []).unwrap();
+        let transaction = connection.transaction().unwrap();
+        materialize_daily_occurrences(&transaction, now).unwrap();
+        let count: i64 = transaction
+            .query_row("SELECT COUNT(*) FROM occurrences", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    fn job_connection() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE jobs (
+                    id TEXT PRIMARY KEY, state TEXT, queue_order INTEGER, started_at TEXT,
+                    finished_at TEXT, exit_code INTEGER, failure_detail TEXT,
+                    schedule_kind TEXT
+                );",
+            )
+            .unwrap();
+        connection
+    }
+
+    fn insert_job(connection: &Connection, id: Uuid, kind: &str, state: &str, order: i64) {
+        connection
+            .execute(
+                "INSERT INTO jobs (id,state,queue_order,started_at,finished_at,exit_code,failure_detail,schedule_kind)
+                 VALUES (?1,?2,?3,'old-start','old-finish',7,'old-failure',?4)",
+                params![id.to_string(), state, order, kind],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn standalone_job_state_sync_handles_daily_requeue_terminal_states_and_non_standalone_ids() {
+        let connection = job_connection();
+        let daily = Uuid::new_v4();
+        let once = Uuid::new_v4();
+        let queued = Uuid::new_v4();
+        insert_job(&connection, daily, "daily", "QUEUED", 1);
+        insert_job(&connection, once, "once", "STARTING", 2);
+        insert_job(&connection, queued, "once", "QUEUED", 4);
+
+        sync_standalone_job_start(&connection, &format!("standalone/{daily}")).unwrap();
+        let (state, order, started): (String, Option<i64>, Option<String>) = connection
+            .query_row(
+                "SELECT state,queue_order,started_at FROM jobs WHERE id=?1",
+                [daily.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(state, "STARTING");
+        assert_eq!(order, None);
+        assert!(started.is_some());
+
+        sync_standalone_job_running(&connection, &format!("standalone/{daily}")).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT state FROM jobs WHERE id=?1",
+                    [daily.to_string()],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "RUNNING"
+        );
+
+        sync_standalone_job_terminal(&connection, &format!("standalone/{daily}"), "FAILED")
+            .unwrap();
+        let daily_row: (String, i64, Option<String>, Option<String>, Option<i32>, Option<String>) =
+            connection
+                .query_row(
+                    "SELECT state,queue_order,started_at,finished_at,exit_code,failure_detail FROM jobs WHERE id=?1",
+                    [daily.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+                )
+                .unwrap();
+        assert_eq!(daily_row, ("QUEUED".into(), 5, None, None, None, None));
+
+        for (state, expected) in [
+            ("SUCCEEDED", "SUCCEEDED"),
+            ("CANCELLED", "CANCELLED"),
+            ("FAILED", "FAILED"),
+            ("LOST", "FAILED"),
+        ] {
+            sync_standalone_job_terminal(&connection, &format!("standalone/{once}"), state)
+                .unwrap();
+            let actual: String = connection
+                .query_row(
+                    "SELECT state FROM jobs WHERE id=?1",
+                    [once.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(actual, expected);
+            connection
+                .execute(
+                    "UPDATE jobs SET state='STARTING',queue_order=2 WHERE id=?1",
+                    [once.to_string()],
+                )
+                .unwrap();
+        }
+
+        for flow_id in ["user-flow", "standalone/not-a-uuid", "standalone/a/b"] {
+            sync_standalone_job_start(&connection, flow_id).unwrap();
+            sync_standalone_job_running(&connection, flow_id).unwrap();
+            sync_standalone_job_terminal(&connection, flow_id, "FAILED").unwrap();
+        }
+    }
+
+    #[test]
+    fn schedule_row_mapping_covers_schedule_variants_and_bad_rows() {
+        let once = DateTime::parse_from_rfc3339("2026-09-23T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let cases = [
+            (
+                "once",
+                Some("2026-09-23T00:00:00Z"),
+                "08:30",
+                "Asia/Tokyo",
+                15_i64,
+                "minutes",
+                None::<&str>,
+            ),
+            ("daily", None, "08:30", "Asia/Tokyo", 15, "minutes", None),
+            (
+                "periodic",
+                None,
+                "08:30",
+                "Asia/Tokyo",
+                2,
+                "hours",
+                Some("2026-09-23T00:00:00Z"),
+            ),
+            ("periodic", None, "08:30", "Asia/Tokyo", 2, "minutes", None),
+        ];
+        for (kind, at, time, timezone, period, unit, expected_first_at) in cases {
+            let schedule = Connection::open_in_memory()
+                .unwrap()
+                .query_row(
+                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7",
+                    params![kind, at, time, timezone, period, unit, expected_first_at],
+                    |row| Ok(schedule_from_row(row, 0)),
+                )
+                .unwrap()
+                .unwrap();
+            match (kind, schedule) {
+                ("once", Some(ScheduleSpec::Once { at })) => assert_eq!(at, once),
+                ("daily", Some(ScheduleSpec::Daily { time, timezone })) => {
+                    assert_eq!(time, NaiveTime::from_hms_opt(8, 30, 0).unwrap());
+                    assert_eq!(timezone, "Asia/Tokyo");
+                }
+                ("periodic", Some(ScheduleSpec::Periodic { every, first_at })) => {
+                    assert_eq!(every.value, period as u32);
+                    assert_eq!(
+                        every.unit,
+                        match unit {
+                            "hours" => SchedulePeriodUnit::Hours,
+                            _ => SchedulePeriodUnit::Minutes,
+                        }
+                    );
+                    assert_eq!(first_at.is_some(), expected_first_at.is_some());
+                }
+                _ => panic!("unexpected schedule mapping for {kind}"),
+            }
+        }
+
+        for (kind, at, time, timezone, period, unit, first_at) in [
+            ("unknown", None, "08:30", "UTC", 1_i64, "minutes", None),
+            ("once", Some("bad-time"), "08:30", "UTC", 1, "minutes", None),
+            ("daily", None, "bad-time", "UTC", 1, "minutes", None),
+            ("periodic", None, "08:30", "UTC", -1, "minutes", None),
+            ("periodic", None, "08:30", "UTC", 1, "days", None),
+            (
+                "periodic",
+                None,
+                "08:30",
+                "UTC",
+                1,
+                "minutes",
+                Some("bad-time"),
+            ),
+        ] {
+            let result = Connection::open_in_memory()
+                .unwrap()
+                .query_row(
+                    "SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7",
+                    params![kind, at, time, timezone, period, unit, first_at],
+                    |row| Ok(schedule_from_row(row, 0)),
+                )
+                .unwrap();
+            assert!(result.is_err(), "{kind} {time} {unit}");
+        }
+        let absent = Connection::open_in_memory()
+            .unwrap()
+            .query_row("SELECT NULL", [], |row| Ok(schedule_from_row(row, 0)))
+            .unwrap();
+        assert_eq!(absent.unwrap(), None);
+    }
+}

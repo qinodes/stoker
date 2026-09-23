@@ -129,3 +129,75 @@ impl ScheduleSpec {
         Ok((Some(current), next))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveTime;
+
+    #[test]
+    fn calendar_resolution_rejects_incompatible_schedules_and_handles_dst_gap() {
+        let at = Utc.with_ymd_and_hms(2026, 3, 8, 7, 30, 0).unwrap();
+        let once = ScheduleSpec::Once { at };
+        let periodic = ScheduleSpec::Periodic {
+            every: SchedulePeriod {
+                value: 1,
+                unit: SchedulePeriodUnit::Hours,
+            },
+            first_at: None,
+        };
+        assert_eq!(once.timezone(), None);
+        assert_eq!(once.due_at(at.date_naive()).unwrap(), Some(at));
+        assert!(once.next_daily_after(at).unwrap_err().contains("daily"));
+        assert!(
+            periodic
+                .due_at(at.date_naive())
+                .unwrap_err()
+                .contains("once or daily")
+        );
+        assert!(
+            periodic
+                .periodic_window(at)
+                .unwrap_err()
+                .contains("activated")
+        );
+        assert!(
+            once.periodic_window(at)
+                .unwrap_err()
+                .contains("every schedule")
+        );
+
+        let daily = ScheduleSpec::Daily {
+            time: NaiveTime::from_hms_opt(2, 30, 0).unwrap(),
+            timezone: "America/New_York".into(),
+        };
+        assert_eq!(daily.timezone(), Some("America/New_York"));
+        assert_eq!(
+            daily
+                .due_at(chrono::NaiveDate::from_ymd_opt(2026, 3, 8).unwrap())
+                .unwrap(),
+            None
+        );
+        let next = daily.next_daily_after(at - Duration::seconds(1)).unwrap();
+        assert_eq!(
+            next.local_date,
+            chrono::NaiveDate::from_ymd_opt(2026, 3, 9).unwrap()
+        );
+        let invalid = ScheduleSpec::Daily {
+            time: NaiveTime::from_hms_opt(8, 0, 0).unwrap(),
+            timezone: "Nowhere/Invalid".into(),
+        };
+        assert!(
+            invalid
+                .due_at(at.date_naive())
+                .unwrap_err()
+                .contains("unknown timezone")
+        );
+        assert!(
+            invalid
+                .next_daily_after(at)
+                .unwrap_err()
+                .contains("unknown timezone")
+        );
+    }
+}

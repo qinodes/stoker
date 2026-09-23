@@ -157,6 +157,8 @@ fn stream_log(path: &Path, output: &mut impl Write) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NewJob;
+    use crate::domain::flow::ExecutionMode;
 
     #[test]
     fn stream_log_preserves_large_output_without_one_file_sized_buffer() {
@@ -178,5 +180,48 @@ mod tests {
         stream_log(&directory.path().join("missing.log"), &mut output).unwrap();
 
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn hidden_standalone_attempt_logs_are_discovered_across_both_streams() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("data");
+        let paths = StokerPaths {
+            root: root.clone(),
+            database: root.join("stoker.db"),
+            runs: root.join("runs"),
+            lock: root.join("stoker.lock"),
+            endpoint: root.join("stoker.sock"),
+        };
+        paths.ensure().unwrap();
+        let store = Store::open(&paths.database).unwrap();
+        let id = store
+            .create_job(NewJob {
+                name: "retry logs".into(),
+                user: "tester".into(),
+                description: None,
+                cwd: directory.path().to_path_buf(),
+                command: vec!["echo".into(), "logs".into()],
+            })
+            .unwrap();
+        assert!(!stream_hidden_attempt_logs(&paths, &store, id).unwrap());
+        store
+            .configure_standalone(id, ExecutionMode::Serial, None, 1)
+            .unwrap();
+        store.commit_job(id).unwrap();
+        assert!(!stream_hidden_attempt_logs(&paths, &store, id).unwrap());
+        let attempt = store.claim_flow_task(chrono::Utc::now()).unwrap().unwrap();
+        assert!(!stream_hidden_attempt_logs(&paths, &store, id).unwrap());
+        let logs_dir = paths
+            .runs
+            .join("flows")
+            .join(attempt.run_id.to_string())
+            .join("job")
+            .join("attempt-1");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+        std::fs::write(logs_dir.join("stdout.log"), b"one out\n").unwrap();
+        std::fs::write(logs_dir.join("stderr.log"), b"one err\n").unwrap();
+        assert!(stream_hidden_attempt_logs(&paths, &store, id).unwrap());
+        logs(&paths, id, false).unwrap();
     }
 }

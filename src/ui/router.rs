@@ -311,7 +311,7 @@ mod tests {
             .set_mode(crate::domain::flow::ExecutionMode::Scheduled)
             .unwrap();
         let scheduled = json_response(
-            build_router(state)
+            build_router(state.clone())
                 .oneshot(
                     Request::get("/api/v1/workspace")
                         .body(Body::empty())
@@ -420,6 +420,218 @@ mod tests {
             json_response(stale).await["details"]["current_draft_revision"],
             0
         );
+    }
+
+    #[tokio::test]
+    async fn scheduled_flow_routes_cover_task_run_and_schedule_lifecycle() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        let router = build_router(state.clone());
+        let invalid = post_json(
+            router.clone(),
+            "/api/v1/scheduled/flows",
+            serde_json::json!({
+                "flow_id": "bad-schedule", "name": "Bad", "owner": "web",
+                "schedule": {"kind": "once", "at": "not-a-date"}
+            }),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+        let created = json_response(
+            post_json(
+                router.clone(),
+                "/api/v1/scheduled/flows",
+                serde_json::json!({
+                    "flow_id": "deploy", "name": "Deploy", "owner": "web",
+                    "schedule": {"kind": "once", "at": (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339()}
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(created["flow"]["committed"], false);
+
+        let root = json_response(
+            post_json(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/deploy/tasks",
+                serde_json::json!({
+                    "task_id": "build", "name": "Build", "cwd": ".", "command": "echo build",
+                    "retry": 1, "expected_draft_revision": 0
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(root["flow"]["tasks"].as_array().unwrap().len(), 1);
+        assert_eq!(root["flow"]["draft_revision"], 0);
+
+        let child = post_json(
+            build_router(state.clone()),
+            "/api/v1/scheduled/flows/deploy/tasks",
+            serde_json::json!({
+                "task_id": "publish", "name": "Publish", "cwd": ".", "command": "echo publish",
+                "retry": 0, "dependencies": [{"upstream_task_id": "build", "status": "succeeded"}],
+                "expected_draft_revision": 0
+            }),
+        )
+        .await;
+        assert_eq!(child.status(), StatusCode::OK);
+
+        assert_eq!(
+            post_empty(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/deploy/commit",
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            post_empty(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/deploy/freeze",
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        let stale_patch = build_router(state.clone())
+            .oneshot(json_request(
+                "PATCH",
+                "/api/v1/scheduled/flows/deploy/tasks/publish",
+                serde_json::json!({"command": "echo stale", "expected_draft_revision": 1}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(stale_patch.status(), StatusCode::CONFLICT);
+
+        let patched = build_router(state.clone())
+            .oneshot(json_request(
+                "PATCH",
+                "/api/v1/scheduled/flows/deploy/tasks/publish",
+                serde_json::json!({
+                    "command": "echo published", "cwd": "subdir", "retry": 3,
+                    "expected_draft_revision": 0
+                }),
+            ))
+            .await
+            .unwrap();
+        let patched_status = patched.status();
+        let patched = json_response(patched).await;
+        assert_eq!(patched_status, StatusCode::OK, "{patched}");
+        assert_eq!(patched["flow"]["tasks"][1]["command"], "echo published");
+        assert_eq!(patched["flow"]["tasks"][1]["retry"], 3);
+
+        let applied = post_json(
+            build_router(state.clone()),
+            "/api/v1/scheduled/flows/deploy/apply",
+            serde_json::json!({"expected_draft_revision": 1}),
+        )
+        .await;
+        assert_eq!(applied.status(), StatusCode::OK);
+        assert_eq!(json_response(applied).await["flow"]["committed"], true);
+        let run = post_json(
+            build_router(state.clone()),
+            "/api/v1/scheduled/flows/deploy/runs",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(run.status(), StatusCode::CREATED);
+        let run = json_response(run).await["run"]["run_id"].clone();
+        assert!(run.is_string());
+
+        let listed = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get("/api/v1/scheduled/flows")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(listed["flows"].as_array().unwrap().len(), 1);
+        let detail = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get("/api/v1/scheduled/flows/deploy")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(detail["flow"]["flow_id"], "deploy");
+
+        let runs = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get("/api/v1/scheduled/flows/deploy/runs")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(runs["runs"].as_array().unwrap().len(), 1);
+        let occurrences = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get("/api/v1/scheduled/flows/deploy/occurrences")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(!occurrences["occurrences"].as_array().unwrap().is_empty());
+
+        let disabled = json_response(
+            post_empty(
+                build_router(state.clone()),
+                "/api/v1/scheduled/flows/deploy/disable",
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(disabled["flow"]["enabled"], false);
+        let enabled = post_empty(
+            build_router(state.clone()),
+            "/api/v1/scheduled/flows/deploy/enable",
+        )
+        .await;
+        assert_eq!(enabled.status(), StatusCode::OK);
+
+        let frozen = post_empty(
+            build_router(state.clone()),
+            "/api/v1/scheduled/flows/deploy/freeze",
+        )
+        .await;
+        assert_eq!(json_response(frozen).await["flow"]["frozen"], true);
+        let discarded = post_json(
+            build_router(state.clone()),
+            "/api/v1/scheduled/flows/deploy/discard",
+            serde_json::json!({"expected_draft_revision": 1}),
+        )
+        .await;
+        assert_eq!(discarded.status(), StatusCode::CONFLICT);
+
+        let deleted = build_router(state)
+            .oneshot(
+                Request::delete("/api/v1/scheduled/flows/deploy")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(deleted.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
@@ -532,6 +744,249 @@ mod tests {
             json_response(response).await["job"]["definition"]["mode"],
             "scheduled"
         );
+    }
+
+    #[tokio::test]
+    async fn scheduled_job_routes_cover_schedule_validation_and_draft_lifecycle() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = scheduled_state(directory.path());
+        let router = build_router(state.clone());
+
+        let invalid = post_json(
+            router.clone(),
+            "/api/v1/scheduled/jobs",
+            serde_json::json!({
+                "user": "ops", "name": "invalid", "cwd": ".", "command": "echo invalid",
+                "schedule": {"kind": "daily", "time": "25:61", "timezone": "UTC"},
+                "retry": 0
+            }),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+        let created = json_response(
+            post_json(
+                router.clone(),
+                "/api/v1/scheduled/jobs",
+                serde_json::json!({
+                    "user": "ops", "name": "rotate", "cwd": ".", "command": "echo rotate",
+                    "description": "log rotation",
+                    "schedule": {"kind": "periodic", "every": "15m", "first_at": null},
+                    "retry": 2
+                }),
+            )
+            .await,
+        )
+        .await;
+        let id = created["job"]["job"]["id"].as_str().unwrap();
+        assert_eq!(created["job"]["definition"]["retry"], 2);
+        assert_eq!(created["job"]["job"]["description"], "log rotation");
+        let offline_commit = post_empty(
+            build_router(state.clone()),
+            &format!("/api/v1/scheduled/jobs/{id}/commit"),
+        )
+        .await;
+        assert_eq!(offline_commit.status(), StatusCode::SERVICE_UNAVAILABLE);
+        state
+            .store
+            .commit_flow(&format!("standalone/{id}"))
+            .unwrap();
+
+        let listed = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get("/api/v1/scheduled/jobs")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(listed["jobs"].as_array().unwrap().len(), 1);
+
+        let detail = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get(format!("/api/v1/scheduled/jobs/{id}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(detail["job"]["job"]["id"], id);
+
+        let invalid_id = build_router(state.clone())
+            .oneshot(
+                Request::get("/api/v1/scheduled/jobs/not-a-uuid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(invalid_id.status(), StatusCode::BAD_REQUEST);
+
+        let invalid_period = put_json(
+            build_router(state.clone()),
+            &format!("/api/v1/scheduled/jobs/{id}/schedule"),
+            serde_json::json!({
+                "schedule": {"kind": "periodic", "every": "0s", "first_at": "not-a-date"},
+                "expected_draft_revision": 0
+            }),
+        )
+        .await;
+        assert_eq!(invalid_period.status(), StatusCode::BAD_REQUEST);
+
+        let frozen = json_response(
+            post_empty(
+                build_router(state.clone()),
+                &format!("/api/v1/scheduled/jobs/{id}/freeze"),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(frozen["job"]["definition"]["mode"], "scheduled");
+        assert!(
+            state
+                .store
+                .get_flow(&format!("standalone/{id}"))
+                .unwrap()
+                .frozen
+        );
+
+        let updated = json_response(
+            put_json(
+                build_router(state.clone()),
+                &format!("/api/v1/scheduled/jobs/{id}/schedule"),
+                serde_json::json!({
+                    "schedule": {"kind": "periodic", "every": "30m", "first_at": null},
+                    "expected_draft_revision": 0
+                }),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(updated["job"]["definition"]["schedule"]["every"], "15m");
+        assert!(
+            state
+                .store
+                .get_flow(&format!("standalone/{id}"))
+                .unwrap()
+                .has_draft
+        );
+
+        let stale = post_json(
+            build_router(state.clone()),
+            &format!("/api/v1/scheduled/jobs/{id}/apply"),
+            serde_json::json!({"expected_draft_revision": 0}),
+        )
+        .await;
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            json_response(stale).await["details"]["current_draft_revision"],
+            1
+        );
+
+        let discarded = post_json(
+            build_router(state.clone()),
+            &format!("/api/v1/scheduled/jobs/{id}/discard"),
+            serde_json::json!({"expected_draft_revision": 1}),
+        )
+        .await;
+        assert_eq!(discarded.status(), StatusCode::OK);
+        assert!(
+            !state
+                .store
+                .get_flow(&format!("standalone/{id}"))
+                .unwrap()
+                .has_draft
+        );
+
+        let second_edit = put_json(
+            build_router(state.clone()),
+            &format!("/api/v1/scheduled/jobs/{id}/schedule"),
+            serde_json::json!({
+                "schedule": {"kind": "periodic", "every": "45m", "first_at": null},
+                "expected_draft_revision": 1
+            }),
+        )
+        .await;
+        assert_eq!(second_edit.status(), StatusCode::OK);
+
+        let applied = json_response(
+            post_json(
+                build_router(state.clone()),
+                &format!("/api/v1/scheduled/jobs/{id}/apply"),
+                serde_json::json!({"expected_draft_revision": 2}),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(applied["job"]["definition"]["schedule"]["every"], "45m");
+        assert!(
+            !state
+                .store
+                .get_flow(&format!("standalone/{id}"))
+                .unwrap()
+                .has_draft
+        );
+
+        let disabled = json_response(
+            post_empty(
+                build_router(state.clone()),
+                &format!("/api/v1/scheduled/jobs/{id}/disable"),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(disabled["job"]["definition"]["enabled"], false);
+        let enabled = json_response(
+            post_empty(
+                build_router(state.clone()),
+                &format!("/api/v1/scheduled/jobs/{id}/enable"),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(enabled["job"]["definition"]["enabled"], true);
+
+        let occurrences = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get(format!("/api/v1/scheduled/jobs/{id}/occurrences"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(!occurrences["occurrences"].as_array().unwrap().is_empty());
+        let runs = json_response(
+            build_router(state.clone())
+                .oneshot(
+                    Request::get(format!("/api/v1/scheduled/jobs/{id}/runs"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(runs["runs"].as_array().unwrap().is_empty());
+
+        let created_run = post_json(
+            build_router(state.clone()),
+            &format!("/api/v1/scheduled/jobs/{id}/runs"),
+            serde_json::json!({"replace_next": false}),
+        )
+        .await;
+        assert_eq!(created_run.status(), StatusCode::CREATED);
+        let created_run = json_response(created_run).await;
+        assert_eq!(created_run["run"]["source"], "MANUAL");
+        assert_eq!(created_run["run"]["flow_id"], format!("standalone/{id}"));
     }
 
     #[tokio::test]
@@ -705,6 +1160,73 @@ mod tests {
             .await
             .status(),
             StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduled_run_controls_cover_cancel_and_concurrency_validation() {
+        let directory = tempfile::tempdir().unwrap();
+        let capacity_state = scheduled_state(directory.path());
+        capacity_state.store.lock_queue().unwrap();
+        let concurrency = json_response(
+            put_json(
+                build_router(capacity_state.clone()),
+                "/api/v1/scheduled/settings/max-concurrency",
+                serde_json::json!({"value": 3}),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(concurrency["max_concurrency"], 3, "{concurrency}");
+        capacity_state.store.unlock_queue().unwrap();
+
+        let directory = tempfile::tempdir().unwrap();
+        let (state, run_id, _attempt_id) = seeded_running_flow(directory.path());
+
+        let invalid_run = build_router(state.clone())
+            .oneshot(
+                Request::get("/api/v1/scheduled/runs/not-a-uuid")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(invalid_run.status(), StatusCode::BAD_REQUEST);
+
+        let absent_attempt = build_router(state.clone())
+            .oneshot(
+                Request::get(format!(
+                    "/api/v1/scheduled/runs/{run_id}/tasks/root/attempts/99/logs"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(absent_attempt.status(), StatusCode::NOT_FOUND);
+
+        let cancelled_task = post_empty(
+            build_router(state.clone()),
+            &format!("/api/v1/scheduled/runs/{run_id}/tasks/root/cancel"),
+        )
+        .await;
+        assert_eq!(cancelled_task.status(), StatusCode::OK);
+        assert_eq!(
+            json_response(cancelled_task).await["run"]["tasks"][0]["cancel_requested"],
+            true
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let (state, run_id, _attempt_id) = seeded_running_flow(directory.path());
+        let cancelled_run = post_empty(
+            build_router(state),
+            &format!("/api/v1/scheduled/runs/{run_id}/cancel"),
+        )
+        .await;
+        assert_eq!(cancelled_run.status(), StatusCode::OK);
+        assert_eq!(
+            json_response(cancelled_run).await["run"]["state"],
+            "CANCELLING"
         );
     }
 

@@ -385,3 +385,101 @@ fn normalize_queue(connection: &Connection) -> Result<(), StoreError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod due_tests {
+    use super::*;
+
+    #[test]
+    fn standalone_due_checks_once_daily_and_invalid_persisted_schedules() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().join("stoker.db")).unwrap();
+        let id = store
+            .create_job(crate::NewJob {
+                name: "due fixture".into(),
+                user: "tester".into(),
+                description: None,
+                cwd: directory.path().to_path_buf(),
+                command: vec!["echo".into(), "due".into()],
+            })
+            .unwrap();
+        let connection = store.lock().unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 9, 23, 8, 30, 2).unwrap();
+        assert!(standalone_job_is_due(&connection, id, now).unwrap());
+
+        connection.execute("UPDATE jobs SET mode = 'scheduled', schedule_kind = 'once', schedule_at_utc = '2026-09-23T08:30:00Z' WHERE id = ?1", [id.to_string()]).unwrap();
+        assert!(standalone_job_is_due(&connection, id, now).unwrap());
+        for at in ["2026-09-24T08:30:00Z", "2026-09-21T08:30:00Z", "not-a-date"] {
+            connection
+                .execute(
+                    "UPDATE jobs SET schedule_at_utc = ?2 WHERE id = ?1",
+                    params![id.to_string(), at],
+                )
+                .unwrap();
+            assert!(
+                !standalone_job_is_due(&connection, id, now).unwrap(),
+                "{at}"
+            );
+        }
+
+        connection.execute("UPDATE jobs SET schedule_kind = 'daily', daily_time = '08:30', schedule_timezone = 'UTC', last_dispatch_sequence = 0 WHERE id = ?1", [id.to_string()]).unwrap();
+        assert!(standalone_job_is_due(&connection, id, now).unwrap());
+        connection
+            .execute(
+                "UPDATE jobs SET last_dispatch_sequence = 20260923 WHERE id = ?1",
+                [id.to_string()],
+            )
+            .unwrap();
+        assert!(!standalone_job_is_due(&connection, id, now).unwrap());
+        connection
+            .execute(
+                "UPDATE jobs SET last_dispatch_sequence = 0 WHERE id = ?1",
+                [id.to_string()],
+            )
+            .unwrap();
+        assert!(
+            !standalone_job_is_due(&connection, id, now - chrono::Duration::seconds(3)).unwrap()
+        );
+        assert!(
+            !standalone_job_is_due(&connection, id, now + chrono::Duration::seconds(4)).unwrap()
+        );
+
+        connection
+            .execute(
+                "UPDATE jobs SET schedule_timezone = NULL WHERE id = ?1",
+                [id.to_string()],
+            )
+            .unwrap();
+        assert!(!standalone_job_is_due(&connection, id, now).unwrap());
+        connection
+            .execute(
+                "UPDATE jobs SET schedule_timezone = 'Not/A_Zone' WHERE id = ?1",
+                [id.to_string()],
+            )
+            .unwrap();
+        assert!(
+            matches!(standalone_job_is_due(&connection, id, now), Err(StoreError::InvalidData(message)) if message.contains("timezone"))
+        );
+        connection
+            .execute(
+                "UPDATE jobs SET schedule_timezone = 'UTC', daily_time = 'bad-time' WHERE id = ?1",
+                [id.to_string()],
+            )
+            .unwrap();
+        assert!(matches!(
+            standalone_job_is_due(&connection, id, now),
+            Err(StoreError::InvalidData(_))
+        ));
+
+        connection.execute("UPDATE jobs SET schedule_timezone = 'America/New_York', daily_time = '02:30' WHERE id = ?1", [id.to_string()]).unwrap();
+        let dst_gap = Utc.with_ymd_and_hms(2026, 3, 8, 7, 30, 0).unwrap();
+        assert!(!standalone_job_is_due(&connection, id, dst_gap).unwrap());
+        connection
+            .execute(
+                "UPDATE jobs SET schedule_kind = NULL WHERE id = ?1",
+                [id.to_string()],
+            )
+            .unwrap();
+        assert!(!standalone_job_is_due(&connection, id, now).unwrap());
+    }
+}

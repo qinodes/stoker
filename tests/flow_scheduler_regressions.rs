@@ -234,6 +234,14 @@ fn manual_run_obeys_queue_lock_and_request_id_is_idempotent_while_active() {
         .unwrap();
 
     assert_eq!(replay.run_id, first.run_id);
+    assert!(matches!(
+        store.create_flow_run("manual-gates", "MANUAL", true, Some(request_id)),
+        Err(StoreError::InvalidData(message)) if message.contains("different parameters")
+    ));
+    assert!(matches!(
+        store.create_flow_run("another-flow", "MANUAL", false, Some(request_id)),
+        Err(StoreError::InvalidData(message)) if message.contains("different parameters")
+    ));
 }
 
 #[test]
@@ -646,6 +654,39 @@ fn skip_next_is_replaced_on_spawn_acknowledgement() {
 
     assert_eq!(
         store.list_occurrences("skip-next").unwrap()[0].state,
+        OccurrenceState::Replaced
+    );
+}
+
+#[test]
+fn skip_next_daily_manual_run_materializes_and_reserves_the_next_occurrence() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    let (time, _) = next_minute();
+    create_scheduled_flow(
+        &store,
+        directory.path(),
+        "skip-next-daily",
+        ScheduleSpec::Daily {
+            time,
+            timezone: "UTC".into(),
+        },
+    );
+    use_scheduled_mode(&store);
+
+    store
+        .create_flow_run("skip-next-daily", "MANUAL", true, None)
+        .unwrap();
+    let occurrences = store.list_occurrences("skip-next-daily").unwrap();
+    assert_eq!(occurrences.len(), 1);
+    assert_eq!(occurrences[0].state, OccurrenceState::Reserved);
+
+    let execution = store.claim_flow_task(Utc::now()).unwrap().unwrap();
+    store
+        .mark_flow_attempt_running(execution.attempt_id)
+        .unwrap();
+    assert_eq!(
+        store.list_occurrences("skip-next-daily").unwrap()[0].state,
         OccurrenceState::Replaced
     );
 }

@@ -465,3 +465,348 @@ pub(super) fn propagate_task_states(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn empty_connection() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE flow_definitions (
+                    flow_id TEXT, internal_definition_id TEXT, name TEXT, owner TEXT, mode TEXT,
+                    schedule_kind TEXT, schedule_at_utc TEXT, daily_time TEXT,
+                    schedule_timezone TEXT, period_value INTEGER, period_unit TEXT,
+                    period_first_at_utc TEXT, schedule_generation INTEGER, committed INTEGER,
+                    frozen INTEGER, enabled INTEGER, graph_revision INTEGER, draft_revision INTEGER,
+                    queue_order INTEGER, draft_json TEXT
+                );
+                CREATE TABLE flow_tasks (
+                    flow_id TEXT, task_id TEXT, name TEXT, cwd TEXT, command_line TEXT,
+                    retry INTEGER, depend_mode TEXT, sequence INTEGER
+                );
+                CREATE TABLE flow_dependencies (
+                    flow_id TEXT, task_id TEXT, upstream_task_id TEXT, status TEXT
+                );",
+            )
+            .unwrap();
+        connection
+    }
+
+    fn insert_definition(
+        connection: &Connection,
+        kind: Option<&str>,
+        at: Option<&str>,
+        daily: Option<&str>,
+        timezone: Option<&str>,
+        period_value: Option<i64>,
+        period_unit: Option<&str>,
+        mode: &str,
+        internal: &str,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO flow_definitions VALUES (
+                    'flow', ?1, 'Flow', 'owner', ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL,
+                    1, 1, 0, 1, 2, 0, NULL, NULL
+                )",
+                params![
+                    internal,
+                    mode,
+                    kind,
+                    at,
+                    daily,
+                    timezone,
+                    period_value,
+                    period_unit
+                ],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn mapping_parsers_and_state_serializers_cover_valid_and_invalid_values() {
+        let id = Uuid::new_v4();
+        assert_eq!(parse_uuid(&id.to_string()).unwrap(), id);
+        assert!(parse_uuid("bad-id").is_err());
+        assert_eq!(parse_mode("scheduled").unwrap(), ExecutionMode::Scheduled);
+        assert!(parse_mode("unknown").is_err());
+        assert_eq!(
+            parse_datetime("2026-09-23T00:00:00Z").unwrap(),
+            DateTime::parse_from_rfc3339("2026-09-23T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+        assert!(parse_datetime("not-a-date").is_err());
+        assert_eq!(parse_task_state("RUNNING").unwrap(), TaskRunState::Running);
+        assert!(parse_task_state("UNKNOWN").is_err());
+        assert_eq!(
+            parse_flow_state("FAILED_TO_START").unwrap(),
+            FlowRunState::FailedToStart
+        );
+        assert!(parse_flow_state("UNKNOWN").is_err());
+        assert_eq!(
+            parse_dependency_status("succeeded").unwrap(),
+            DependencyStatus::Succeeded
+        );
+        assert!(parse_dependency_status("unknown").is_err());
+
+        let task_states = [
+            TaskRunState::Waiting,
+            TaskRunState::Ready,
+            TaskRunState::Starting,
+            TaskRunState::Running,
+            TaskRunState::RetryWait,
+            TaskRunState::Cancelling,
+            TaskRunState::Succeeded,
+            TaskRunState::Failed,
+            TaskRunState::Cancelled,
+            TaskRunState::Skipped,
+            TaskRunState::Lost,
+        ];
+        for state in task_states {
+            assert_eq!(parse_task_state(task_state_string(state)).unwrap(), state);
+        }
+        let flow_states = [
+            FlowRunState::Starting,
+            FlowRunState::Running,
+            FlowRunState::Cancelling,
+            FlowRunState::Recovering,
+            FlowRunState::Succeeded,
+            FlowRunState::Failed,
+            FlowRunState::FailedToStart,
+            FlowRunState::Cancelled,
+            FlowRunState::Skipped,
+            FlowRunState::Lost,
+        ];
+        for state in flow_states {
+            assert_eq!(parse_flow_state(flow_state_string(state)).unwrap(), state);
+        }
+        for state in [
+            AttemptState::Starting,
+            AttemptState::Running,
+            AttemptState::Succeeded,
+            AttemptState::Failed,
+            AttemptState::Cancelled,
+            AttemptState::Lost,
+        ] {
+            assert!(!attempt_state_string(state).is_empty());
+        }
+        for state in [
+            OccurrenceState::Pending,
+            OccurrenceState::Reserved,
+            OccurrenceState::Uncertain,
+            OccurrenceState::Started,
+            OccurrenceState::Replaced,
+            OccurrenceState::Expired,
+            OccurrenceState::Superseded,
+            OccurrenceState::Skipped,
+        ] {
+            assert!(!occurrence_state_string(state).is_empty());
+        }
+    }
+
+    #[test]
+    fn flow_row_mapping_reads_each_schedule_and_task_shape() {
+        let cases = [
+            (None, None, None, None, None, None),
+            (
+                Some("once"),
+                Some("2026-09-23T00:00:00Z"),
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                Some("daily"),
+                None,
+                Some("08:30"),
+                Some("Asia/Tokyo"),
+                None,
+                None,
+            ),
+            (Some("periodic"), None, None, None, Some(3), Some("minutes")),
+            (Some("periodic"), None, None, None, Some(2), Some("hours")),
+        ];
+        for (kind, at, daily, timezone, period, unit) in cases {
+            let connection = empty_connection();
+            insert_definition(
+                &connection,
+                kind,
+                at,
+                daily,
+                timezone,
+                period,
+                unit,
+                "scheduled",
+                &Uuid::new_v4().to_string(),
+            );
+            connection
+                .execute(
+                    "INSERT INTO flow_tasks VALUES ('flow','root','Root','.','echo root',2,'all',0)",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO flow_dependencies VALUES ('flow','root','parent','succeeded')",
+                    [],
+                )
+                .unwrap();
+            let flow = load_flow_base(&connection, "flow").unwrap();
+            assert_eq!(flow.mode, ExecutionMode::Scheduled);
+            assert_eq!(flow.tasks.len(), 1);
+            assert_eq!(flow.tasks[0].retry, 2);
+            assert_eq!(flow.tasks[0].dependencies[0].upstream_task_id, "parent");
+            assert_eq!(flow.schedule.is_some(), kind.is_some());
+        }
+    }
+
+    #[test]
+    fn flow_row_mapping_rejects_malformed_schedule_and_task_data() {
+        let cases = [
+            (Some("once"), None, None, None, None, None),
+            (Some("once"), Some("invalid"), None, None, None, None),
+            (Some("daily"), None, None, Some("UTC"), None, None),
+            (Some("daily"), None, Some("25:00"), Some("UTC"), None, None),
+            (Some("periodic"), None, None, None, None, Some("minutes")),
+            (
+                Some("periodic"),
+                None,
+                None,
+                None,
+                Some(-1),
+                Some("minutes"),
+            ),
+            (Some("periodic"), None, None, None, Some(1), Some("days")),
+            (Some("mystery"), None, None, None, None, None),
+        ];
+        for (kind, at, daily, timezone, period, unit) in cases {
+            let connection = empty_connection();
+            insert_definition(
+                &connection,
+                kind,
+                at,
+                daily,
+                timezone,
+                period,
+                unit,
+                "scheduled",
+                &Uuid::new_v4().to_string(),
+            );
+            assert!(load_flow_base(&connection, "flow").is_err(), "{kind:?}");
+        }
+
+        for (mode, internal, retry, sequence, depend_mode, dependency_status) in [
+            (
+                "unknown",
+                Uuid::new_v4().to_string(),
+                0,
+                0,
+                "all",
+                "succeeded",
+            ),
+            ("scheduled", "bad-uuid".to_owned(), 0, 0, "all", "succeeded"),
+            (
+                "scheduled",
+                Uuid::new_v4().to_string(),
+                -1,
+                0,
+                "all",
+                "succeeded",
+            ),
+            (
+                "scheduled",
+                Uuid::new_v4().to_string(),
+                0,
+                -1,
+                "all",
+                "succeeded",
+            ),
+            (
+                "scheduled",
+                Uuid::new_v4().to_string(),
+                0,
+                0,
+                "unknown",
+                "succeeded",
+            ),
+            (
+                "scheduled",
+                Uuid::new_v4().to_string(),
+                0,
+                0,
+                "all",
+                "unknown",
+            ),
+        ] {
+            let connection = empty_connection();
+            insert_definition(
+                &connection,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                mode,
+                &internal,
+            );
+            connection
+                .execute(
+                    "INSERT INTO flow_tasks VALUES ('flow','root','Root','.','echo root',?1,?2,?3)",
+                    params![retry, depend_mode, sequence],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO flow_dependencies VALUES ('flow','root','parent',?1)",
+                    [dependency_status],
+                )
+                .unwrap();
+            assert!(load_flow_base(&connection, "flow").is_err());
+        }
+        let connection = empty_connection();
+        assert!(load_flow_base(&connection, "missing").is_err());
+    }
+
+    #[test]
+    fn task_outcomes_include_only_terminal_task_states() {
+        let run_id = Uuid::new_v4();
+        let states = [
+            TaskRunState::Waiting,
+            TaskRunState::Ready,
+            TaskRunState::Starting,
+            TaskRunState::Running,
+            TaskRunState::RetryWait,
+            TaskRunState::Cancelling,
+            TaskRunState::Succeeded,
+            TaskRunState::Failed,
+            TaskRunState::Cancelled,
+            TaskRunState::Skipped,
+            TaskRunState::Lost,
+        ];
+        let tasks = states
+            .iter()
+            .enumerate()
+            .map(|(index, state)| TaskRun {
+                run_id,
+                task_id: index.to_string(),
+                state: *state,
+                attempt_count: 0,
+                next_attempt_at: None,
+                cancel_requested: false,
+            })
+            .collect::<Vec<_>>();
+        let outcomes = task_outcomes(&tasks);
+        assert_eq!(outcomes.len(), 5);
+        assert_eq!(outcomes["6"], TaskOutcome::Succeeded);
+        assert_eq!(outcomes["7"], TaskOutcome::Failed);
+        assert_eq!(outcomes["8"], TaskOutcome::Cancelled);
+        assert_eq!(outcomes["9"], TaskOutcome::Skipped);
+        assert_eq!(outcomes["10"], TaskOutcome::Lost);
+    }
+}

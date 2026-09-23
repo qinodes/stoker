@@ -245,3 +245,7 @@ fn request(store: &Store, command: RequestCommand) -> Result<()> {
 fn standalone_flow_id(id: Uuid) -> String {
     format!("standalone/{id}")
 }
+
+#[cfg(test)]
+#[path = "extended_commands_tests.rs"]
+mod tests;

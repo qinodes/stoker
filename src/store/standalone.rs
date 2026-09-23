@@ -354,3 +354,89 @@ pub(super) fn sync_standalone_job_from_flow(
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NewJob;
+
+    fn draft_job(store: &Store, root: &std::path::Path) -> Uuid {
+        store
+            .create_job(NewJob {
+                name: "standalone fixture".into(),
+                user: "tester".into(),
+                description: None,
+                cwd: root.to_path_buf(),
+                command: vec!["echo".into(), "fixture".into()],
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn repeated_draft_configuration_replaces_the_hidden_definition() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().join("stoker.db")).unwrap();
+        let id = draft_job(&store, directory.path());
+        assert!(
+            matches!(store.create_standalone_run(id, false, None), Err(StoreError::InvalidData(message)) if message.contains("no committed"))
+        );
+        let first = store
+            .configure_standalone(id, ExecutionMode::Serial, None, 1)
+            .unwrap();
+        assert_eq!(first.retry, 1);
+        let second = store
+            .configure_standalone(id, ExecutionMode::Serial, None, 3)
+            .unwrap();
+        assert_eq!(second.retry, 3);
+        let hidden = store.get_flow(&standalone_flow_id(id)).unwrap();
+        assert_eq!(hidden.tasks.len(), 1);
+        assert_eq!(hidden.tasks[0].retry, 3);
+        assert!(!hidden.committed);
+        store.commit_job(id).unwrap();
+        assert!(
+            matches!(store.configure_standalone(id, ExecutionMode::Serial, None, 0), Err(StoreError::InvalidData(message)) if message.contains("DRAFT"))
+        );
+        assert!(
+            matches!(store.manual_request(Uuid::new_v4()), Err(StoreError::InvalidData(message)) if message.contains("does not exist"))
+        );
+    }
+
+    #[test]
+    fn hidden_definition_sync_rejects_malformed_persisted_schedule_data() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path().join("stoker.db")).unwrap();
+        let id = draft_job(&store, directory.path());
+        let mut connection = store.lock().unwrap();
+        for (kind, columns, message) in [
+            ("once", "schedule_at_utc = NULL", "timestamp"),
+            (
+                "daily",
+                "daily_time = NULL, schedule_timezone = 'UTC'",
+                "time",
+            ),
+            (
+                "daily",
+                "daily_time = '08:30', schedule_timezone = NULL",
+                "timezone",
+            ),
+            (
+                "periodic",
+                "period_value = NULL, period_unit = 'minutes'",
+                "value",
+            ),
+            ("periodic", "period_value = 1, period_unit = 'days'", "unit"),
+            ("unknown", "schedule_at_utc = NULL", "unknown schedule kind"),
+        ] {
+            let transaction = connection.transaction().unwrap();
+            transaction.execute("UPDATE jobs SET mode = 'scheduled', schedule_kind = ?2, schedule_at_utc = NULL, daily_time = NULL, schedule_timezone = NULL, period_value = NULL, period_unit = NULL WHERE id = ?1", params![id.to_string(), kind]).unwrap();
+            transaction
+                .execute(
+                    &format!("UPDATE jobs SET {columns} WHERE id = ?1"),
+                    [id.to_string()],
+                )
+                .unwrap();
+            let error = sync_standalone_flow(&transaction, id).unwrap_err();
+            assert!(error.to_string().contains(message), "{kind}: {error}");
+        }
+    }
+}

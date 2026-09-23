@@ -212,6 +212,71 @@ fn add_platform_roots(add: &mut impl FnMut(&'static str, String, PathBuf)) {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn directory_browser_lists_sorted_folders_and_rejects_invalid_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("Zulu")).unwrap();
+        fs::create_dir(directory.path().join("alpha")).unwrap();
+        fs::write(directory.path().join("plain-file"), b"file").unwrap();
+        let response = directories(Query(DirectoryQuery {
+            path: Some(directory.path().to_string_lossy().into_owned()),
+        }))
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(
+            response
+                .directories
+                .iter()
+                .map(|entry| entry.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "Zulu"]
+        );
+        assert!(!response.truncated);
+        assert_eq!(response.skipped_entries, 0);
+        assert!(response.parent.is_some());
+
+        for path in [None, Some("  ".into()), Some("relative/path".into())] {
+            let error = directories(Query(DirectoryQuery { path }))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.code,
+                super::super::super::error::ErrorCode::InvalidInput
+            );
+        }
+        let missing = directories(Query(DirectoryQuery {
+            path: Some(
+                directory
+                    .path()
+                    .join("missing")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        }))
+        .await
+        .unwrap_err();
+        assert_eq!(
+            missing.code,
+            super::super::super::error::ErrorCode::NotFound
+        );
+        let file = directories(Query(DirectoryQuery {
+            path: Some(
+                directory
+                    .path()
+                    .join("plain-file")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        }))
+        .await
+        .unwrap_err();
+        assert_eq!(
+            file.code,
+            super::super::super::error::ErrorCode::InvalidInput
+        );
+    }
+
     #[test]
     fn ui_paths_are_absolute_and_platform_normalized() {
         let directory = tempfile::tempdir().unwrap();
