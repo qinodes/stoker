@@ -113,6 +113,7 @@
 .source-file-name { color: var(--text-subtle); font-size: 11px; font-weight: 500; }
 
 .flow-detail, .scheduled-job-detail { margin-top: 18px; overflow: hidden; }
+#selected-flow-detail { scroll-margin-top: 102px; }
 .flow-detail:has(.schedule-date-picker) { overflow: visible; }
 .scheduled-run-detail { margin-top: 18px; overflow: hidden; }
 .recovery-banner { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 16px 20px; border-color: rgba(251, 136, 126, .34); background: rgba(251, 136, 126, .07); }

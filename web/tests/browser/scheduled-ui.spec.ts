@@ -378,6 +378,72 @@ test("scheduled workloads create a Flow, add a task, commit, run, and open its a
   await expect(page.locator(".log-output")).toContainText("attempt output");
 });
 
+test("new Flow opens at the bottom and creation positions Flow detail at the top", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.locator('[data-action="new-flow"]').click();
+  await expect(page.locator("#new-flow-form")).toBeVisible();
+  await expect.poll(() => page.locator(".main-content").evaluate((scroller) => scroller.scrollTop)).toBeGreaterThan(0);
+  const initialScroll = await page.locator(".main-content").evaluate((scroller) => ({ current: scroller.scrollTop, max: scroller.scrollHeight - scroller.clientHeight }));
+  expect(initialScroll.max - initialScroll.current).toBeLessThanOrEqual(2);
+
+  await page.locator("#flow-id").fill("scroll-flow");
+  await page.locator("#flow-name").fill("Scroll Flow");
+  await page.locator("#flow-owner").fill("alice");
+  await page.locator("#new-flow-form .schedule-kind-field select").selectOption("daily");
+  await page.locator("#new-flow-form").getByRole("button", { name: "Create Flow" }).click();
+  await expect(page.locator("#new-flow-form")).toHaveCount(0);
+  await expect(page.locator(".task-editor")).toBeVisible();
+  const position = await page.evaluate(() => {
+    const scroller = document.querySelector(".main-content")!;
+    const detail = document.querySelector(".flow-detail")!.getBoundingClientRect();
+    const task = document.querySelector(".task-editor")!.getBoundingClientRect();
+    const topbar = document.querySelector(".topbar")!.getBoundingClientRect();
+    return { detailTop: detail.top, taskTop: task.top, topbarBottom: topbar.bottom, current: scroller.scrollTop, max: scroller.scrollHeight - scroller.clientHeight };
+  });
+  expect(position.detailTop).toBeGreaterThanOrEqual(position.topbarBottom);
+  expect(position.detailTop).toBeLessThanOrEqual(position.topbarBottom + 40);
+  expect(position.taskTop).toBeLessThan(600);
+  expect(position.max - position.current).toBeGreaterThan(20);
+});
+
+test("new Flow scrolls the document on mobile", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.setViewportSize({ width: 375, height: 667 });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.locator('[data-action="new-flow"]').click();
+  await expect(page.locator("#new-flow-form")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  const opened = await page.evaluate(() => ({ current: window.scrollY, max: document.documentElement.scrollHeight - window.innerHeight }));
+  expect(opened.max - opened.current).toBeLessThanOrEqual(2);
+
+  await page.locator("#flow-id").fill("mobile-flow");
+  await page.locator("#flow-name").fill("Mobile Flow");
+  await page.locator("#flow-owner").fill("alice");
+  await page.locator("#new-flow-form .schedule-kind-field select").selectOption("daily");
+  await page.locator("#new-flow-form").getByRole("button", { name: "Create Flow" }).click();
+  await expect(page.locator(".task-editor")).toBeVisible();
+  const created = await page.evaluate(() => ({ detailTop: document.querySelector(".flow-detail")!.getBoundingClientRect().top, current: window.scrollY, max: document.documentElement.scrollHeight - window.innerHeight }));
+  expect(created.detailTop).toBeGreaterThanOrEqual(0);
+  expect(created.detailTop).toBeLessThanOrEqual(40);
+  expect(created.max - created.current).toBeGreaterThan(20);
+});
+
+test("opening an existing Flow scrolls to the bottom of its detail", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.getByRole("row", { name: /Nightly Flow nightly-flow/ }).click();
+  await expect(page.locator("#selected-flow-detail")).toBeVisible();
+  await expect.poll(() => page.locator(".main-content").evaluate((scroller) => scroller.scrollTop)).toBeGreaterThan(0);
+  const scroll = await page.locator(".main-content").evaluate((scroller) => ({ current: scroller.scrollTop, max: scroller.scrollHeight - scroller.clientHeight }));
+  expect(scroll.max - scroll.current).toBeLessThanOrEqual(2);
+});
+
 test("localized schedule controls keep date labels in the active language", async ({ page }) => {
   await mockBackend(page, { workspaceMode: "scheduled" });
   await page.goto("/");

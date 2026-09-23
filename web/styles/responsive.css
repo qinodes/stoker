@@ -118,6 +118,7 @@
   .flow-section, .flow-schedule-editor { margin-right: 16px; margin-left: 16px; padding-right: 0; padding-left: 0; }
   .flow-meta { margin-right: 16px; margin-left: 16px; }
   .task-editor-grid { grid-template-columns: 1fr; }
+  #selected-flow-detail { scroll-margin-top: 16px; }
   .workload-tabs { width: 100%; }
   .workload-tab { flex: 1 1 0; }
   .job-field { margin-top: 14px; }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { EmptyState, LiveTime, PageHeading, Pagination, StateBadge } from "../../components";
 import { pageInfo, useWorkspace } from "../../context";
 import { useI18n } from "../../i18n/context";
@@ -11,19 +11,43 @@ export function Workloads() {
   const { state, actions } = useWorkspace();
   const scheduled = state.scheduled;
   const [creating, setCreating] = useState(false);
+  const [flowDetailScrollPending, setFlowDetailScrollPending] = useState(false);
+  const [openedFlowScrollPending, setOpenedFlowScrollPending] = useState<string | null>(null);
   const [flowPage, setFlowPage] = useState(1);
   const flowsPage = pageInfo(scheduled.flows, flowPage, SCHEDULED_FLOWS_PAGE_SIZE);
+  useLayoutEffect(() => {
+    if (!creating) return;
+    scrollWorkloadsToBottom();
+  }, [creating]);
+  useLayoutEffect(() => {
+    if (!flowDetailScrollPending || !scheduled.selectedFlow || creating) return;
+    const detail = document.getElementById("selected-flow-detail");
+    if (!detail) return;
+    detail.scrollIntoView({ block: "start" });
+    setFlowDetailScrollPending(false);
+  }, [flowDetailScrollPending, scheduled.selectedFlow, creating]);
+  useLayoutEffect(() => {
+    if (!openedFlowScrollPending || scheduled.selectedFlow?.flow_id !== openedFlowScrollPending) return;
+    scrollWorkloadsToBottom();
+    setOpenedFlowScrollPending(null);
+  }, [openedFlowScrollPending, scheduled.selectedFlow]);
   return <>
     <PageHeading title={t("scheduled.workloads.title")} description={t("scheduled.workloads.description")} actions={<button className="button primary" data-action="new-flow" type="button" onClick={() => setCreating(true)}>{t("scheduled.flow.new")}</button>} />
     <div className="workload-tabs" role="tablist" aria-label={t("scheduled.workloads.tabs")}><button className={`workload-tab${scheduled.activeTab === "flows" ? " active" : ""}`} role="tab" aria-selected={scheduled.activeTab === "flows"} type="button" onClick={() => actions.selectScheduledTab("flows")}>{t("scheduled.flows")}</button><button className={`workload-tab${scheduled.activeTab === "jobs" ? " active" : ""}`} role="tab" aria-selected={scheduled.activeTab === "jobs"} type="button" onClick={() => actions.selectScheduledTab("jobs")}>{t("scheduled.standaloneJobs")}</button></div>
-    {scheduled.activeTab === "flows" ? <section className="panel"><div className="panel-header"><div className="panel-title"><div><h2>{t("scheduled.flows")}</h2><p>{t("scheduled.flowsDescription")}</p></div></div></div><div className="table-wrap"><table className="data-table workloads-table"><thead><tr><th>{t("scheduled.name")}</th><th>{t("scheduled.owner")}</th><th>{t("scheduled.schedule")}</th><th>{t("scheduled.tasks")}</th><th>{t("scheduled.status")}</th></tr></thead><tbody>{scheduled.flows.length ? flowsPage.items.map((flow) => <tr className="workload-row" tabIndex={0} key={flow.flow_id} onClick={() => void actions.openFlow(flow.flow_id)}><td><strong>{flow.name}</strong><small>{flow.flow_id}</small></td><td>{flow.owner}</td><td>{scheduleLabel(flow.schedule, t("scheduled.unscheduled"))}</td><td>{flow.tasks.length}</td><td><div className="flow-statuses"><StateBadge value={!flow.committed ? "DRAFT" : flow.enabled ? "RUNNING" : "CANCELLED"} />{flow.frozen && <StateBadge value="FROZEN" />}</div></td></tr>) : <tr><td colSpan={5}><EmptyState compact icon="◇" title={t("scheduled.noFlows")} /></td></tr>}</tbody></table></div><Pagination kind="flows" page={flowsPage} onPage={setFlowPage} /></section> : <ScheduledJobs />}
+    {scheduled.activeTab === "flows" ? <section className="panel"><div className="panel-header"><div className="panel-title"><div><h2>{t("scheduled.flows")}</h2><p>{t("scheduled.flowsDescription")}</p></div></div></div><div className="table-wrap"><table className="data-table workloads-table"><thead><tr><th>{t("scheduled.name")}</th><th>{t("scheduled.owner")}</th><th>{t("scheduled.schedule")}</th><th>{t("scheduled.tasks")}</th><th>{t("scheduled.status")}</th></tr></thead><tbody>{scheduled.flows.length ? flowsPage.items.map((flow) => <tr className="workload-row" tabIndex={0} key={flow.flow_id} onClick={() => void actions.openFlow(flow.flow_id).then(() => setOpenedFlowScrollPending(flow.flow_id))}><td><strong>{flow.name}</strong><small>{flow.flow_id}</small></td><td>{flow.owner}</td><td>{scheduleLabel(flow.schedule, t("scheduled.unscheduled"))}</td><td>{flow.tasks.length}</td><td><div className="flow-statuses"><StateBadge value={!flow.committed ? "DRAFT" : flow.enabled ? "RUNNING" : "CANCELLED"} />{flow.frozen && <StateBadge value="FROZEN" />}</div></td></tr>) : <tr><td colSpan={5}><EmptyState compact icon="◇" title={t("scheduled.noFlows")} /></td></tr>}</tbody></table></div><Pagination kind="flows" page={flowsPage} onPage={setFlowPage} /></section> : <ScheduledJobs />}
     {scheduled.selectedFlow && <FlowDetail flow={scheduled.selectedFlow} onClose={actions.closeScheduledFlow} />}
     {scheduled.selectedJob && <ScheduledJobDetail />}
-    {creating && <NewFlowForm onClose={() => setCreating(false)} />}
+    {creating && <NewFlowForm onClose={() => setCreating(false)} onCreated={() => { setCreating(false); setFlowDetailScrollPending(true); }} />}
   </>;
 }
 
-function NewFlowForm({ onClose }: { onClose: () => void }) {
+function scrollWorkloadsToBottom() {
+  const scroller = document.querySelector<HTMLElement>(".main-content");
+  if (scroller && getComputedStyle(scroller).overflowY !== "visible") scroller.scrollTo({ top: scroller.scrollHeight });
+  else window.scrollTo({ top: document.documentElement.scrollHeight });
+}
+
+function NewFlowForm({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { t } = useI18n();
   const { state, actions } = useWorkspace();
   const [draft, setDraft] = useState({ flow_id: "", name: "", owner: "" });
@@ -39,7 +63,7 @@ function NewFlowForm({ onClose }: { onClose: () => void }) {
       return;
     }
     setScheduleError("");
-    if (await actions.createScheduledFlow({ ...draft, schedule: result.schedule })) onClose();
+    if (await actions.createScheduledFlow({ ...draft, schedule: result.schedule })) onCreated();
   };
   return <section className="panel flow-detail"><form id="new-flow-form" className="new-flow-form" onSubmit={(event) => { event.preventDefault(); void save(); }}><div className="new-flow-form-heading"><div><h2>{t("scheduled.flow.new")}</h2><p>{t("scheduled.workloads.description")}</p></div></div><div className="new-flow-form-grid"><label><span>{t("scheduled.flow.taskId")}</span><input id="flow-id" className="text-input" required value={draft.flow_id} onChange={(event) => update("flow_id", event.target.value)} /></label><label><span>{t("scheduled.name")}</span><input id="flow-name" className="text-input" required value={draft.name} onChange={(event) => update("name", event.target.value)} /></label><label><span>{t("scheduled.owner")}</span><input id="flow-owner" className="text-input" required value={draft.owner} onChange={(event) => update("owner", event.target.value)} /></label></div><ScheduleInputs value={schedule} timezones={timezones} defaultTimezone={defaultTimezone} idPrefix="new-flow-schedule" onChange={(value) => { setSchedule(value); setScheduleError(""); }} />{scheduleError && <div className="form-feedback invalid schedule-error" aria-live="polite">{scheduleError}</div>}<div className="new-flow-form-actions"><button className="button primary" type="submit">{t("scheduled.flow.create")}</button><button className="button secondary" type="button" onClick={onClose}>{t("common.cancel")}</button></div></form></section>;
 }
