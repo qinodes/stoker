@@ -37,6 +37,30 @@ test("serial overview keeps the same left edge as a shorter page", async ({ page
   expect(heading?.width).toBe(reference!.width);
 });
 
+test("Jobs puts filters beside search and actions at the right of the toolbar", async ({ page }) => {
+  await mockBackend(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+  await page.locator('[data-route="jobs"]').click();
+  await expect(page.locator(".page")).toHaveAttribute("data-view", "jobs");
+
+  const toolbar = page.locator(".jobs-toolbar");
+  const search = await toolbar.locator("#job-search").boundingBox();
+  const owner = await toolbar.locator("#user-filter").boundingBox();
+  const states = await toolbar.locator("#state-filter").boundingBox();
+  const create = await toolbar.locator('[data-action="new-job"]').boundingBox();
+  const clean = await toolbar.locator('[data-action="clean-jobs"]').boundingBox();
+  expect(search && owner && states && create && clean).toBeTruthy();
+  expect(search!.width).toBe(340);
+  expect(owner!.x).toBeGreaterThan(search!.x + search!.width);
+  expect(states!.x).toBeGreaterThan(owner!.x + owner!.width);
+  expect(create!.x).toBeGreaterThan(states!.x + states!.width);
+  expect(clean!.x).toBeGreaterThan(create!.x + create!.width);
+  expect(owner!.y).toBe(search!.y);
+  expect(create!.y).toBe(search!.y);
+  await expect(page.locator(".page-heading [data-action]")).toHaveCount(0);
+});
+
 interface MockModel {
   jobs: Job[];
   queue: Job[];

@@ -3,6 +3,7 @@
   .content-grid { grid-template-columns: 1fr; }
   .page-heading { flex-direction: column; align-items: stretch; gap: 14px; }
   .page-heading .page-actions { justify-content: flex-start; }
+  .jobs-toolbar-search { flex-wrap: wrap; }
   .scheduled-overview-grid { grid-template-columns: 1fr; }
 }
 
@@ -79,6 +80,10 @@
   .log-output { min-height: 240px; margin-right: 16px; margin-left: 16px; }
   .log-footnote { padding-right: 16px; padding-left: 16px; }
   .toolbar { align-items: stretch; flex-direction: column; }
+  .jobs-toolbar-search { width: 100%; }
+  .jobs-toolbar-search .search-input { flex-basis: 100%; width: 100%; }
+  .jobs-toolbar-search .filter-group { width: 100%; }
+  .jobs-toolbar-actions { width: 100%; margin-left: 0; }
   .search-input { width: 100%; }
   .filter-group { display: grid; grid-template-columns: 1fr 1fr; }
   .select-input { width: 100%; }

@@ -1,5 +1,11 @@
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
 
+.jobs-toolbar-search, .jobs-toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.jobs-toolbar-search { flex: 0 0 auto; flex-wrap: nowrap; min-width: 0; max-width: 100%; }
+.jobs-toolbar-search .search-input { flex: 0 0 340px; width: 340px; }
+.jobs-toolbar-search .filter-group { flex-wrap: nowrap; }
+.jobs-toolbar-actions { margin-left: auto; }
+
 .workload-tabs { display: inline-flex; gap: 4px; margin: 0 0 18px; padding: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft); }
 .workload-tab { min-height: 34px; padding: 0 13px; border: 0; border-radius: 7px; background: transparent; color: var(--text-subtle); cursor: pointer; font-size: 11px; font-weight: 750; }
 .workload-tab:hover, .workload-tab.active { background: var(--surface); color: var(--cyan); }
