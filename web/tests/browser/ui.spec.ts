@@ -2,6 +2,41 @@ import { expect, test, type Page, type Route as PlaywrightRoute, type Request } 
 import type { Job, PolicyResponse, RootsResponse, SettingsResponse, Snapshot, StatusResponse, TimezoneInfo } from "../../src/types.ts";
 import { LANGUAGE_STORAGE_KEY, translate, type Locale, type StaticKey } from "../../src/i18n/messages.ts";
 
+test("serial pages share the Workloads content position and one route trail", async ({ page }) => {
+  await mockBackend(page);
+  await page.goto("/");
+  await page.locator('[data-route="jobs"]').click();
+  await expect(page.locator(".page-heading h1")).toBeVisible();
+  const reference = await page.locator(".page-heading h1").boundingBox();
+  expect(reference).not.toBeNull();
+
+  for (const route of ["overview", "jobs", "queue", "logs", "configuration", "policy"]) {
+    await page.locator(`[data-route="${route}"]`).click();
+    await expect(page.locator(".page")).toHaveAttribute("data-view", route);
+    await expect(page.locator(".page-heading h1")).toBeVisible();
+    const position = await page.locator(".page-heading h1").boundingBox();
+    expect(position?.y).toBe(reference!.y);
+    await expect(page.locator(".page-heading .eyebrow")).toHaveCount(0);
+    await expect(page.locator("#breadcrumb-current")).toBeVisible();
+  }
+});
+
+test("serial overview keeps the same left edge as a shorter page", async ({ page }) => {
+  await mockBackend(page);
+  await page.setViewportSize({ width: 1920, height: 600 });
+  await page.goto("/");
+  await expect(page.locator(".main-content")).toHaveCSS("scrollbar-gutter", "stable");
+  await page.locator('[data-route="jobs"]').click();
+  await expect(page.locator(".page")).toHaveAttribute("data-view", "jobs");
+  const reference = await page.locator(".page-heading").boundingBox();
+  expect(reference).not.toBeNull();
+  await page.locator('[data-route="overview"]').click();
+  await expect(page.locator(".page")).toHaveAttribute("data-view", "overview");
+  const heading = await page.locator(".page-heading").boundingBox();
+  expect(heading?.x).toBe(reference!.x);
+  expect(heading?.width).toBe(reference!.width);
+});
+
 interface MockModel {
   jobs: Job[];
   queue: Job[];

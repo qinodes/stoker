@@ -73,7 +73,7 @@ export function Policy() {
   };
 
   return <>
-    <PageHeading eyebrow={t("policy.breadcrumb")} title={t("policy.title")} description={t("policy.description")} />
+    <PageHeading title={t("policy.title")} description={t("policy.description")} />
     {state.mode === "scheduled" && <ScheduledConcurrency />}
     <div className="policy-layout"><PolicyCard title={t("policy.logCapacity")} description={t("policy.logDescription")} fields={LOG_FIELDS} policy={policy} draft={draft} canUpdate={policy.can_update} onDraft={(key, value) => setDraft((current) => ({ ...current, [key]: value }))} onSave={update} onReset={reset} /><PolicyCard title={t("policy.runtime")} description={t("policy.runtimeDescription")} fields={RUNTIME_FIELDS} policy={policy} draft={draft} canUpdate={policy.can_update} onDraft={(key, value) => setDraft((current) => ({ ...current, [key]: value }))} onSave={update} onReset={reset} /></div>
   </>;

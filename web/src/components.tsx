@@ -16,8 +16,8 @@ export function StateBadge({ value }: { value?: string | null }) {
   return <span className={`state-badge ${classForState(value)}`}><span className="state-badge-label">{stateLabel(value)}</span></span>;
 }
 
-export function PageHeading({ eyebrow, title, description, actions }: { eyebrow: string; title: string; description: string; actions?: ReactNode }) {
-  return <div className="page-heading"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div><div className="page-actions">{actions}</div></div>;
+export function PageHeading({ title, description, actions }: { title: string; description: string; actions?: ReactNode }) {
+  return <div className="page-heading"><div><h1>{title}</h1><p>{description}</p></div><div className="page-actions">{actions}</div></div>;
 }
 
 export function TimezonePicker({ id, suggestionsId, value, timezones, placeholder, required = false, onChange }: { id: string; suggestionsId: string; value: string; timezones: string[]; placeholder: string; required?: boolean; onChange: (value: string) => void }) {

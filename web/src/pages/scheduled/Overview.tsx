@@ -8,7 +8,7 @@ export function ScheduledOverview() {
   const overview = state.scheduled.overview;
   const capacity = overview?.capacity;
   return <>
-    <PageHeading eyebrow={t("scheduled.overview.eyebrow")} title={t("scheduled.overview.title")} description={t("scheduled.overview.description")} />
+    <PageHeading title={t("scheduled.overview.title")} description={t("scheduled.overview.description")} />
     <div className="metrics-grid scheduled-metrics">
       <Metric label={t("scheduled.capacity")} value={`${capacity?.active_attempts || 0}/${capacity?.max_concurrency || 0}`} note={t("scheduled.activeAttempts")} accent="accent-cyan" />
       <Metric label={t("scheduled.flows")} value={overview?.flow_count || 0} note={t("scheduled.flowSummary", { live: overview?.live_flow_count || 0, draft: overview?.draft_flow_count || 0 })} accent="accent-ember" />

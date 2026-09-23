@@ -13,7 +13,7 @@ export function Runs() {
   const runs = state.scheduled.runs;
   const selected = state.scheduled.selectedRun;
   return <>
-    <PageHeading eyebrow={t("scheduled.runs.eyebrow")} title={t("scheduled.runs.title")} description={t("scheduled.runs.description")} />
+    <PageHeading title={t("scheduled.runs.title")} description={t("scheduled.runs.description")} />
     {state.workspace?.recovery_fence && <RecoveryBanner runs={runs} />}
     <section className="panel"><div className="table-wrap"><table className="data-table"><thead><tr><th>{t("scheduled.runs.flow")}</th><th>{t("scheduled.runs.source")}</th><th>{t("scheduled.status")}</th><th>{t("scheduled.runs.started")}</th><th>{t("scheduled.runs.finished")}</th><th>{t("scheduled.runs.actions")}</th></tr></thead><tbody>{runs.length ? runs.map((run) => <tr key={run.run_id} className="workload-row" onClick={() => void actions.openScheduledRun(run.run_id)}><td><strong>{run.flow_id}</strong><small>{run.run_id}</small></td><td>{run.source}</td><td><StateBadge value={run.state} /></td><td><LiveTime value={run.started_at} timezone={state.timezone?.name} /></td><td><LiveTime value={run.finished_at} timezone={state.timezone?.name} /></td><td>{cancellable.has(run.state) && <button className="button small danger" type="button" onClick={(event) => { event.stopPropagation(); void actions.cancelScheduledRun(run); }}>{t("scheduled.runs.cancel")}</button>}</td></tr>) : <tr><td colSpan={6}><EmptyState compact icon="○" title={t("scheduled.runs.empty")} /></td></tr>}</tbody></table></div></section>
     {selected && <RunDetail run={selected} />}

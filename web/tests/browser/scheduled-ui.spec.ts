@@ -1,6 +1,48 @@
 import { expect, test } from "@playwright/test";
 import { mockBackend } from "./support/mock-backend.ts";
 
+test("scheduled pages align their content and show the route only in the topbar", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.goto("/");
+
+  await page.locator('[data-route="workloads"]').click();
+  const reference = await page.locator(".page").boundingBox();
+  const heading = await page.locator(".page-heading h1").boundingBox();
+  expect(reference).not.toBeNull();
+  expect(heading).not.toBeNull();
+
+  for (const route of ["overview", "workloads", "runs", "logs", "sources", "configuration", "policy"]) {
+    await page.locator(`[data-route="${route}"]`).click();
+    await expect(page.locator(".page")).toHaveAttribute("data-view", route);
+    await expect(page.locator(".page-heading h1")).toBeVisible();
+    const box = await page.locator(".page").boundingBox();
+    const title = await page.locator(".page-heading h1").boundingBox();
+    expect(box?.x).toBe(reference!.x);
+    expect(box?.width).toBe(reference!.width);
+    expect(title?.y).toBe(heading!.y);
+    await expect(page.locator(".page-heading .eyebrow")).toHaveCount(0);
+    await expect(page.locator("#breadcrumb-current")).toBeVisible();
+  }
+});
+
+test("scheduled content keeps its left edge when a page needs scrolling", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.setViewportSize({ width: 1920, height: 600 });
+  await page.goto("/");
+  await expect(page.locator(".main-content")).toHaveCSS("scrollbar-gutter", "stable");
+  await page.locator('[data-route="workloads"]').click();
+  await expect(page.locator(".page")).toHaveAttribute("data-view", "workloads");
+  const reference = await page.locator(".page-heading").boundingBox();
+  expect(reference).not.toBeNull();
+  for (const route of ["configuration", "policy"]) {
+    await page.locator(`[data-route="${route}"]`).click();
+    await expect(page.locator(".page")).toHaveAttribute("data-view", route);
+    const heading = await page.locator(".page-heading").boundingBox();
+    expect(heading?.x).toBe(reference!.x);
+    expect(heading?.width).toBe(reference!.width);
+  }
+});
+
 test("scheduled navigation excludes serial pages", async ({ page }) => {
   await mockBackend(page, { workspaceMode: "scheduled" });
   await page.goto("/");

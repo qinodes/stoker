@@ -14,7 +14,7 @@ export function Overview() {
   const queue = state.queue.jobs.slice(0, 5);
   const counts = status?.counts || { active: 0, queued: 0, draft: 0, succeeded: 0, failed: 0 };
   return <>
-    <div className="page-heading"><div><div className="eyebrow">{t("overview.eyebrow")}</div><h1>{t("overview.title")}</h1><p>{t("overview.description")}</p></div></div>
+    <div className="page-heading"><div><h1>{t("overview.title")}</h1><p>{t("overview.description")}</p></div></div>
     <div className="metrics-grid">
       <Metric label={t("overview.running")} value={counts.active} note={active?.name || t("overview.noActive")} accent="accent-ember" />
       <Metric label={t("overview.queued")} value={counts.queued} note={status?.disk_pressure ? t("overview.diskWait") : state.queue.locked ? t("queue.isLocked") : t("overview.ready")} accent="accent-cyan" />

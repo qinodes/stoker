@@ -2,13 +2,9 @@
 
 .scheduler-pill.running { border-color: rgba(117, 214, 163, .22); background: rgba(117, 214, 163, .08); color: var(--green); }
 
-.page { width: min(1440px, 100%); margin: 0 auto; padding: 42px 44px 64px; }
+.page { width: min(1440px, 100%); margin: 0 auto; padding: 24px 44px; }
 
-.page[data-view="jobs"], .page[data-view="queue"], .page[data-view="workloads"] { padding-top: 24px; padding-bottom: 24px; }
-
-.page[data-view="jobs"] .page-heading, .page[data-view="queue"] .page-heading, .page[data-view="workloads"] .page-heading { margin-bottom: 20px; }
-
-.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 30px; }
+.page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 20px; }
 
 .eyebrow, .section-kicker { color: var(--ember); font-size: 10px; font-weight: 800; letter-spacing: .17em; text-transform: uppercase; }
 
