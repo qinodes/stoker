@@ -50,6 +50,7 @@
   .metric-card { min-height: 105px; padding: 15px; }
   .metric-card .metric-value { margin-top: 9px; font-size: 26px; }
   .panel-header { padding: 17px 16px 14px; }
+  .scheduled-overview-grid { grid-auto-rows: 280px; }
   .active-job, .queue-list, .activity-list { padding-right: 16px; padding-left: 16px; }
   .job-hero { align-items: flex-start; flex-direction: column; gap: 13px; padding: 15px; }
   .queue-lock-banner { align-items: flex-start; flex-direction: column; }

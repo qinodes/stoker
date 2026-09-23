@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { EmptyState, StateBadge, TimePicker, TimezonePicker } from "../../components";
 import { useWorkspace } from "../../context";
+import { clearLocalizedValidity, validateLocalizedForm } from "../../form-validation";
 import { useI18n } from "../../i18n/context";
 import { scheduledSelectors } from "../../scheduled/state";
 import { instantToLocalDateTime, localDateTimeToRfc3339 } from "../../scheduled/timezone";
@@ -20,33 +21,33 @@ export function FlowDetail({ flow, onClose }: { flow: ScheduledFlow; onClose: ()
   const timezones = state.settings?.timezones || [effectiveTimezone];
   const [editingSchedule, setEditingSchedule] = useState(false);
   const [schedule, setSchedule] = useState<ScheduleInput>(() => toScheduleInput(flow, effectiveTimezone));
-  const [scheduleError, setScheduleError] = useState("");
+  const [scheduleError, setScheduleError] = useState<"scheduled.flow.chooseTimezone" | "scheduled.flow.invalidLocalTime" | null>(null);
   const previousFlowId = useRef(flow.flow_id);
   const serverScheduleKey = JSON.stringify(flow.schedule);
   useEffect(() => {
     const sameFlow = previousFlowId.current === flow.flow_id;
     setSchedule((current) => toScheduleInput(flow, sameFlow && current.kind === "once" ? current.timezone : effectiveTimezone));
-    setScheduleError("");
+    setScheduleError(null);
     previousFlowId.current = flow.flow_id;
   }, [flow.flow_id, serverScheduleKey, effectiveTimezone]);
   const sync = scheduledSelectors.isSyncSource(state.scheduled);
   const actionState = scheduledSelectors.flowActionState(flow);
   const mutate = (path: string, method: string, body?: Record<string, unknown>) => void actions.scheduledFlowMutation(flow, path, method, body);
-  const updateSchedule = (value: ScheduleInput) => { setSchedule(value); setScheduleError(""); };
+  const updateSchedule = (value: ScheduleInput) => { setSchedule(value); setScheduleError(null); };
   const saveSchedule = () => {
     const result = schedulePayload(schedule, timezones);
     if (!result.ok) {
-      setScheduleError(t(result.reason === "timezone" ? "scheduled.flow.chooseTimezone" : "scheduled.flow.invalidLocalTime"));
+      setScheduleError(result.reason === "timezone" ? "scheduled.flow.chooseTimezone" : "scheduled.flow.invalidLocalTime");
       return;
     }
-    setScheduleError("");
+    setScheduleError(null);
     mutate("/schedule", "PUT", { schedule: result.schedule });
   };
   return <section className="panel flow-detail" id="selected-flow-detail"><div className="panel-header"><div className="panel-title"><div><div className="section-kicker">{t("scheduled.flow.detail")}</div><h2>{flow.name}</h2><p>{flow.flow_id} · {flow.owner}</p></div></div><div className="page-actions"><FlowActions flow={flow} sync={sync} mutate={mutate} /></div></div>
     {sync && <div className="flow-notice">{t("scheduled.flow.syncReadOnly")}</div>}
     {state.scheduled.revisionConflict && <div className="flow-notice conflict"><span>{t("scheduled.flow.revisionConflict")}</span><button className="button small secondary" type="button" onClick={() => void actions.openFlow(flow.flow_id)}>{t("scheduled.flow.reload")}</button></div>}
     <div className="flow-meta"><div><span className="flow-meta-label">{t("scheduled.schedule")}</span><strong className="flow-meta-value">{scheduleLabel(flow.schedule, t("scheduled.unscheduled"))}</strong></div><div><span className="flow-meta-label">{t("scheduled.tasks")}</span><strong className="flow-meta-value">{flow.tasks.length}</strong></div><div><span className="flow-meta-label">{t("scheduled.status")}</span><StateBadge value={!flow.committed ? "DRAFT" : flow.enabled ? "RUNNING" : "CANCELLED"} /></div></div>
-    {actionState === "frozen" && !sync && <div className="flow-schedule-editor"><button className="button small secondary" type="button" onClick={() => setEditingSchedule((value) => !value)}>{t("scheduled.flow.editSchedule")}</button>{editingSchedule && <form onSubmit={(event) => { event.preventDefault(); saveSchedule(); }}><ScheduleInputs value={schedule} timezones={timezones} defaultTimezone={effectiveTimezone} onChange={updateSchedule} /><button className="button small primary" type="submit">{t("common.save")}</button>{scheduleError && <div className="form-feedback invalid schedule-error" aria-live="polite">{scheduleError}</div>}</form>}</div>}
+    {actionState === "frozen" && !sync && <div className="flow-schedule-editor"><button className="button small secondary" type="button" onClick={() => setEditingSchedule((value) => !value)}>{t("scheduled.flow.editSchedule")}</button>{editingSchedule && <form noValidate onInputCapture={(event) => clearLocalizedValidity(event.target)} onChangeCapture={(event) => clearLocalizedValidity(event.target)} onSubmit={(event) => { event.preventDefault(); if (validateLocalizedForm(event.currentTarget, t)) saveSchedule(); }}><ScheduleInputs value={schedule} timezones={timezones} defaultTimezone={effectiveTimezone} onChange={updateSchedule} /><button className="button small primary" type="submit">{t("common.save")}</button>{scheduleError && <div className="form-feedback invalid schedule-error" aria-live="polite">{t(scheduleError)}</div>}</form>}</div>}
     <section className="flow-section"><div className="section-heading-row"><div><div className="section-kicker">{t("scheduled.flow.graph")}</div><h3>{t("scheduled.flow.tasks")}</h3></div></div><TaskGraph tasks={flow.tasks} />{(actionState === "draft" || actionState === "frozen") && !sync && <TaskEditor flow={flow} />}{!flow.tasks.length && <EmptyState compact icon="◇" title={t("scheduled.flow.noTasks")} />}</section><div className="flow-detail-close"><button className="button small secondary" type="button" onClick={onClose}>{t("scheduled.flow.closeDetail")}</button></div>
   </section>;
 }
@@ -93,7 +94,7 @@ function TaskEditor({ flow }: { flow: ScheduledFlow }) {
   const { state, actions } = useWorkspace();
   const [draft, setDraft] = useState(EMPTY_TASK);
   const update = (key: keyof typeof draft, value: string | number) => setDraft((current) => ({ ...current, [key]: value }));
-  return <form className="task-editor" onSubmit={(event) => { event.preventDefault(); const dependencies = draft.dependencies.split(",").map((value) => value.trim()).filter(Boolean).map((task_id) => ({ task_id, state: "succeeded" })); void actions.scheduledFlowMutation(flow, "/tasks", "POST", { task_id: draft.task_id, name: draft.name, cwd: draft.cwd, command: draft.command, retry: Number(draft.retry), dependencies, depend_mode: draft.depend_mode }).then((saved) => { if (saved) setDraft(EMPTY_TASK); }); }}><h3>{t("scheduled.flow.addTask")}</h3><div className="task-editor-grid"><label>{t("scheduled.flow.taskId")}<input id="flow-task-id" className="text-input" required value={draft.task_id} onChange={(event) => update("task_id", event.target.value)} /></label><label>{t("scheduled.name")}<input className="text-input" required value={draft.name} onChange={(event) => update("name", event.target.value)} /></label><label>{t("scheduled.command")}<input className="text-input" required value={draft.command} onChange={(event) => update("command", event.target.value)} /></label><label><span>{t("scheduled.directory")}</span><div className="path-input-row"><input id="flow-task-cwd" className="text-input mono-input" required value={draft.cwd} onChange={(event) => update("cwd", event.target.value)} /><button className="button secondary" data-action="browse-scheduled-directory" type="button" onClick={() => void actions.openDirectoryBrowser(draft.cwd || state.filesystem.roots?.default_path || "", (path) => update("cwd", path))}>{t("jobs.browse")}</button></div></label><label>{t("scheduled.retry")}<input className="text-input" type="number" min="0" value={draft.retry} onChange={(event) => update("retry", event.target.value)} /></label><label>{t("scheduled.flow.dependencies")}<input className="text-input" value={draft.dependencies} onChange={(event) => update("dependencies", event.target.value)} /></label></div><button className="button small primary" type="submit">{t("scheduled.flow.addTask")}</button></form>;
+  return <form className="task-editor" noValidate onInputCapture={(event) => clearLocalizedValidity(event.target)} onChangeCapture={(event) => clearLocalizedValidity(event.target)} onSubmit={(event) => { event.preventDefault(); if (!validateLocalizedForm(event.currentTarget, t)) return; const dependencies = draft.dependencies.split(",").map((value) => value.trim()).filter(Boolean).map((task_id) => ({ task_id, state: "succeeded" })); void actions.scheduledFlowMutation(flow, "/tasks", "POST", { task_id: draft.task_id, name: draft.name, cwd: draft.cwd, command: draft.command, retry: Number(draft.retry), dependencies, depend_mode: draft.depend_mode }).then((saved) => { if (saved) setDraft(EMPTY_TASK); }); }}><h3>{t("scheduled.flow.addTask")}</h3><div className="task-editor-grid"><label>{t("scheduled.flow.taskId")}<input id="flow-task-id" className="text-input" required value={draft.task_id} onChange={(event) => update("task_id", event.target.value)} /></label><label>{t("scheduled.name")}<input className="text-input" required value={draft.name} onChange={(event) => update("name", event.target.value)} /></label><label>{t("scheduled.command")}<input className="text-input" required value={draft.command} onChange={(event) => update("command", event.target.value)} /></label><label><span>{t("scheduled.directory")}</span><div className="path-input-row"><input id="flow-task-cwd" className="text-input mono-input" required value={draft.cwd} onChange={(event) => update("cwd", event.target.value)} /><button className="button secondary" data-action="browse-scheduled-directory" type="button" onClick={() => void actions.openDirectoryBrowser(draft.cwd || state.filesystem.roots?.default_path || "", (path) => update("cwd", path))}>{t("jobs.browse")}</button></div></label><label>{t("scheduled.retry")}<input className="text-input" type="number" min="0" value={draft.retry} onChange={(event) => update("retry", event.target.value)} /></label><label>{t("scheduled.flow.dependencies")}<input className="text-input" value={draft.dependencies} onChange={(event) => update("dependencies", event.target.value)} /></label></div><button className="button small primary" type="submit">{t("scheduled.flow.addTask")}</button></form>;
 }
 
 function toScheduleInput(flow: ScheduledFlow, timezone: string): ScheduleInput {

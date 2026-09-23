@@ -18,11 +18,14 @@
 
 .content-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, .85fr); gap: 18px; }
 
-.scheduled-overview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+.scheduled-overview-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 264px; align-items: stretch; }
 .scheduled-overview-grid .empty-state.compact { min-height: 92px; padding: 22px 16px; }
 .scheduled-overview-grid .empty-state.compact .empty-icon { width: 34px; height: 34px; margin-bottom: 8px; font-size: 16px; }
 .overview-panel-count { display: inline-flex; min-width: 21px; height: 21px; align-items: center; justify-content: center; margin-left: 8px; padding: 0 6px; border-radius: 999px; background: rgba(120, 216, 220, .1); color: var(--cyan); font-size: 10px; vertical-align: 2px; }
 .overview-run-panel.recovery-warning { border-color: rgba(244, 198, 107, .42); box-shadow: 0 0 0 1px rgba(244, 198, 107, .08), var(--shadow); }
+.overview-run-panel { display: flex; flex-direction: column; }
+.overview-run-panel .occurrence-list { flex: 1; min-height: 0; align-content: start; }
+.overview-run-panel .occurrence-list.is-empty { align-content: center; }
 .overview-run-panel.recovery-warning .overview-panel-count { background: rgba(244, 198, 107, .13); color: var(--yellow); }
 .overview-run-state { display: grid; flex: none; justify-items: end; gap: 6px; }
 .overview-run-state time { color: var(--text-subtle); font-size: 9px; }

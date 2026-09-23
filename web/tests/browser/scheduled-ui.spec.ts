@@ -63,6 +63,52 @@ test("scheduled overview separates summary metrics from run details", async ({ p
   await expect(page.locator(".scheduled-overview-grid")).toContainText("Active runs");
   await expect(page.locator(".scheduled-overview-grid")).toContainText("Recent failures");
   await expect(page.locator(".scheduled-overview-grid")).toContainText("No recovery required");
+  await expect(page.locator('.scheduled-overview-grid .panel-link[href="#runs"]')).toHaveText([
+    "View active runs →",
+    "View failures →",
+    "View recovery →",
+  ]);
+});
+
+test("scheduled overview cards show a fixed-height preview as failures accumulate", async ({ page }) => {
+  const recentFailures: Array<{ run_id: string; flow_id: string; state: string; finished_at: string }> = [];
+  await mockBackend(page, { workspaceMode: "scheduled", recentFailures });
+  await page.goto("/");
+  const cards = page.locator(".scheduled-overview-grid > .panel");
+  await expect(cards).toHaveCount(3);
+  const emptyHeight = (await cards.first().boundingBox())!.height;
+
+  recentFailures.push({ run_id: "failed-run", flow_id: "nightly-flow", state: "FAILED", finished_at: "2026-09-23T10:00:00Z" });
+  await page.reload();
+  await expect(cards.nth(1)).toContainText("nightly-flow");
+  const firstRowGap = await cards.nth(1).evaluate((card) =>
+    card.querySelector(".occurrence-row")!.getBoundingClientRect().top - card.querySelector(".panel-header")!.getBoundingClientRect().bottom,
+  );
+  expect(firstRowGap).toBeLessThanOrEqual(8);
+  const heights = await cards.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height));
+  expect(new Set(heights).size).toBe(1);
+  expect(heights[0]).toBeGreaterThanOrEqual(emptyHeight);
+  expect(heights[0]).toBeLessThanOrEqual(280);
+
+  for (let index = 2; index <= 6; index += 1) {
+    recentFailures.push({ run_id: `failed-run-${index}`, flow_id: `flow-${index}`, state: "FAILED", finished_at: "2026-09-23T10:00:00Z" });
+  }
+  await page.reload();
+  await expect(cards.nth(1).locator(".occurrence-row")).toHaveCount(3);
+  await expect(cards.nth(1).locator(".overview-panel-count")).toHaveText("6");
+  await expect(cards.nth(1).locator('a[href="#runs"]')).toBeVisible();
+  const crowdedHeights = await cards.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().height));
+  expect(crowdedHeights).toEqual(heights);
+  const failureList = cards.nth(1).locator(".occurrence-list");
+  const listScroll = await failureList.evaluate((element) => ({ content: element.scrollHeight, visible: element.clientHeight }));
+  expect(listScroll.content).toBeLessThanOrEqual(listScroll.visible);
+
+  await page.setViewportSize({ width: 320, height: 700 });
+  const mobileBounds = await cards.nth(1).evaluate((card) => ({
+    cardBottom: card.getBoundingClientRect().bottom,
+    lastRowBottom: card.querySelector(".occurrence-row:last-child")!.getBoundingClientRect().bottom,
+  }));
+  expect(mobileBounds.lastRowBottom).toBeLessThan(mobileBounds.cardBottom);
 });
 
 test("scheduled overview highlights an active recovery fence", async ({ page }) => {
@@ -376,6 +422,78 @@ test("scheduled workloads create a Flow, add a task, commit, run, and open its a
   await page.locator("#scheduled-log-attempt").selectOption("1");
   await expect(page.locator('#scheduled-log-task option[value="build"]')).toHaveText("build · 成功");
   await expect(page.locator(".log-output")).toContainText("attempt output");
+});
+
+test("required Flow fields use the selected UI language", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.locator('[data-action="new-flow"]').click();
+  const expected = { en: "Please fill out this field.", "zh-TW": "請填寫此欄位。", ja: "この項目を入力してください。" } as const;
+  for (const locale of ["en", "zh-TW", "ja"] as const) {
+    await page.locator(".language-picker").click();
+    await page.locator(`[data-locale="${locale}"]`).click();
+    if (locale !== "en") await expect.poll(() => page.locator("#flow-id").evaluate((input: HTMLInputElement) => input.validationMessage)).toBe(expected[locale]);
+    await page.locator('#new-flow-form button[type="submit"]').click();
+    await expect.poll(() => page.locator("#flow-id").evaluate((input: HTMLInputElement) => input.validationMessage)).toBe(expected[locale]);
+  }
+  await page.locator("#flow-id").fill("localized-flow");
+  await page.locator("#flow-name").fill("Localized Flow");
+  await page.locator("#flow-owner").fill("alice");
+  await page.locator('#new-flow-form button[type="submit"]').click();
+  await expect.poll(() => page.locator("#new-flow-schedule-date").evaluate((input: HTMLInputElement) => input.validationMessage)).toBe(expected.ja);
+  await page.locator("#new-flow-schedule-date").fill("2026/09/23");
+  await page.locator('#new-flow-form button[type="submit"]').click();
+  await expect.poll(() => page.locator('#new-flow-schedule-time select').first().evaluate((input: HTMLSelectElement) => input.validationMessage)).toBe("リストから項目を選択してください。");
+});
+
+test("schedule errors update when the UI language changes", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.locator('[data-action="new-flow"]').click();
+  await page.locator("#flow-id").fill("bad-zone");
+  await page.locator("#flow-name").fill("Bad Zone");
+  await page.locator("#flow-owner").fill("alice");
+  await page.locator("#new-flow-form .schedule-kind-field select").selectOption("daily");
+  await page.locator("#new-flow-schedule-timezone").fill("Invalid/Zone");
+  await page.locator('#new-flow-form button[type="submit"]').click();
+  await expect(page.locator("#new-flow-form .schedule-error")).toHaveText("Choose an IANA timezone from the suggestions.");
+  await page.locator(".language-picker").click();
+  await page.locator('[data-locale="zh-TW"]').click();
+  await expect(page.locator("#new-flow-form .schedule-error")).toHaveText("請從建議項目選擇 IANA 時區。");
+});
+
+test("frozen Flow schedule validation follows the selected language", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled", flow: { committed: true, enabled: true, frozen: true } });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.getByRole("row", { name: /Nightly Flow nightly-flow/ }).click();
+  await page.getByRole("button", { name: "Edit schedule" }).click();
+  await page.locator(".flow-schedule-editor .schedule-kind-field select").selectOption("periodic");
+  await page.locator(".flow-schedule-editor .schedule-kind-field select").selectOption("once");
+  await page.locator(".language-picker").click();
+  await page.locator('[data-locale="ja"]').click();
+  await page.locator('.flow-schedule-editor button[type="submit"]').click();
+  await expect.poll(() => page.locator("#schedule-date").evaluate((input: HTMLInputElement) => input.validationMessage)).toBe("この項目を入力してください。");
+});
+
+test("task fields and numeric limits use localized validation", async ({ page }) => {
+  await mockBackend(page, { workspaceMode: "scheduled" });
+  await page.goto("/");
+  await page.locator('[data-route="workloads"]').click();
+  await page.getByRole("row", { name: /Nightly Flow nightly-flow/ }).click();
+  await page.locator(".language-picker").click();
+  await page.locator('[data-locale="zh-TW"]').click();
+  await page.locator('.task-editor button[type="submit"]').click();
+  await expect.poll(() => page.locator("#flow-task-id").evaluate((input: HTMLInputElement) => input.validationMessage)).toBe("請填寫此欄位。");
+  await page.locator("#flow-task-id").fill("build");
+  await page.locator(".task-editor input").nth(1).fill("Build");
+  await page.locator(".task-editor input").nth(2).fill("echo build");
+  await page.locator("#flow-task-cwd").fill("/workspace");
+  await page.locator('.task-editor input[type="number"]').fill("-1");
+  await page.locator('.task-editor button[type="submit"]').click();
+  await expect.poll(() => page.locator('.task-editor input[type="number"]').evaluate((input: HTMLInputElement) => input.validationMessage)).toBe("請輸入有效的數字。");
 });
 
 test("new Flow opens at the bottom and creation positions Flow detail at the top", async ({ page }) => {

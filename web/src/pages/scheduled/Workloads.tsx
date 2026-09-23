@@ -1,6 +1,7 @@
 import { useLayoutEffect, useState } from "react";
 import { EmptyState, LiveTime, PageHeading, Pagination, StateBadge } from "../../components";
 import { pageInfo, useWorkspace } from "../../context";
+import { clearLocalizedValidity, validateLocalizedForm } from "../../form-validation";
 import { useI18n } from "../../i18n/context";
 import { FlowDetail, ScheduleInputs, schedulePayload, type ScheduleInput } from "./FlowDetail";
 
@@ -54,18 +55,18 @@ function NewFlowForm({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const defaultTimezone = state.settings?.effective_timezone.name || "UTC";
   const timezones = state.settings?.timezones || [defaultTimezone];
   const [schedule, setSchedule] = useState<ScheduleInput>({ kind: "once", date: "", time: "", timezone: defaultTimezone });
-  const [scheduleError, setScheduleError] = useState("");
+  const [scheduleError, setScheduleError] = useState<"scheduled.flow.chooseTimezone" | "scheduled.flow.invalidLocalTime" | null>(null);
   const update = (key: keyof typeof draft, next: string) => setDraft((current) => ({ ...current, [key]: next }));
   const save = async () => {
     const result = schedulePayload(schedule, timezones);
     if (!result.ok) {
-      setScheduleError(t(result.reason === "timezone" ? "scheduled.flow.chooseTimezone" : "scheduled.flow.invalidLocalTime"));
+      setScheduleError(result.reason === "timezone" ? "scheduled.flow.chooseTimezone" : "scheduled.flow.invalidLocalTime");
       return;
     }
-    setScheduleError("");
+    setScheduleError(null);
     if (await actions.createScheduledFlow({ ...draft, schedule: result.schedule })) onCreated();
   };
-  return <section className="panel flow-detail"><form id="new-flow-form" className="new-flow-form" onSubmit={(event) => { event.preventDefault(); void save(); }}><div className="new-flow-form-heading"><div><h2>{t("scheduled.flow.new")}</h2><p>{t("scheduled.workloads.description")}</p></div></div><div className="new-flow-form-grid"><label><span>{t("scheduled.flow.taskId")}</span><input id="flow-id" className="text-input" required value={draft.flow_id} onChange={(event) => update("flow_id", event.target.value)} /></label><label><span>{t("scheduled.name")}</span><input id="flow-name" className="text-input" required value={draft.name} onChange={(event) => update("name", event.target.value)} /></label><label><span>{t("scheduled.owner")}</span><input id="flow-owner" className="text-input" required value={draft.owner} onChange={(event) => update("owner", event.target.value)} /></label></div><ScheduleInputs value={schedule} timezones={timezones} defaultTimezone={defaultTimezone} idPrefix="new-flow-schedule" onChange={(value) => { setSchedule(value); setScheduleError(""); }} />{scheduleError && <div className="form-feedback invalid schedule-error" aria-live="polite">{scheduleError}</div>}<div className="new-flow-form-actions"><button className="button primary" type="submit">{t("scheduled.flow.create")}</button><button className="button secondary" type="button" onClick={onClose}>{t("common.cancel")}</button></div></form></section>;
+  return <section className="panel flow-detail"><form id="new-flow-form" className="new-flow-form" noValidate onInputCapture={(event) => clearLocalizedValidity(event.target)} onChangeCapture={(event) => clearLocalizedValidity(event.target)} onSubmit={(event) => { event.preventDefault(); if (validateLocalizedForm(event.currentTarget, t)) void save(); }}><div className="new-flow-form-heading"><div><h2>{t("scheduled.flow.new")}</h2><p>{t("scheduled.workloads.description")}</p></div></div><div className="new-flow-form-grid"><label><span>{t("scheduled.flow.taskId")}</span><input id="flow-id" className="text-input" required value={draft.flow_id} onChange={(event) => update("flow_id", event.target.value)} /></label><label><span>{t("scheduled.name")}</span><input id="flow-name" className="text-input" required value={draft.name} onChange={(event) => update("name", event.target.value)} /></label><label><span>{t("scheduled.owner")}</span><input id="flow-owner" className="text-input" required value={draft.owner} onChange={(event) => update("owner", event.target.value)} /></label></div><ScheduleInputs value={schedule} timezones={timezones} defaultTimezone={defaultTimezone} idPrefix="new-flow-schedule" onChange={(value) => { setSchedule(value); setScheduleError(null); }} />{scheduleError && <div className="form-feedback invalid schedule-error" aria-live="polite">{t(scheduleError)}</div>}<div className="new-flow-form-actions"><button className="button primary" type="submit">{t("scheduled.flow.create")}</button><button className="button secondary" type="button" onClick={onClose}>{t("common.cancel")}</button></div></form></section>;
 }
 
 function ScheduledJobs() {

@@ -1,4 +1,8 @@
 export const en = {
+  "validation.required": "Please fill out this field.",
+  "validation.selectRequired": "Please select an item in the list.",
+  "validation.invalidNumber": "Enter a valid number.",
+  "validation.invalid": "Enter a valid value.",
   "nav.primary": "Primary navigation",
   "nav.overviewLabel": "Stoker overview",
   "brand.mark": "Stoker flame mark",
@@ -282,6 +286,9 @@ export const en = {
   "scheduled.overview.eyebrow": "Scheduled control center",
   "scheduled.overview.title": "Coordinate scheduled work.",
   "scheduled.overview.description": "Track scheduled Flow capacity, execution health, failures, and recovery state.",
+  "scheduled.overview.viewActiveRuns": "View active runs",
+  "scheduled.overview.viewFailures": "View failures",
+  "scheduled.overview.viewRecovery": "View recovery",
   "scheduled.capacity": "Capacity",
   "scheduled.activeAttempts": "Active attempts",
   "scheduled.flowSummary": "{live} live · {draft} draft",

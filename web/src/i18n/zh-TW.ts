@@ -1,6 +1,10 @@
 import type { Dictionary } from "./messages.ts";
 
 export const messages = {
+  "validation.required": "請填寫此欄位。",
+  "validation.selectRequired": "請選取一個清單中的項目。",
+  "validation.invalidNumber": "請輸入有效的數字。",
+  "validation.invalid": "請輸入有效的值。",
   "nav.primary": "主要導覽",
   "nav.overviewLabel": "Stoker 概覽",
   "brand.mark": "Stoker 火焰標誌",
@@ -278,6 +282,7 @@ export const messages = {
   "overview.runSuffix": "以處理佇列中的工作。瀏覽器 UI 仍可用於檢視。",
   "config.equivalent": "對應命令：",
   "scheduled.nav.workloads": "工作負載", "scheduled.nav.runs": "執行", "scheduled.nav.sources": "來源", "scheduled.refresh": "重新整理工作區",
+  "scheduled.overview.viewActiveRuns": "查看執行中流程", "scheduled.overview.viewFailures": "查看失敗紀錄", "scheduled.overview.viewRecovery": "查看復原狀態",
   "scheduled.overview.eyebrow": "排程控制中心", "scheduled.overview.title": "協調排程工作。", "scheduled.overview.description": "追蹤排程流程容量、執行狀態、失敗與復原狀態。",
   "scheduled.capacity": "容量", "scheduled.activeAttempts": "執行中的嘗試", "scheduled.flowSummary": "{live} 個已上線 · {draft} 個草稿", "scheduled.activeRuns": "執行中的流程", "scheduled.activeRunsDescription": "目前正在執行或停止中的流程", "scheduled.now": "目前執行", "scheduled.nextOccurrences": "下一次排程", "scheduled.queuedOccurrences": "已排定觸發", "scheduled.recentFailures": "近期失敗", "scheduled.recentFailuresDescription": "最近失敗或遺失的執行", "scheduled.attention": "需要處理", "scheduled.nextDescription": "即將自動觸發", "scheduled.noActiveRuns": "沒有執行中的流程", "scheduled.noOccurrences": "沒有即將發生的排程", "scheduled.noFailures": "沒有近期失敗", "scheduled.flowRuns": "流程執行", "scheduled.recovery.overviewTitle": "復原", "scheduled.recovery.overviewDescription": "需要人工協調的中斷執行", "scheduled.recovery.none": "不需要復原", "scheduled.recovery.fenceActive": "復原安全圍籬已啟用",
   "scheduled.workloads.eyebrow": "排程工作負載", "scheduled.workloads.title": "流程與獨立工作", "scheduled.workloads.description": "在排程工作區中檢視定義與生命週期。", "scheduled.workloads.tabs": "工作負載類型", "scheduled.flows": "流程", "scheduled.standaloneJobs": "獨立工作", "scheduled.flowsDescription": "多工作定義與其排程。", "scheduled.jobsDescription": "單一命令的排程定義。", "scheduled.name": "名稱", "scheduled.owner": "擁有者", "scheduled.schedule": "排程", "scheduled.tasks": "工作", "scheduled.status": "狀態", "scheduled.retry": "重試", "scheduled.unscheduled": "沒有排程", "scheduled.noFlows": "沒有可用的流程", "scheduled.noJobs": "沒有可用的排程工作", "scheduled.command": "命令", "scheduled.directory": "工作目錄", "scheduled.created": "建立時間",

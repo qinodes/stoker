@@ -401,6 +401,27 @@ test("job owner suggestions close when the form is clicked elsewhere", async ({ 
   await expect(page.locator("#job-user")).toHaveAttribute("aria-expanded", "false");
 });
 
+test("empty job fields use the selected UI language", async ({ page }) => {
+  await mockBackend(page);
+  await page.goto("/");
+  await page.locator('[data-route="jobs"]').click();
+  const expected = { en: "Please fill out this field.", "zh-TW": "請填寫此欄位。", ja: "この項目を入力してください。" } as const;
+  for (const locale of ["en", "zh-TW", "ja"] as const) {
+    await page.locator(".language-picker").click();
+    await page.locator(`[data-locale="${locale}"]`).click();
+    await page.locator('[data-action="new-job"]').first().click();
+    await page.locator('#new-job-form button[type="submit"]').click();
+    await expect.poll(() => page.locator("#job-user").evaluate((input: HTMLInputElement) => input.validationMessage)).toBe(expected[locale]);
+    await expect(page.locator("#toast-region")).not.toContainText("must not be empty");
+    if (locale === "ja") {
+      await page.locator("#job-user").fill("   ");
+      await page.locator('#new-job-form button[type="submit"]').click();
+      await expect.poll(() => page.locator("#job-user").evaluate((input: HTMLInputElement) => input.validationMessage)).toBe(expected.ja);
+    }
+    await page.locator('[data-action="close-job-form"]').first().click();
+  }
+});
+
 test("jobs shows five rows per page without desktop outer scrolling", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   const model = await mockBackend(page);

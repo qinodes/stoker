@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { isLocale, LANGUAGE_STORAGE_KEY, resolveLocale, translate, translateMessage, translateState, type Locale, type Translator, type UiMessage } from "./messages.ts";
+import { refreshLocalizedValidity } from "../form-validation.ts";
 
 function initialLocale(): Locale {
   let saved: string | null = null;
@@ -21,6 +22,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, updateLocale] = useState(initialLocale);
   useEffect(() => {
     document.documentElement.lang = locale;
+    refreshLocalizedValidity(locale);
   }, [locale]);
   const value = useMemo<I18nValue>(() => ({
     locale,

@@ -1,6 +1,10 @@
 import type { Dictionary } from "./messages.ts";
 
 export const messages = {
+  "validation.required": "この項目を入力してください。",
+  "validation.selectRequired": "リストから項目を選択してください。",
+  "validation.invalidNumber": "有効な数値を入力してください。",
+  "validation.invalid": "有効な値を入力してください。",
   "nav.primary": "メインナビゲーション",
   "nav.overviewLabel": "Stoker の概要",
   "brand.mark": "Stoker の炎のロゴ",
@@ -278,6 +282,7 @@ export const messages = {
   "overview.runSuffix": "を実行して、キューのジョブを処理してください。ブラウザー UI で引き続き状態を確認できます。",
   "config.equivalent": "対応するコマンド：",
   "scheduled.nav.workloads": "ワークロード", "scheduled.nav.runs": "実行", "scheduled.nav.sources": "ソース", "scheduled.refresh": "ワークスペースを更新",
+  "scheduled.overview.viewActiveRuns": "実行中のランを表示", "scheduled.overview.viewFailures": "失敗を表示", "scheduled.overview.viewRecovery": "リカバリーを表示",
   "scheduled.overview.eyebrow": "スケジュール管理センター", "scheduled.overview.title": "スケジュールされた作業を調整。", "scheduled.overview.description": "スケジュール済み Flow の容量、実行状態、失敗、リカバリー状態を追跡します。",
   "scheduled.capacity": "容量", "scheduled.activeAttempts": "実行中の試行", "scheduled.flowSummary": "稼働中 {live} · 下書き {draft}", "scheduled.activeRuns": "実行中のラン", "scheduled.activeRunsDescription": "現在実行中または停止処理中", "scheduled.now": "現在実行中", "scheduled.nextOccurrences": "次の予定", "scheduled.queuedOccurrences": "予定済みのトリガー", "scheduled.recentFailures": "最近の失敗", "scheduled.recentFailuresDescription": "最近失敗または消失したラン", "scheduled.attention": "確認が必要", "scheduled.nextDescription": "今後の自動トリガー", "scheduled.noActiveRuns": "実行中のランはありません", "scheduled.noOccurrences": "今後の予定はありません", "scheduled.noFailures": "最近の失敗はありません", "scheduled.flowRuns": "Flow の実行", "scheduled.recovery.overviewTitle": "リカバリー", "scheduled.recovery.overviewDescription": "調整が必要な中断されたラン", "scheduled.recovery.none": "リカバリーは不要です", "scheduled.recovery.fenceActive": "リカバリーフェンスが有効です",
   "scheduled.workloads.eyebrow": "スケジュール済みワークロード", "scheduled.workloads.title": "Flow とスタンドアロンジョブ", "scheduled.workloads.description": "スケジュール済みワークスペースで定義とライフサイクルを確認します。", "scheduled.workloads.tabs": "ワークロード種別", "scheduled.flows": "Flow", "scheduled.standaloneJobs": "スタンドアロンジョブ", "scheduled.flowsDescription": "複数タスクの定義とスケジュール。", "scheduled.jobsDescription": "単一コマンドのスケジュール定義。", "scheduled.name": "名前", "scheduled.owner": "所有者", "scheduled.schedule": "スケジュール", "scheduled.tasks": "タスク", "scheduled.status": "状態", "scheduled.retry": "再試行", "scheduled.unscheduled": "スケジュールなし", "scheduled.noFlows": "利用可能な Flow はありません", "scheduled.noJobs": "利用可能なスケジュール済みジョブはありません", "scheduled.command": "コマンド", "scheduled.directory": "作業ディレクトリ", "scheduled.created": "作成日時",

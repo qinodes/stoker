@@ -1,5 +1,5 @@
 import type { Page, Request, Route } from "@playwright/test";
-import type { PolicyResponse, ScheduledFlow, ScheduledRun, ScheduledStandaloneJob, WorkspaceMode } from "../../../src/types.ts";
+import type { PolicyResponse, ScheduledFlow, ScheduledRun, ScheduledRunSummary, ScheduledStandaloneJob, WorkspaceMode } from "../../../src/types.ts";
 
 export interface MockBackendOptions {
   workspaceMode: WorkspaceMode;
@@ -8,6 +8,7 @@ export interface MockBackendOptions {
   recoveryFence?: boolean;
   flow?: Partial<ScheduledFlow>;
   flowCount?: number;
+  recentFailures?: ScheduledRunSummary[];
 }
 
 export interface MockBackend {
@@ -83,7 +84,7 @@ export async function mockBackend(page: Page, options: MockBackendOptions): Prom
       active_runs: runs.filter((run) => run.state !== "RECOVERING" && !["CANCELLED", "SUCCEEDED", "FAILED", "FAILED_TO_START", "SKIPPED", "LOST"].includes(run.state)).map(summary),
       recovering_runs: runs.filter((run) => run.state === "RECOVERING").map(summary),
       recovery_fence: model.recoveryFence,
-      next_occurrences: [], recent_failures: [],
+      next_occurrences: [], recent_failures: options.recentFailures ?? [],
     });
     if (path === "/api/v1/scheduled/flows" && method === "GET") return json(route, { flows });
     if (path === "/api/v1/scheduled/flows" && method === "POST") {
