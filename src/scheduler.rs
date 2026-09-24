@@ -372,6 +372,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancellation_before_running_acknowledgement_finishes_the_claimed_job() {
+        let (directory, store, scheduler) =
+            scheduler_fixture_with_controller(Arc::new(CancelAwareController));
+        let id = store
+            .create_job(NewJob {
+                name: "cancel before acknowledgement".into(),
+                user: "test".into(),
+                description: None,
+                cwd: directory.path().to_path_buf(),
+                command: vec!["ignored-by-fake".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+        let claimed = store.claim_next().unwrap().unwrap();
+        store.request_cancelling(id).unwrap();
+        let (_cancel_tx, cancel_rx) = watch::channel(true);
+        scheduler.execute(claimed, cancel_rx).await.unwrap();
+        let job = store.get_job(id).unwrap();
+        assert_eq!(job.state, JobState::Cancelled);
+        assert_eq!(job.pid, None);
+    }
+
+    #[tokio::test]
+    async fn closed_cancellation_channel_persists_a_failure_diagnostic() {
+        let (directory, store, scheduler) =
+            scheduler_fixture_with_controller(Arc::new(CancelAwareController));
+        let id = store
+            .create_job(NewJob {
+                name: "closed cancellation".into(),
+                user: "test".into(),
+                description: None,
+                cwd: directory.path().to_path_buf(),
+                command: vec!["ignored-by-fake".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+        let claimed = store.claim_next().unwrap().unwrap();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        drop(cancel_tx);
+        scheduler.execute(claimed, cancel_rx).await.unwrap();
+        let job = store.get_job(id).unwrap();
+        assert_eq!(job.state, JobState::Failed);
+        assert!(
+            job.failure_detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("cancellation signal closed"))
+        );
+    }
+
+    #[tokio::test]
+    async fn claimed_job_without_an_active_scheduler_slot_cannot_be_cancelled() {
+        let (directory, store, scheduler) = scheduler_fixture();
+        let id = store
+            .create_job(NewJob {
+                name: "claimed without runner".into(),
+                user: "test".into(),
+                description: None,
+                cwd: directory.path().to_path_buf(),
+                command: vec!["echo".into()],
+            })
+            .unwrap();
+        store.commit_job(id).unwrap();
+        store.claim_next().unwrap().unwrap();
+        let error = scheduler.handle_cancel(id).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("not managed by the active scheduler")
+        );
+    }
+
+    #[tokio::test]
     async fn fake_spawn_failure_is_persisted_as_a_failed_job() {
         let (directory, store, scheduler) =
             scheduler_fixture_with_controller(Arc::new(FailingSpawnController));

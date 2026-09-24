@@ -1,6 +1,7 @@
 use chrono::{Duration, Utc};
 use stoker::domain::flow::{
-    Dependency, DependencyMode, DependencyStatus, ExecutionMode, ScheduleSpec,
+    AttemptState, Dependency, DependencyMode, DependencyStatus, ExecutionMode, FlowRunState,
+    OccurrenceState, ScheduleSpec,
 };
 use stoker::store::{FlowAttemptResult, FlowTaskInput};
 use stoker::{Store, StoreError};
@@ -368,4 +369,234 @@ fn frozen_daily_flow_discards_stale_drafts_and_applies_a_new_schedule_generation
     assert_eq!(applied.schedule_generation, 2);
     assert!(!applied.frozen);
     assert!(!applied.has_draft);
+}
+
+#[test]
+fn cancelling_all_manual_runs_settles_every_pending_task_and_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    for flow_id in ["cancel-one", "cancel-two"] {
+        store
+            .create_flow(
+                flow_id.into(),
+                flow_id.into(),
+                "tester".into(),
+                ScheduleSpec::Once {
+                    at: Utc::now() + Duration::hours(2),
+                },
+            )
+            .unwrap();
+        store
+            .add_flow_task(task(directory.path(), flow_id, "root"))
+            .unwrap();
+        store.commit_flow(flow_id).unwrap();
+    }
+    store.lock_queue().unwrap();
+    store.set_mode(ExecutionMode::Scheduled).unwrap();
+    store.unlock_queue().unwrap();
+    let first_request = uuid::Uuid::new_v4();
+    let first = store
+        .create_flow_run("cancel-one", "MANUAL", false, Some(first_request))
+        .unwrap();
+    let second = store
+        .create_flow_run("cancel-two", "MANUAL", false, None)
+        .unwrap();
+    let cancelled = store.cancel_all_flow_runs().unwrap();
+    assert_eq!(cancelled.len(), 2);
+    assert!(cancelled.iter().all(|run| run.state.is_terminal()));
+    assert!(
+        cancelled
+            .iter()
+            .all(|run| run.tasks.iter().all(|task| task.state.is_terminal()))
+    );
+    assert_eq!(
+        store.get_flow_run(first.run_id).unwrap().state,
+        cancelled
+            .iter()
+            .find(|run| run.run_id == first.run_id)
+            .unwrap()
+            .state
+    );
+    assert!(cancelled.iter().any(|run| run.run_id == second.run_id));
+    assert_eq!(
+        store.manual_request(first_request).unwrap().result,
+        "CANCELLED"
+    );
+    assert!(store.cancel_all_flow_runs().unwrap().is_empty());
+}
+
+#[test]
+fn manual_runs_reject_frozen_locked_duplicate_and_capacity_executions() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    for flow_id in ["guarded-one", "guarded-two"] {
+        store
+            .create_flow(
+                flow_id.into(),
+                flow_id.into(),
+                "tester".into(),
+                ScheduleSpec::Once {
+                    at: Utc::now() + Duration::hours(2),
+                },
+            )
+            .unwrap();
+        store
+            .add_flow_task(task(directory.path(), flow_id, "root"))
+            .unwrap();
+        store.commit_flow(flow_id).unwrap();
+    }
+    store.freeze_flow("guarded-one").unwrap();
+    assert!(matches!(
+        store.create_flow_run("guarded-one", "MANUAL", false, None),
+        Err(StoreError::InvalidData(message)) if message.contains("frozen")
+    ));
+    store.unfreeze_flow("guarded-one", None).unwrap();
+    store.lock_queue().unwrap();
+    assert!(matches!(
+        store.create_flow_run("guarded-one", "MANUAL", false, None),
+        Err(StoreError::QueueLocked)
+    ));
+    store.set_mode(ExecutionMode::Scheduled).unwrap();
+    store.set_scheduled_concurrency(1).unwrap();
+    store.unlock_queue().unwrap();
+
+    let first = store
+        .create_flow_run("guarded-one", "MANUAL", false, None)
+        .unwrap();
+    assert!(matches!(
+        store.create_flow_run("guarded-one", "MANUAL", false, None),
+        Err(StoreError::InvalidData(message)) if message.contains("active run")
+    ));
+    let execution = store.claim_flow_task(Utc::now()).unwrap().unwrap();
+    assert_eq!(execution.run_id, first.run_id);
+    assert!(matches!(
+        store.create_flow_run("guarded-two", "MANUAL", false, None),
+        Err(StoreError::InvalidData(message)) if message.contains("capacity")
+    ));
+}
+
+#[test]
+fn terminal_attempt_results_persist_cancellation_and_loss_details() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    flow(&store, directory.path());
+    store.commit_flow("coverage-flow").unwrap();
+    store.lock_queue().unwrap();
+    store.set_mode(ExecutionMode::Scheduled).unwrap();
+    store.unlock_queue().unwrap();
+
+    let cancelled = store
+        .create_flow_run("coverage-flow", "MANUAL", false, None)
+        .unwrap();
+    let cancelled_attempt = store.claim_flow_task(Utc::now()).unwrap().unwrap();
+    let cancelled_run = store
+        .finish_flow_attempt(
+            cancelled_attempt.attempt_id,
+            FlowAttemptResult::Cancelled {
+                detail: "cancelled by test".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(cancelled_run.run_id, cancelled.run_id);
+    assert_eq!(cancelled_run.state, FlowRunState::Cancelled);
+    let cancelled_history = store.list_flow_attempts(cancelled.run_id, "root").unwrap();
+    assert_eq!(cancelled_history[0].state, AttemptState::Cancelled);
+    assert_eq!(
+        cancelled_history[0].failure_kind.as_deref(),
+        Some("CANCELLED")
+    );
+
+    let lost = store
+        .create_flow_run("coverage-flow", "MANUAL", false, None)
+        .unwrap();
+    let lost_attempt = store.claim_flow_task(Utc::now()).unwrap().unwrap();
+    store
+        .mark_flow_attempt_running(lost_attempt.attempt_id)
+        .unwrap();
+    let recovering = store
+        .finish_flow_attempt(
+            lost_attempt.attempt_id,
+            FlowAttemptResult::Lost {
+                detail: "worker disappeared".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(recovering.run_id, lost.run_id);
+    assert_eq!(recovering.state, FlowRunState::Recovering);
+    assert!(store.queue_locked().unwrap());
+    assert!(store.queue_recovery_fence().unwrap());
+    let lost_history = store.list_flow_attempts(lost.run_id, "root").unwrap();
+    assert_eq!(lost_history[0].state, AttemptState::Lost);
+    assert_eq!(lost_history[0].failure_kind.as_deref(), Some("LOST"));
+}
+
+#[test]
+fn startup_failures_restore_manual_occurrences_and_skip_automatic_ones() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path().join("stoker.db")).unwrap();
+    flow(&store, directory.path());
+    store.commit_flow("coverage-flow").unwrap();
+    store.lock_queue().unwrap();
+    store.set_mode(ExecutionMode::Scheduled).unwrap();
+    store.unlock_queue().unwrap();
+
+    let manual = store
+        .create_flow_run("coverage-flow", "MANUAL", true, None)
+        .unwrap();
+    let manual_attempt = store.claim_flow_task(Utc::now()).unwrap().unwrap();
+    let failed_manual = store
+        .finish_flow_attempt(
+            manual_attempt.attempt_id,
+            FlowAttemptResult::Failed {
+                exit_code: None,
+                kind: "SPAWN".into(),
+                detail: "test startup failure".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(failed_manual.run_id, manual.run_id);
+    assert_eq!(failed_manual.state, FlowRunState::FailedToStart);
+    assert_eq!(
+        store.list_occurrences("coverage-flow").unwrap()[0].state,
+        OccurrenceState::Pending
+    );
+
+    let automatic_directory = tempfile::tempdir().unwrap();
+    let automatic_store = Store::open(automatic_directory.path().join("stoker.db")).unwrap();
+    automatic_store
+        .create_flow(
+            "automatic".into(),
+            "Automatic".into(),
+            "tester".into(),
+            ScheduleSpec::Once {
+                at: Utc::now() - Duration::seconds(1),
+            },
+        )
+        .unwrap();
+    automatic_store
+        .add_flow_task(task(automatic_directory.path(), "automatic", "root"))
+        .unwrap();
+    automatic_store.commit_flow("automatic").unwrap();
+    automatic_store.lock_queue().unwrap();
+    automatic_store.set_mode(ExecutionMode::Scheduled).unwrap();
+    automatic_store.unlock_queue().unwrap();
+    let automatic_attempt = automatic_store
+        .claim_flow_task(Utc::now())
+        .unwrap()
+        .unwrap();
+    let failed_automatic = automatic_store
+        .finish_flow_attempt(
+            automatic_attempt.attempt_id,
+            FlowAttemptResult::Failed {
+                exit_code: None,
+                kind: "STARTUP_TIMEOUT".into(),
+                detail: "test timeout".into(),
+            },
+        )
+        .unwrap();
+    assert_eq!(failed_automatic.state, FlowRunState::FailedToStart);
+    assert_eq!(
+        automatic_store.list_occurrences("automatic").unwrap()[0].state,
+        OccurrenceState::Skipped
+    );
 }

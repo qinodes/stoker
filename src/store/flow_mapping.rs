@@ -471,6 +471,17 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
+    struct DefinitionFixture<'a> {
+        kind: Option<&'a str>,
+        at: Option<&'a str>,
+        daily: Option<&'a str>,
+        timezone: Option<&'a str>,
+        period_value: Option<i64>,
+        period_unit: Option<&'a str>,
+        mode: &'a str,
+        internal: &'a str,
+    }
+
     fn empty_connection() -> Connection {
         let connection = Connection::open_in_memory().unwrap();
         connection
@@ -495,17 +506,7 @@ mod tests {
         connection
     }
 
-    fn insert_definition(
-        connection: &Connection,
-        kind: Option<&str>,
-        at: Option<&str>,
-        daily: Option<&str>,
-        timezone: Option<&str>,
-        period_value: Option<i64>,
-        period_unit: Option<&str>,
-        mode: &str,
-        internal: &str,
-    ) {
+    fn insert_definition(connection: &Connection, fixture: DefinitionFixture<'_>) {
         connection
             .execute(
                 "INSERT INTO flow_definitions VALUES (
@@ -513,14 +514,14 @@ mod tests {
                     1, 1, 0, 1, 2, 0, NULL, NULL
                 )",
                 params![
-                    internal,
-                    mode,
-                    kind,
-                    at,
-                    daily,
-                    timezone,
-                    period_value,
-                    period_unit
+                    fixture.internal,
+                    fixture.mode,
+                    fixture.kind,
+                    fixture.at,
+                    fixture.daily,
+                    fixture.timezone,
+                    fixture.period_value,
+                    fixture.period_unit
                 ],
             )
             .unwrap();
@@ -633,16 +634,19 @@ mod tests {
         ];
         for (kind, at, daily, timezone, period, unit) in cases {
             let connection = empty_connection();
+            let internal = Uuid::new_v4().to_string();
             insert_definition(
                 &connection,
-                kind,
-                at,
-                daily,
-                timezone,
-                period,
-                unit,
-                "scheduled",
-                &Uuid::new_v4().to_string(),
+                DefinitionFixture {
+                    kind,
+                    at,
+                    daily,
+                    timezone,
+                    period_value: period,
+                    period_unit: unit,
+                    mode: "scheduled",
+                    internal: &internal,
+                },
             );
             connection
                 .execute(
@@ -686,16 +690,19 @@ mod tests {
         ];
         for (kind, at, daily, timezone, period, unit) in cases {
             let connection = empty_connection();
+            let internal = Uuid::new_v4().to_string();
             insert_definition(
                 &connection,
-                kind,
-                at,
-                daily,
-                timezone,
-                period,
-                unit,
-                "scheduled",
-                &Uuid::new_v4().to_string(),
+                DefinitionFixture {
+                    kind,
+                    at,
+                    daily,
+                    timezone,
+                    period_value: period,
+                    period_unit: unit,
+                    mode: "scheduled",
+                    internal: &internal,
+                },
             );
             assert!(load_flow_base(&connection, "flow").is_err(), "{kind:?}");
         }
@@ -746,14 +753,16 @@ mod tests {
             let connection = empty_connection();
             insert_definition(
                 &connection,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                mode,
-                &internal,
+                DefinitionFixture {
+                    kind: None,
+                    at: None,
+                    daily: None,
+                    timezone: None,
+                    period_value: None,
+                    period_unit: None,
+                    mode,
+                    internal: &internal,
+                },
             );
             connection
                 .execute(

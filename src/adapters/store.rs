@@ -143,3 +143,68 @@ pub(super) fn map_store_error(error: StoreError) -> JobRepositoryError {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::JobState;
+    use crate::domain::flow::ExecutionMode;
+
+    #[test]
+    fn store_error_mapping_preserves_conflicts_invalid_data_and_unavailability() {
+        let id = uuid::Uuid::new_v4();
+        assert!(
+            matches!(map_store_error(StoreError::NotFound { id }), JobRepositoryError::NotFound { id: actual } if actual == id)
+        );
+        assert!(
+            matches!(map_store_error(StoreError::InvalidTransition { id, state: JobState::Draft, action: "commit" }), JobRepositoryError::Conflict(Conflict::InvalidJobState { id: actual, state: JobState::Draft, operation: "commit" }) if actual == id)
+        );
+        assert!(matches!(
+            map_store_error(StoreError::QueueLocked),
+            JobRepositoryError::Conflict(Conflict::QueueLocked)
+        ));
+        assert!(matches!(
+            map_store_error(StoreError::QueueUnlocked),
+            JobRepositoryError::Conflict(Conflict::QueueUnlocked)
+        ));
+        assert!(
+            matches!(map_store_error(StoreError::ActiveJob { id, state: JobState::Running }), JobRepositoryError::Conflict(Conflict::InvalidJobState { id: actual, state: JobState::Running, operation: "change log policy" }) if actual == id)
+        );
+        assert!(matches!(
+            map_store_error(StoreError::InvalidQueueOrder {
+                id,
+                target_order: 5,
+                queued_count: 2
+            }),
+            JobRepositoryError::Conflict(Conflict::StaleQueue)
+        ));
+        assert!(
+            matches!(map_store_error(StoreError::DescriptionConflict { id, expected_revision: 1, actual_revision: 2 }), JobRepositoryError::Conflict(Conflict::StaleDescription { id: actual, expected_revision: 1, actual_revision: 2 }) if actual == id)
+        );
+        for error in [
+            StoreError::InvalidData("bad value".into()),
+            StoreError::ScheduledModeChanged {
+                actual: ExecutionMode::Scheduled,
+            },
+            StoreError::DraftRevisionConflict {
+                expected: 1,
+                current: 2,
+            },
+            StoreError::Serialization(serde_json::from_str::<()>("bad").unwrap_err()),
+        ] {
+            assert!(matches!(
+                map_store_error(error),
+                JobRepositoryError::InvalidData { .. }
+            ));
+        }
+        for error in [
+            StoreError::Database(rusqlite::Error::InvalidQuery),
+            StoreError::Poisoned,
+        ] {
+            assert!(matches!(
+                map_store_error(error),
+                JobRepositoryError::Unavailable { .. }
+            ));
+        }
+    }
+}

@@ -149,10 +149,11 @@ impl Scheduler {
             let mut process_task = tokio::spawn(async move {
                 process.wait_with_cancel(process_cancel_rx).await
             });
+            let mut completed_on_running_rejection = None;
             let running = self.execution_store.set_running(job.id, pid);
             if let Err(error) = running {
                 let _ = process_cancel_tx.take().map(|sender| sender.send(()));
-                let _ = (&mut process_task).await;
+                let completion = (&mut process_task).await;
                 if self
                     .execution_store
                     .get_job(job.id)
@@ -162,6 +163,7 @@ impl Scheduler {
                     // Cancellation raced with the STARTING -> RUNNING
                     // transition. The normal terminal cleanup below will
                     // turn CANCELLING into CANCELLED.
+                    completed_on_running_rejection = Some(completion);
                 } else {
                     return Err(error).context(format!(
                         "record running job while job is {}",
@@ -179,7 +181,11 @@ impl Scheduler {
                 log_sender.clone(),
                 log_offsets.clone(),
             ));
-            let status = if *cancel.borrow() {
+            let status = if let Some(completion) = completed_on_running_rejection {
+                completion
+                    .map_err(|error| anyhow::anyhow!("wait for cancelled job process: {error}"))?
+                    .context("wait for cancelled job process")?
+            } else if *cancel.borrow() {
                 let _ = self.store.request_cancelling(job.id);
                 let _ = process_cancel_tx.take().map(|sender| sender.send(()));
                 (&mut process_task)
