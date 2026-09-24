@@ -6,7 +6,7 @@ release.
 The release flow is:
 
 ```text
-check -> push release/vX.Y.Z -> CI + coverage -> preview tag -> Preview Release -> final tag -> promote artifact -> optional publish
+check -> push release/vX.Y.Z -> CI + coverage -> final tag -> build and publish GitHub Release -> optional crates.io publish
 ```
 
 ## Prerequisites
@@ -23,7 +23,7 @@ check -> push release/vX.Y.Z -> CI + coverage -> preview tag -> Preview Release 
 
 ## 1. Check
 
-Run the complete Rust validation suite:
+Run the complete validation suite:
 
 ```bash
 make check
@@ -47,82 +47,45 @@ Commit the intended release changes on the release branch, then push it. For a
 make git-release-push
 ```
 
-The push triggers the full CI workflow and Rust coverage workflow for the exact
-release branch commit. Markdown-only and YAML-only changes are filtered out.
+The push triggers the CI and Rust coverage workflows for the exact release
+branch commit. Markdown-only and YAML-only changes are filtered out.
 `make git-release-push` verifies that the current branch exactly matches
 `release/vX.Y.Z`, that its version matches the package version, and then pushes
 that branch to `origin`.
 
-## 3. Build a preview artifact
+## 3. Create the final release tag
 
-After CI and coverage pass, create a numbered preview tag on the exact commit
-that will be released and push it:
-
-```bash
-make preview-tag PREVIEW=1
-make preview PREVIEW=1
-```
-
-`PREVIEW` is the preview attempt number, and the same number must be used for
-both commands and for the later final-tag commands. For example, if the first
-preview (`preview/v2.0.0-1`) failed after a new commit, use `PREVIEW=2` for the
-new preview, not `PREVIEW=1` again:
+After CI and coverage pass, create the final annotated tag on the same commit:
 
 ```bash
-make preview-tag PREVIEW=2
-make preview PREVIEW=2
+make tag
 ```
 
-The `Preview Release` workflow rebuilds and verifies the committed frontend
-resources, builds the platform matrix, packages the archives and installers,
-verifies `SHA256SUMS`, and stores the complete release artifact. It does not
-publish a GitHub Release. The preview number is local bookkeeping: if a new
-source commit is needed, use a new preview number (for example `PREVIEW=2`)
-after committing and pushing that new release-branch commit.
+`make tag` reads the package version from `Cargo.toml`, requires a clean working
+tree, verifies the release branch, and creates `vX.Y.Z` locally. It does not
+push the tag. The command does not update `Cargo.toml` or create a release
+commit. An explicit `VERSION=x.y.z` override is supported when needed, but
+normally no version argument is required.
 
-The preview tag format is `preview/vX.Y.Z-N`, such as
-`preview/v2.0.0-1`. The generated installers still contain the stable release
-version `X.Y.Z`, so the artifact can be promoted unchanged.
+## 4. Build and publish the GitHub Release
 
-## 4. Create the final release tag
-
-Wait for the Preview Release workflow to pass. Then create the final tag on the
-same commit. Use the number of the preview that actually passed:
+Push the final tag:
 
 ```bash
-make tag PREVIEW=2
+make release
 ```
 
-`make tag` only creates the final annotated tag locally; it does not push it.
-It reads the package version from `Cargo.toml`, requires a clean working tree,
-and refuses to create the final tag unless `preview/vX.Y.Z-N` (with the same
-`PREVIEW=N`) exists on the current commit. The command does not update
-`Cargo.toml` or create a release commit. An explicit `VERSION=x.y.z` override
-is supported when needed, but normally no version argument is required.
+`make release` verifies that the local tag exists, points to the current commit,
+and then pushes it to `origin`. The Release workflow checks out that exact tag,
+rebuilds the frontend and platform binaries, packages the archives and
+installers, verifies `SHA256SUMS`, and publishes the resulting files to a
+GitHub Release. It does not run coverage or publish to crates.io.
 
-## 5. Push and promote the release artifact
+If the Release workflow needs to be retried, use its `workflow_dispatch` entry
+in GitHub Actions and enter `vX.Y.Z`. It rebuilds the artifact from the tagged
+commit; do not delete and recreate the final tag.
 
-```bash
-make release PREVIEW=2
-```
-
-This pushes only the annotated release tag (for example `v2.0.0`) to `origin`.
-`make release` does not create the tag; run `make tag PREVIEW=N` first. The
-`PREVIEW=N` value must refer to the preview workflow that passed.
-
-After the tag is pushed, GitHub Actions runs
-`.github/workflows/release.yml`. It locates the successful preview artifact for
-the final tag's exact commit, verifies its files and checksums, and attaches the
-artifact contents to a GitHub Release for the tag. It does not compile again,
-run tests, run coverage, or publish to crates.io. This is the build-once,
-promote-artifact path, so correcting a release-workflow publishing problem does
-not require rebuilding or moving the final tag.
-
-If the final release workflow needs to be retried, use its `workflow_dispatch`
-entry in GitHub Actions and enter `vX.Y.Z`. It reuses the preview artifact for
-that tag's commit; do not delete and recreate the final tag.
-
-## 6. Publish to crates.io
+## 5. Publish to crates.io
 
 ```bash
 make publish
@@ -147,12 +110,9 @@ git add Cargo.toml Cargo.lock
 git commit -m "release: prepare v2.0.0"
 make git-release-push
 # Wait for CI and coverage to pass on release/v2.0.0.
-make preview-tag PREVIEW=1
-make preview PREVIEW=1
-# Wait for Preview Release to pass.
-make tag PREVIEW=1
-make release PREVIEW=1
-# Wait for the Release workflow to promote the existing artifact.
+make tag
+make release
+# Wait for the Release workflow to publish the GitHub Release.
 make publish
 ```
 

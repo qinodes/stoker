@@ -1,13 +1,10 @@
-.PHONY: format format-check lint test cargo-check web-install web-build web-test web-browser-test coverage coverage-install build stop-test-process dev-restart check version tag preview-tag verify-release-branch verify-preview-tag git-release-push preview release publish
+.PHONY: format format-check lint test cargo-check web-install web-build web-test web-browser-test coverage coverage-install build stop-test-process dev-restart check version tag verify-release-branch git-release-push release publish
 
 VERSION ?=
 TAG = v$(VERSION)
 MESSAGE = Release $(TAG)
-PREVIEW ?= 1
-PREVIEW_TAG = preview/$(TAG)-$(PREVIEW)
-PREVIEW_MESSAGE = Preview $(PREVIEW_TAG)
 
-ifneq ($(filter tag preview-tag release git-release-push preview,$(MAKECMDGOALS)),)
+ifneq ($(filter tag release git-release-push,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VERSION)),)
 ifeq ($(OS),Windows_NT)
 VERSION := $(shell powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "scripts/get-version.ps1")
@@ -119,38 +116,7 @@ else
 	fi
 endif
 
-verify-preview-tag: verify-release-branch
-ifeq ($(OS),Windows_NT)
-	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if ('$(PREVIEW)' -notmatch '^[1-9][0-9]*$$') { Write-Error 'PREVIEW must be a positive integer, for example PREVIEW=1.'; exit 1 }; git rev-parse --verify --quiet 'refs/tags/$(PREVIEW_TAG)' *> $$null; if ($$LASTEXITCODE -ne 0) { Write-Error 'Preview tag $(PREVIEW_TAG) does not exist. Run make preview-tag PREVIEW=$(PREVIEW) first.'; exit 1 }; $$tagCommit = (git rev-list -n 1 '$(PREVIEW_TAG)').Trim(); $$headCommit = (git rev-parse HEAD).Trim(); if ($$tagCommit -ne $$headCommit) { Write-Error 'Preview tag $(PREVIEW_TAG) does not point to the current commit.'; exit 1 }"
-else
-	@case "$(PREVIEW)" in ''|0|*[!0-9]*) echo "PREVIEW must be a positive integer, for example PREVIEW=1." >&2; exit 1;; esac; \
-	if ! git rev-parse --verify --quiet "refs/tags/$(PREVIEW_TAG)" >/dev/null 2>&1; then \
-		echo "Preview tag $(PREVIEW_TAG) does not exist. Run make preview-tag PREVIEW=$(PREVIEW) first." >&2; exit 1; \
-	fi; \
-	tag_commit="$$(git rev-list -n 1 "$(PREVIEW_TAG)")"; \
-	head_commit="$$(git rev-parse HEAD)"; \
-	if [ "$$tag_commit" != "$$head_commit" ]; then \
-		echo "Preview tag $(PREVIEW_TAG) does not point to the current commit." >&2; exit 1; \
-	fi
-endif
-
-preview-tag: verify-release-branch
-ifeq ($(OS),Windows_NT)
-	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if ('$(PREVIEW)' -notmatch '^[1-9][0-9]*$$') { Write-Error 'PREVIEW must be a positive integer, for example PREVIEW=1.'; exit 1 }; $$worktreeStatus = git status --porcelain; if ($$LASTEXITCODE -ne 0) { Write-Error 'Could not inspect the working tree.'; exit 1 }; if ($$worktreeStatus) { Write-Error 'Working tree must be clean before creating $(PREVIEW_TAG).'; exit 1 }; git rev-parse --verify --quiet 'refs/tags/$(PREVIEW_TAG)' *> $$null; if ($$LASTEXITCODE -eq 0) { Write-Error 'Tag $(PREVIEW_TAG) already exists.'; exit 1 }; git tag -a '$(PREVIEW_TAG)' -m '$(PREVIEW_MESSAGE)'"
-else
-	@case "$(PREVIEW)" in ''|0|*[!0-9]*) echo "PREVIEW must be a positive integer, for example PREVIEW=1." >&2; exit 1;; esac; \
-	worktree_status="$$(git status --porcelain)"; \
-	if [ -n "$$worktree_status" ]; then \
-		echo "Working tree must be clean before creating $(PREVIEW_TAG)." >&2; exit 1; \
-	fi; \
-	if git rev-parse --verify --quiet "refs/tags/$(PREVIEW_TAG)" >/dev/null 2>&1; then \
-		echo "Tag $(PREVIEW_TAG) already exists." >&2; exit 1; \
-	fi; \
-	git tag -a "$(PREVIEW_TAG)" -m "$(PREVIEW_MESSAGE)"
-endif
-	@echo "Preview tag $(PREVIEW_TAG) created at the current commit. Push it with 'make preview PREVIEW=$(PREVIEW)'."
-
-tag: verify-preview-tag
+tag: verify-release-branch
 ifeq ($(OS),Windows_NT)
 	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$worktreeStatus = git status --porcelain; if ($$LASTEXITCODE -ne 0) { Write-Error 'Could not inspect the working tree.'; exit 1 }; if ($$worktreeStatus) { Write-Error 'Working tree must be clean before creating $(TAG).'; exit 1 }; git rev-parse --verify --quiet 'refs/tags/$(TAG)' *> $$null; if ($$LASTEXITCODE -eq 0) { Write-Error 'Tag $(TAG) already exists.'; exit 1 }; git tag -a '$(TAG)' -m '$(MESSAGE)'"
 else
@@ -163,15 +129,7 @@ else
 	fi; \
 	git tag -a "$(TAG)" -m "$(MESSAGE)"
 endif
-	@echo "Tag $(TAG) created at the current commit. Push it with 'make release' to promote the preview artifact."
-
-preview: verify-preview-tag
-ifeq ($(OS),Windows_NT)
-	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Write-Host ('Pushing preview tag ' + '$(PREVIEW_TAG)'); git push origin ('refs/tags/' + '$(PREVIEW_TAG)')"
-else
-	@echo "Pushing preview tag $(PREVIEW_TAG)"; \
-	git push origin "refs/tags/$(PREVIEW_TAG)"
-endif
+	@echo "Tag $(TAG) created at the current commit. Push it with 'make release'."
 
 git-release-push: verify-release-branch
 ifeq ($(OS),Windows_NT)
@@ -188,7 +146,7 @@ else
 	git push origin "$$branch"
 endif
 
-release: verify-preview-tag
+release: verify-release-branch
 ifeq ($(OS),Windows_NT)
 	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$tagRef = 'refs/tags/$(TAG)'; git rev-parse --verify --quiet $$tagRef *> $$null; if ($$LASTEXITCODE -ne 0) { Write-Error 'Tag $(TAG) does not exist. Run make tag first.'; exit 1 }; $$tagCommit = (git rev-list -n 1 '$(TAG)').Trim(); $$headCommit = (git rev-parse HEAD).Trim(); if ($$tagCommit -ne $$headCommit) { Write-Error 'Tag $(TAG) does not point to the current commit.'; exit 1 }; git push origin ('refs/tags/' + '$(TAG)')"
 else
