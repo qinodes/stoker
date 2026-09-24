@@ -2,7 +2,7 @@
 name = "stoker-engine"
 version = "2.3.0"
 edition = "2024"
-description = "A lightweight, cross-platform CLI for scheduling multiple time-consuming jobs to run sequentially and reliably"
+description = "A lightweight, cross-platform CLI for reliable serial job queues, scheduled jobs, and multi-step flows"
 license = "Apache-2.0"
 repository = "https://github.com/qinodes/stoker"
 readme = "README.md"
