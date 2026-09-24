@@ -12,7 +12,7 @@ use crate::domain::{Job, JobState};
 use crate::process::{LogCapturePolicy, ProcessLaunchPolicy, ProcessSpec};
 use crate::{Store, StoreError};
 
-use super::logs::{flush_log_events, watch_logs};
+use super::logs::{flush_log_events, watch_logs_until};
 use super::{LogMessage, Scheduler};
 
 pub(super) trait ExecutionStore: Send + Sync {
@@ -175,11 +175,13 @@ impl Scheduler {
                 }
             }
             let log_offsets = Arc::new(tokio::sync::Mutex::new([0_u64, 0_u64]));
-            let watcher = tokio::spawn(watch_logs(
+            let (watcher_stop, watcher_stop_rx) = watch::channel(false);
+            let watcher = tokio::spawn(watch_logs_until(
                 stdout.clone(),
                 stderr.clone(),
                 log_sender.clone(),
                 log_offsets.clone(),
+                watcher_stop_rx,
             ));
             let status = if let Some(completion) = completed_on_running_rejection {
                 completion
@@ -243,7 +245,7 @@ impl Scheduler {
                     }
                 }
             };
-            watcher.abort();
+            let _ = watcher_stop.send(true);
             let _ = watcher.await;
             flush_log_events(&stdout, &stderr, &log_sender, &log_offsets).await;
             let code = status.code();

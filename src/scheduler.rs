@@ -79,7 +79,7 @@ impl Scheduler {
 
 #[cfg(test)]
 mod tests {
-    use super::logs::{flush_log_events, watch_logs};
+    use super::logs::{flush_log_events, watch_logs, watch_logs_until};
     use super::*;
     use crate::config::RuntimePolicy;
     use crate::process::{ManagedProcess, ProcessSpec};
@@ -91,7 +91,6 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
-    use tokio::io::AsyncWriteExt;
 
     struct FailingWaitController;
 
@@ -878,6 +877,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stopping_log_watcher_finishes_offset_update_before_final_flush() {
+        let directory = tempfile::tempdir().unwrap();
+        let stdout = directory.path().join("stdout.log");
+        let stderr = directory.path().join("stderr.log");
+        tokio::fs::write(&stdout, b"out").await.unwrap();
+        tokio::fs::write(&stderr, b"").await.unwrap();
+        let (sender, mut receiver) = broadcast::channel(8);
+        let offsets = Arc::new(tokio::sync::Mutex::new([0_u64, 0_u64]));
+        let (stop_sender, stop_receiver) = watch::channel(false);
+        let task = tokio::spawn(watch_logs_until(
+            stdout.clone(),
+            stderr.clone(),
+            sender.clone(),
+            offsets.clone(),
+            stop_receiver,
+        ));
+
+        let first = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            first,
+            LogMessage::Chunk(LogEvent { stream: OutputStream::Stdout, offset: 0, bytes })
+                if bytes == b"out"
+        ));
+        stop_sender.send(true).unwrap();
+        task.await.unwrap();
+
+        flush_log_events(&stdout, &stderr, &sender, &offsets).await;
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn flush_log_events_sends_existing_files_and_skips_missing_files() {
         let directory = tempfile::tempdir().unwrap();
         let stdout = directory.path().join("stdout.log");
@@ -928,18 +961,20 @@ mod tests {
         tokio::fs::write(&stdout, b"already there").await.unwrap();
         tokio::fs::write(&stderr, b"").await.unwrap();
         let offsets = Arc::new(tokio::sync::Mutex::new([13_u64, 0_u64]));
-        tokio::fs::OpenOptions::new()
+        let mut appended = std::fs::OpenOptions::new()
             .append(true)
             .open(&stdout)
-            .await
-            .unwrap()
-            .write_all(b"tail")
-            .await
             .unwrap();
+        std::io::Write::write_all(&mut appended, b"tail").unwrap();
+        appended.sync_data().unwrap();
+        drop(appended);
         let (sender, mut receiver) = broadcast::channel(4);
         flush_log_events(&stdout, &stderr, &sender, &offsets).await;
 
-        let message = receiver.recv().await.unwrap();
+        let message = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("flush should publish the appended log tail")
+            .unwrap();
         assert!(matches!(
             message,
             LogMessage::Chunk(LogEvent { stream: OutputStream::Stdout, offset: 13, bytes })

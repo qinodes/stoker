@@ -5,18 +5,30 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast, watch};
 use tokio::time::sleep;
 
 use super::LOG_CHUNK_SIZE;
 use super::{LogEvent, LogMessage, OutputStream};
 use crate::log_storage;
 
+#[cfg(test)]
 pub(super) async fn watch_logs(
     stdout: PathBuf,
     stderr: PathBuf,
     sender: broadcast::Sender<LogMessage>,
     offsets: Arc<Mutex<[u64; 2]>>,
+) {
+    let (_stop_sender, stop) = watch::channel(false);
+    watch_logs_until(stdout, stderr, sender, offsets, stop).await;
+}
+
+pub(super) async fn watch_logs_until(
+    stdout: PathBuf,
+    stderr: PathBuf,
+    sender: broadcast::Sender<LogMessage>,
+    offsets: Arc<Mutex<[u64; 2]>>,
+    mut stop: watch::Receiver<bool>,
 ) {
     loop {
         let paths = [&stdout, &stderr];
@@ -31,7 +43,14 @@ pub(super) async fn watch_logs(
                 offsets.lock().await[index] = offset;
             }
         }
-        sleep(Duration::from_millis(20)).await;
+        tokio::select! {
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    break;
+                }
+            }
+            _ = sleep(Duration::from_millis(20)) => {}
+        }
     }
 }
 
