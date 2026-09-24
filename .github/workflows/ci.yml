@@ -4,21 +4,23 @@ on:
   push:
     branches:
       - main
-      - 'release/v[0-9]+.[0-9]+.[0-9]+'
+      - 'release/v[0-9]*.[0-9]*.[0-9]*'
       - test/ci
     paths-ignore:
       - '**.md'
       - '**.yml'
       - '**.yaml'
+      - 'Makefile'
   pull_request:
     branches:
       - main
-      - 'release/v[0-9]+.[0-9]+.[0-9]+'
       - test/ci
     paths-ignore:
       - '**.md'
       - '**.yml'
       - '**.yaml'
+      - 'Makefile'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,8 +33,29 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  validate-ref:
+    name: Validate branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Accept only main or a versioned release branch
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            exit 0
+          fi
+          if [[ "${REF_NAME}" == "main" || "${REF_NAME}" == "test/ci" || "${REF_NAME}" =~ ^release/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            exit 0
+          fi
+          echo "Unsupported CI ref: ${REF_NAME}" >&2
+          exit 1
+
   quality:
     name: Quality checks
+    needs: validate-ref
     runs-on: ubuntu-latest
     steps:
       - name: Check out source
@@ -74,6 +97,7 @@ jobs:
 
   test:
     name: Test (${{ matrix.os }})
+    needs: validate-ref
     strategy:
       fail-fast: false
       matrix:
@@ -100,6 +124,7 @@ jobs:
 
   browser-smoke:
     name: Browser smoke (Chromium)
+    needs: validate-ref
     runs-on: ubuntu-latest
     steps:
       - name: Check out source

@@ -1,134 +1,90 @@
 # Release Process
 
-This document is for release maintainers publishing a new `stoker-engine`
-release.
-
-The release flow is:
-
 ```text
-check -> push release/vX.Y.Z -> CI + coverage -> final tag -> build and publish GitHub Release -> optional crates.io publish
+release/vX.Y.Z
+    ↓
+CI + coverage
+    ↓
+merge into main
+    ↓
+main CI + coverage
+    ↓
+create and push vX.Y.Z from main
+    ↓
+make publish
 ```
 
-## Prerequisites
+## 1. Create and work on the release branch
 
-- Work on a release branch named `release/vX.Y.Z`, such as
-  `release/v2.0.0`.
-- Choose the next SemVer version and update it in `Cargo.toml`; verify that
-  `Cargo.lock` and user-visible version references agree.
-- Commit the release changes and push the release branch.
-- Wait for both CI and coverage to pass on the exact release branch commit that
-  will receive the tag.
-- Configure your crates.io token once with `cargo login`.
-- Use a version that has not already been published to crates.io.
+Start from the latest `main`, create the version branch, and make the release
+changes there:
 
-## 1. Check
+```bash
+git switch main
+git pull --ff-only origin main
+git switch -c release/v2.3.4
+make version VERSION=2.3.4
+git add Cargo.toml Cargo.lock
+git commit -m "release: prepare v2.3.4"
+```
 
-Run the complete validation suite:
+This keeps the version bump in its own commit. Then update the code and
+documentation until the release candidate is ready.
+
+## 2. Check and push the release branch
+
+Run the Cargo/npm checks through the Makefile only after the release changes
+reach a checkpoint:
 
 ```bash
 make check
-cargo package --list
-cargo publish --dry-run
+git add .
+git commit -m "release: finalize v2.3.4"
+git push --set-upstream origin release/v2.3.4
 ```
 
-This runs formatting checks, compilation checks, Clippy, all tests, and a
-release build. The package commands verify the files that will be shipped and
-that publishing can proceed. Tests use Cargo's default parallel execution so
-that concurrency and resource-competition issues can be detected. If you need
-to diagnose a test that is sensitive to shared resources, rerun it with
-`cargo test -- --test-threads=1`. Do not continue if any check fails.
+The branch push starts CI and coverage for the release candidate.
 
-## 2. Push the release branch
+## 3. Merge into main
 
-Commit the intended release changes on the release branch, then push it. For a
-`2.0.0` release, the branch name is `release/v2.0.0`:
+After the release branch checks pass, merge the pushed release branch into
+`main` locally and push the merge result:
 
 ```bash
-make git-release-push
+git switch main
+git pull --ff-only origin main
+git merge --no-ff release/v2.3.4 -m "Merge release/v2.3.4 into main"
+git push origin main
 ```
 
-The push triggers the CI and Rust coverage workflows for the exact release
-branch commit. Markdown-only and YAML-only changes are filtered out.
-`make git-release-push` verifies that the current branch exactly matches
-`release/vX.Y.Z`, that its version matches the package version, and then pushes
-that branch to `origin`.
+The `git merge` command is the actual integration step. The final push updates
+`origin/main` and starts CI and coverage for the integrated commit.
 
-## 3. Create the final release tag
+## 4. Create and push the release tag
 
-After CI and coverage pass, create the final annotated tag on the same commit:
+After main CI and coverage pass, create the tag on the clean `main` commit:
 
 ```bash
-make tag
+git status --short
+git tag -a v2.3.4 -m "Release v2.3.4"
+git push origin v2.3.4
 ```
 
-`make tag` reads the package version from `Cargo.toml`, requires a clean working
-tree, verifies the release branch, and creates `vX.Y.Z` locally. It does not
-push the tag. The command does not update `Cargo.toml` or create a release
-commit. An explicit `VERSION=x.y.z` override is supported when needed, but
-normally no version argument is required.
-
-## 4. Build and publish the GitHub Release
-
-Push the final tag:
-
-```bash
-make release
-```
-
-`make release` verifies that the local tag exists, points to the current commit,
-and then pushes it to `origin`. The Release workflow checks out that exact tag,
-rebuilds the frontend and platform binaries, packages the archives and
-installers, verifies `SHA256SUMS`, and publishes the resulting files to a
-GitHub Release. It does not run coverage or publish to crates.io.
-
-If the Release workflow needs to be retried, use its `workflow_dispatch` entry
-in GitHub Actions and enter `vX.Y.Z`. It rebuilds the artifact from the tagged
-commit; do not delete and recreate the final tag.
+The tag push starts the Release workflow. It builds the platform binaries,
+packages the installers, verifies checksums, and publishes the GitHub Release.
 
 ## 5. Publish to crates.io
 
+After the GitHub Release succeeds:
+
 ```bash
 make publish
 ```
 
-If authentication has not been configured on the machine yet, run:
+This runs `cargo publish` for the version in `Cargo.toml`. A version already on
+crates.io cannot be published again.
 
-```bash
-cargo login
-```
+## Retry
 
-Publishing a version to crates.io is permanent. A version that already exists
-cannot be published again with different contents.
-
-## Complete example
-
-```bash
-git switch -c release/v2.0.0
-make version VERSION=2.0.0
-make check
-git add Cargo.toml Cargo.lock
-git commit -m "release: prepare v2.0.0"
-make git-release-push
-# Wait for CI and coverage to pass on release/v2.0.0.
-make tag
-make release
-# Wait for the Release workflow to publish the GitHub Release.
-make publish
-```
-
-## Local coverage
-
-Install the coverage tool once:
-
-```bash
-make coverage-install
-```
-
-Run coverage locally without pushing a branch:
-
-```bash
-make coverage
-```
-
-The command runs the tests and generates an HTML report at
-`target/llvm-cov/html/index.html`.
+Use the Release workflow's `workflow_dispatch` entry with the existing tag.
+Do not delete or recreate a published tag.

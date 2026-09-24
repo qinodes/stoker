@@ -1,21 +1,6 @@
-.PHONY: format format-check lint test cargo-check web-install web-build web-test web-browser-test coverage coverage-install build stop-test-process dev-restart check version tag verify-release-branch git-release-push release publish
+.PHONY: format format-check lint test cargo-check web-install web-build web-test web-browser-test coverage coverage-install build stop-test-process dev-restart check version publish
 
 VERSION ?=
-TAG = v$(VERSION)
-MESSAGE = Release $(TAG)
-
-ifneq ($(filter tag release git-release-push,$(MAKECMDGOALS)),)
-ifeq ($(strip $(VERSION)),)
-ifeq ($(OS),Windows_NT)
-VERSION := $(shell powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "scripts/get-version.ps1")
-else
-VERSION := $(shell sh scripts/get-version.sh)
-endif
-endif
-ifeq ($(strip $(VERSION)),)
-$(error Could not read the stoker-engine version from Cargo.toml)
-endif
-endif
 
 ifneq ($(filter version,$(MAKECMDGOALS)),)
 ifeq ($(strip $(VERSION)),)
@@ -96,66 +81,6 @@ ifeq ($(OS),Windows_NT)
 	powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "scripts/set-version.ps1" -Version "$(VERSION)"
 else
 	sh scripts/set-version.sh "$(VERSION)"
-endif
-
-verify-release-branch:
-ifeq ($(OS),Windows_NT)
-	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$branch = (git branch --show-current).Trim(); if ($$branch -eq 'main') { exit 0 }; if ($$branch -notmatch '^release/v([0-9]+\.[0-9]+\.[0-9]+)$$') { Write-Error 'Current branch must be main or release/vX.Y.Z, for example release/v2.0.0'; exit 1 }; if ($$Matches[1] -ne '$(VERSION)') { Write-Error ('Release branch version ' + $$Matches[1] + ' does not match package version $(VERSION).'); exit 1 }"
-else
-	@branch="$$(git branch --show-current)"; \
-	if [ -z "$$branch" ]; then \
-		echo "Current branch must be main or release/vX.Y.Z; detached HEAD is not allowed." >&2; exit 1; \
-	fi; \
-	if [ "$$branch" = "main" ]; then exit 0; fi; \
-	if ! printf '%s\n' "$$branch" | grep -Eq '^release/v[0-9]+\.[0-9]+\.[0-9]+$$'; then \
-		echo "Current branch '$$branch' must be main or release/vX.Y.Z, for example release/v2.0.0." >&2; exit 1; \
-	fi; \
-	branch_version="$${branch#release/v}"; \
-	if [ "$$branch_version" != "$(VERSION)" ]; then \
-		echo "Release branch version $$branch_version does not match package version $(VERSION)." >&2; exit 1; \
-	fi
-endif
-
-tag: verify-release-branch
-ifeq ($(OS),Windows_NT)
-	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$worktreeStatus = git status --porcelain; if ($$LASTEXITCODE -ne 0) { Write-Error 'Could not inspect the working tree.'; exit 1 }; if ($$worktreeStatus) { Write-Error 'Working tree must be clean before creating $(TAG).'; exit 1 }; git rev-parse --verify --quiet 'refs/tags/$(TAG)' *> $$null; if ($$LASTEXITCODE -eq 0) { Write-Error 'Tag $(TAG) already exists.'; exit 1 }; git tag -a '$(TAG)' -m '$(MESSAGE)'"
-else
-	@worktree_status="$$(git status --porcelain)"; \
-	if [ -n "$$worktree_status" ]; then \
-		echo "Working tree must be clean before creating $(TAG)." >&2; exit 1; \
-	fi; \
-	if git rev-parse --verify --quiet "refs/tags/$(TAG)" >/dev/null 2>&1; then \
-		echo "Tag $(TAG) already exists." >&2; exit 1; \
-	fi; \
-	git tag -a "$(TAG)" -m "$(MESSAGE)"
-endif
-	@echo "Tag $(TAG) created at the current commit. Push it with 'make release'."
-
-git-release-push: verify-release-branch
-ifeq ($(OS),Windows_NT)
-	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$branch = (git branch --show-current).Trim(); if ($$branch -notmatch '^release/v[0-9]+\.[0-9]+\.[0-9]+$$') { Write-Error 'Current branch must match release/vX.Y.Z, for example release/v2.0.0'; exit 1 }; Write-Host ('Pushing release branch ' + $$branch); git push origin $$branch"
-else
-	@branch="$$(git branch --show-current)"; \
-	if [ -z "$$branch" ]; then \
-		echo "Current branch must match release/vX.Y.Z; detached HEAD is not allowed." >&2; exit 1; \
-	fi; \
-	if ! printf '%s\n' "$$branch" | grep -Eq '^release/v[0-9]+\.[0-9]+\.[0-9]+$$'; then \
-		echo "Current branch '$$branch' must match release/vX.Y.Z, for example release/v2.0.0." >&2; exit 1; \
-	fi; \
-	echo "Pushing release branch $$branch"; \
-	git push origin "$$branch"
-endif
-
-release: verify-release-branch
-ifeq ($(OS),Windows_NT)
-	@powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$tagRef = 'refs/tags/$(TAG)'; git rev-parse --verify --quiet $$tagRef *> $$null; if ($$LASTEXITCODE -ne 0) { Write-Error 'Tag $(TAG) does not exist. Run make tag first.'; exit 1 }; $$tagCommit = (git rev-list -n 1 '$(TAG)').Trim(); $$headCommit = (git rev-parse HEAD).Trim(); if ($$tagCommit -ne $$headCommit) { Write-Error 'Tag $(TAG) does not point to the current commit.'; exit 1 }; git push origin ('refs/tags/' + '$(TAG)')"
-else
-	@tag_commit="$$(git rev-list -n 1 "$(TAG)" 2>/dev/null)" || { echo "Tag $(TAG) does not exist. Run make tag first." >&2; exit 1; }; \
-	head_commit="$$(git rev-parse HEAD)"; \
-	if [ "$$tag_commit" != "$$head_commit" ]; then \
-		echo "Tag $(TAG) does not point to the current commit." >&2; exit 1; \
-	fi; \
-	git push origin "refs/tags/$(TAG)"
 endif
 
 publish:
