@@ -106,6 +106,7 @@ pub fn stop(paths: StokerPaths) -> anyhow::Result<()> {
         anyhow::bail!("UI server rejected stop request")
     }
     let mut gateway = SystemUiStopGateway {
+        paths,
         host: connect_host(metadata.host),
         port: metadata.port,
         started: std::time::Instant::now(),
@@ -308,6 +309,7 @@ trait UiStopGateway {
 }
 
 struct SystemUiStopGateway {
+    paths: StokerPaths,
     host: IpAddr,
     port: u16,
     started: std::time::Instant,
@@ -316,7 +318,7 @@ struct SystemUiStopGateway {
 
 impl UiStopGateway for SystemUiStopGateway {
     fn stopped(&mut self) -> bool {
-        probe_host(self.host, self.port).is_err()
+        probe_host(self.host, self.port).is_err() && !self.paths.ui_metadata().exists()
     }
 
     fn timed_out(&self) -> bool {
