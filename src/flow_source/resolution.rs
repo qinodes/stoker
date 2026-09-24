@@ -63,21 +63,25 @@ fn resolve_cwd(
         Some(FlowSourceCwd::Path(path)) => Some(path.as_str()),
         Some(FlowSourceCwd::Platform(paths)) => select_platform_path(paths, platform),
     };
+    let absolute = selected.is_some_and(|path| Path::new(path).is_absolute());
     let candidate = match selected {
-        Some(path) if Path::new(path).is_absolute() => PathBuf::from(path),
+        Some(path) if absolute => PathBuf::from(path),
         Some(path) => base.join(path),
         None => base.to_path_buf(),
     };
-    let resolved = candidate
-        .canonicalize()
-        .map_err(|source| FlowSourceError::filesystem(&candidate, source))?;
-    if !resolved.is_dir() {
+    if !candidate.is_dir() {
         return Err(FlowSourceError::invalid(format!(
             "task cwd {} is not a directory",
             candidate.display()
         )));
     }
-    Ok(normalize_path(resolved))
+    if absolute {
+        return Ok(normalize_path(candidate));
+    }
+    candidate
+        .canonicalize()
+        .map(normalize_path)
+        .map_err(|source| FlowSourceError::filesystem(&candidate, source))
 }
 
 fn select_platform_path<'a>(paths: &'a FlowSourceCwdMap, platform: &str) -> Option<&'a str> {
@@ -187,6 +191,19 @@ mod tests {
             Path::new(&resolved[0].tasks[0].cwd),
             normalize_path(directory.path().canonicalize().unwrap())
         );
+    }
+
+    #[test]
+    fn absolute_cwd_preserves_its_source_text_for_a_stable_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = command_cwd(directory.path());
+        let resolved = resolve_document(
+            &document(Some(FlowSourceCwd::Path(cwd.clone()))),
+            &directory.path().join("flows.json"),
+        )
+        .unwrap();
+
+        assert_eq!(resolved[0].tasks[0].cwd, cwd);
     }
 
     #[test]

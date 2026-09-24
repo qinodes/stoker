@@ -956,7 +956,10 @@ fn flow_task_submission_keeps_a_shell_compatible_working_directory() {
         .cwd
         .clone();
     assert!(!cwd.starts_with("//?/"));
-    assert_eq!(cwd, directory.path().to_string_lossy().replace('\\', "/"));
+    assert_eq!(
+        std::path::Path::new(&cwd).canonicalize().unwrap(),
+        directory.path().canonicalize().unwrap()
+    );
 }
 
 #[test]
